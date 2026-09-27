@@ -1,0 +1,14 @@
+{
+  "name": "void-ethics-combat",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test src/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint src --ext .js,.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "typescript": "^5.0.0"
+  }
+}

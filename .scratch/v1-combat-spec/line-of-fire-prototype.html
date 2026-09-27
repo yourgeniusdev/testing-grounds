@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Прототип линии огня v1</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 20px;color:#20242b}button{margin:4px;padding:8px 12px}section{border:1px solid #ccd3dc;border-radius:8px;padding:16px;margin:16px 0}strong{color:#174a7e}.note{color:#586575}
+</style>
+</head>
+<body>
+<h1>Линия огня и перекрытие</h1>
+<p>Этот throwaway-прототип проверяет вопрос: достаточно ли дискретной линии между центрами гексов и ближайшего перекрывающего объекта, чтобы однозначно распределять шанс между основной целью, friendly fire и промахом.</p>
+<section><h2>Текущее состояние</h2><div id="state"></div></section>
+<section><h2>Свободная проверка</h2><button data-action="next">Следующий выстрел</button><button data-action="destroy">Уничтожить перекрытие</button><button data-action="reset">Сбросить</button></section>
+<section><h2>Сценарии</h2><p class="note">Сценарий 1: крейсер закрывает корвет. Нажмите выстрел дважды, затем уничтожьте крейсер и снова выстрелите: линия должна пересчитаться.</p><button data-action="scenario">Начать сценарий</button></section>
+<script>
+const initial={baseAccuracy:75,cover:30,mainTarget:'Корвет',blocker:'Крейсер',blockerAlive:true,last:null,shot:0};
+const pure={
+  fire(s){if(!s.blockerAlive)return {...s,shot:s.shot+1,last:{main:75,blocker:0,miss:25,coverer:'нет'}};return {...s,shot:s.shot+1,last:{main:Math.max(0,s.baseAccuracy-s.cover),blocker:s.cover,miss:100-s.baseAccuracy,coverer:s.blocker};},
+  destroy(s){return {...s,blockerAlive:false,cover:0,last:'Перекрытие уничтожено; следующий выстрел пересчитает линию'}},
+  reset(){return {...initial}},
+  scenario(){return {...initial,last:'Сценарий готов'}}
+};
+let state=pure.reset();
+function render(){const l=state.last;document.querySelector('#state').innerHTML=`<p>Выстрелов: <strong>${state.shot}</strong></p><p>Перекрытие: <strong>${state.blockerAlive?state.blocker+' ('+state.cover+'%)':'нет'}</strong></p><p>Последний результат: <strong>${typeof l==='string'?l:l?`основная цель ${l.main}%, перекрытие ${l.blocker}%, полный промах ${l.miss}% (${l.coverer})`:'—'}</strong></p>`}
+document.querySelectorAll('button').forEach(b=>b.onclick=()=>{const a=b.dataset.action;state=pure[a](state);render()});render();
+</script>
+</body>
+</html>

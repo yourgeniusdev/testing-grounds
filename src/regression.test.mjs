@@ -1,0 +1,17 @@
+import assert from "node:assert/strict";
+import { activeUnit, createBattleState, useEvasiveManeuver } from "./domain.js";
+import { headingAngle, shouldAutoEndActivation, shouldDrawRoute } from "./ui-rules.js";
+
+assert.equal(headingAngle(0), Math.PI / 2, "курс 0 должен направлять нарисованный вверх нос вправо");
+assert.equal(headingAngle(3), -Math.PI / 2, "курс 3 должен направлять нос влево");
+assert.equal(shouldAutoEndActivation({ attackImplemented: false }), true, "без реализованной атаки манёвр должен завершать активацию");
+assert.equal(shouldDrawRoute({ targetId: "raptor" }), false, "выбранная цель атаки не должна отрисовываться как маршрут");
+assert.equal(shouldDrawRoute({ route: { path: [] } }), true, "выбранный маршрут должен отрисовываться");
+const state = createBattleState();
+const unit = activeUnit(state);
+assert.equal(useEvasiveManeuver(state), true, "манёвр уклонения должен включаться до подтверждения");
+assert.equal(unit.evasiveManeuver, true, "включённое действие должно учитываться в предпросмотре");
+assert.equal(state.stage, "system", "переключение действия не должно менять этап");
+assert.equal(useEvasiveManeuver(state), true, "манёвр уклонения должен выключаться повторным нажатием");
+assert.equal(unit.evasiveManeuver, false, "повторное нажатие должно отменять действие");
+console.log("regression checks passed");
