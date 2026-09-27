@@ -1,5 +1,13 @@
 import { test, expect } from "@playwright/test";
 
+test("battlefield canvas covers the visible central panel", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  const dimensions = await page.locator("#battlefield").evaluate(canvas => ({ width: canvas.width, height: canvas.height, clientWidth: canvas.clientWidth, clientHeight: canvas.clientHeight, ratio: devicePixelRatio }));
+  expect(dimensions.width).toBe(Math.round(dimensions.clientWidth * dimensions.ratio));
+  expect(dimensions.height).toBe(Math.round(dimensions.clientHeight * dimensions.ratio));
+});
+
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -11,7 +19,8 @@ test("browser renders selectable weapons and a complete salvo preview", async ({
   });
   const canvas = page.locator("#battlefield");
   const box = await canvas.boundingBox();
-  await page.mouse.click(box.x + 90 + 38 * Math.sqrt(3) * 3, box.y + 90);
+  const targetPoint = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 3, r: 0 }));
+  await page.mouse.click(box.x + targetPoint.x, box.y + targetPoint.y);
   await page.getByRole("button", { name: "lance" }).click();
   await expect(page.locator("#weaponSummary")).toContainText("1 выстр.");
   await expect(page.locator("#weaponSummary")).toContainText("80% точность");
