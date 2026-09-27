@@ -35,7 +35,14 @@ function render() {
   els.round.textContent = state.round; els.stage.textContent = state.lifecycle; els.mode.textContent = state.winner ? `ПОБЕДА: ${state.winner}` : "КАНОНИЧЕСКИЙ V1";
   const deploying = state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight";
   els.confirm.hidden = !deploying; els.confirmMove.hidden = state.lifecycle !== "Maneuver"; els.skipAttack.hidden = state.lifecycle !== "Attack";
-  els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["SystemActions", "Maneuver"].includes(state.lifecycle);
+  els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["SystemActions", "Maneuver", "Attack"].includes(state.lifecycle);
+  els.end.textContent = state.lifecycle === "Attack" ? "Подтвердить залп" : "Продолжить";
+  if (state.lifecycle === "Attack") {
+    const attacker = state.units.find(unit => unit.id === state.activeUnitId);
+    const target = state.units.find(unit => unit.id === selectedTargetId);
+    const preview = attacker && target && attacker.weapons?.[0] ? previewAttack(state, attacker, target, attacker.weapons[0]) : null;
+    els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${preview.shots} выстр. · ${preview.accuracy}%` : "АТАКА · выберите цель";
+  }
   els.list.replaceChildren(...state.units.map(unit => {
     const item = document.createElement("div"); item.className = "mission-card";
     const name = document.createElement("strong"); name.textContent = unit.name;

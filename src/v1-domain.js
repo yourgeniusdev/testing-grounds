@@ -169,8 +169,8 @@ export function advanceActivation(state, stage) {
 export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");
-if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind === "capital" && occupant.kind === "capital")) || (occupant && final)) return false;
-   if (occupant && unit.kind === "capital") return false;
+   if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind === "capital" && occupant.kind === "capital")) || (occupant && final && !ramming)) return false;
+    if (occupant && unit.kind === "capital" && !ramming) return false;
    if (occupant && unit.kind === "squadron" && occupant.kind === "capital") return false;
   return true;
 }
@@ -261,6 +261,7 @@ export function ram(state, attacker, target, steps, { random = Math.random } = {
   const route = moveAtomic(state, source.id, steps, { ramming: true });
   if (route.moved !== steps.length || distance(source.position, victim.position) !== 1) return { success: false, damage: 0, moved: route.moved };
   const directSteps = steps.length;
+  if (victim.position && samePosition(source.position, victim.position)) return { success: false, damage: 0, moved: route.moved };
   const targetDamage = (source.mass ?? 0) * (1 + directSteps);
   const attackerDamage = victim.mass ?? 0;
   const targetResult = victim.kind === "capital" ? applyDamagePacket(state, victim, { amount: targetDamage, sourceId: source.id, cause: "ramming" }) : { amount: targetDamage, destroyed: true };

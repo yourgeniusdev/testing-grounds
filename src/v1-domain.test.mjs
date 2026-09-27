@@ -125,6 +125,14 @@ test("ramming applies mass damage and resets attacker evasion", () => {
   assert.ok(state.events.some(event => event.action === "ramming"));
 });
 
+test("explicit ramming can enter an enemy capital hex", () => {
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 2, minRow: 0, maxRow: 0 }, units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 3, integrity: 10 },
+    { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 1, integrity: 10 }
+  ] });
+  assert.equal(ram(state, "a", "b", [{ q: 1, r: 0 }]).success, true);
+});
+
 test("overwatch arms, fires once per slot and target, and records deterministic damage", () => {
   const state = createBattle({ id: "aa", round: 1, units: [
     { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 100 }] },
