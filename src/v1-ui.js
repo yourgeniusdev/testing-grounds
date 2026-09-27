@@ -1,4 +1,5 @@
-import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, previewAttack, progress, resolveAttack } from "./v1-domain.js";
+import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, progress, resolveAttack } from "./v1-domain.js";
+import { formatAttackPreview, getAttackPreview } from "./v1-preview.js";
 import { createBattleStore, createLocalPersistence } from "./v1-store.js";
 
 const canvas = document.getElementById("battlefield");
@@ -40,8 +41,8 @@ function render() {
   if (state.lifecycle === "Attack") {
     const attacker = state.units.find(unit => unit.id === state.activeUnitId);
     const target = state.units.find(unit => unit.id === selectedTargetId);
-    const preview = attacker && target && attacker.weapons?.[0] ? previewAttack(state, attacker, target, attacker.weapons[0]) : null;
-    els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${preview.shots} выстр. · ${preview.accuracy}%` : "АТАКА · выберите цель";
+    const preview = attacker && target ? getAttackPreview(state, attacker.id, target.id) : null;
+    els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${formatAttackPreview(preview)}` : `АТАКА · ${formatAttackPreview(preview)}`;
   }
   els.list.replaceChildren(...state.units.map(unit => {
     const item = document.createElement("div"); item.className = "mission-card";
@@ -67,7 +68,7 @@ els.end.addEventListener("click", () => transact(current => {
     const attacker = current.units.find(unit => unit.id === current.activeUnitId);
     const target = current.units.find(unit => unit.id === selectedTargetId);
     const weapon = attacker?.weapons?.[0];
-    if (attacker && target && weapon && previewAttack(current, attacker, target, weapon).canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
+    if (attacker && target && weapon && getAttackPreview(current, attacker.id, target.id)?.canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
     if (current.lifecycle !== "Finished") advanceActivation(current, "EndActivation");
   } else progress(current);
 }));
