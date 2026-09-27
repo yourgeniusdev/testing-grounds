@@ -1,4 +1,4 @@
-import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, progress } from "./v1-domain.js";
+import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, previewAttack, progress, resolveAttack } from "./v1-domain.js";
 import { createBattleStore, createLocalPersistence } from "./v1-store.js";
 
 const canvas = document.getElementById("battlefield");
@@ -24,12 +24,21 @@ const pixel = ({ q, r }) => ({ x: origin.x + origin.size * Math.sqrt(3) * (q + r
 const hex = (x, y) => { const q = (x - origin.x) / (origin.size * Math.sqrt(3)) - (y - origin.y) / (origin.size * 3); const r = (y - origin.y) / (origin.size * 1.5); return { q: Math.round(q), r: Math.round(r) }; };
 const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
 
-function log() { els.log.innerHTML = state.events.slice(-30).reverse().map(event => `<li>${event.action}</li>`).join(""); }
+function log() {
+  els.log.replaceChildren(...state.events.slice(-30).reverse().map(event => {
+    const item = document.createElement("li"); item.textContent = event.action; return item;
+  }));
+}
 function render() {
   els.round.textContent = state.round; els.stage.textContent = state.lifecycle; els.mode.textContent = state.winner ? `ПОБЕДА: ${state.winner}` : "КАНОНИЧЕСКИЙ V1";
   els.confirm.hidden = !(state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight");
   els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["SystemActions", "Maneuver", "Attack"].includes(state.lifecycle);
-  els.list.innerHTML = state.units.map(unit => `<div class="mission-card"><strong>${unit.name}</strong><span>${unit.side} · ${unit.kind} · ${unit.integrity} HP</span></div>`).join("");
+  els.list.replaceChildren(...state.units.map(unit => {
+    const item = document.createElement("div"); item.className = "mission-card";
+    const name = document.createElement("strong"); name.textContent = unit.name;
+    const details = document.createElement("span"); details.textContent = `${unit.side} · ${unit.kind} · ${unit.integrity} HP`;
+    item.append(name, details); return item;
+  }));
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   for (let q = 0; q < 8; q += 1) for (let r = 0; r < 6; r += 1) { const p = pixel({ q, r }); ctx.strokeStyle = "#536174"; ctx.beginPath(); for (let i = 0; i < 6; i += 1) { const a = Math.PI / 180 * (60 * i - 30); ctx.lineTo(p.x + origin.size * Math.cos(a), p.y + origin.size * Math.sin(a)); } ctx.closePath(); ctx.stroke(); }
   state.units.forEach(unit => { if (!unit.position) return; const p = pixel(unit.position); ctx.fillStyle = unit.side === "left" ? "#55b9ff" : "#ff6e7a"; ctx.beginPath(); ctx.arc(p.x, p.y, 15, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#08111f"; ctx.textAlign = "center"; ctx.fillText(unit.name[0], p.x, p.y + 5); });
@@ -39,7 +48,17 @@ function transact(command) { store.transact(command); render(); }
 canvas.addEventListener("click", event => { const rect = canvas.getBoundingClientRect(); const position = hex(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position)); if (unit) { selected = unit.id; return render(); } if (selected && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, selected, position, 2)); else if (selected && state.lifecycle === "Maneuver") transact(current => moveAtomic(current, selected, [position])); });
 els.confirm.addEventListener("click", () => transact(current => confirmDeployment(current, current.lifecycle === "DeploymentLeft" ? "left" : "right")));
 els.wait.addEventListener("click", () => transact(current => decide(current, "wait")));
-els.end.addEventListener("click", () => transact(current => { if (current.lifecycle === "SystemActions") advanceActivation(current, "Maneuver"); else if (current.lifecycle === "Maneuver") advanceActivation(current, "Attack"); else if (current.lifecycle === "Attack") advanceActivation(current, "EndActivation"); else progress(current); }));
+els.end.addEventListener("click", () => transact(current => {
+  if (current.lifecycle === "SystemActions") advanceActivation(current, "Maneuver");
+  else if (current.lifecycle === "Maneuver") advanceActivation(current, "Attack");
+  else if (current.lifecycle === "Attack") {
+    const attacker = current.units.find(unit => unit.id === current.activeUnitId);
+    const target = current.units.find(unit => unit.side !== attacker?.side && unit.position);
+    const weapon = attacker?.weapons?.[0];
+    if (attacker && target && weapon && previewAttack(current, attacker, target, weapon).canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
+    if (current.lifecycle !== "Finished") advanceActivation(current, "EndActivation");
+  } else progress(current);
+}));
 els.reset.addEventListener("click", () => { store.reset(); selected = null; render(); });
 els.start.addEventListener("click", () => { els.menu.hidden = true; els.battle.hidden = false; render(); });
 store.subscribe(render); render();

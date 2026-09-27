@@ -64,9 +64,13 @@ test("wait moves unit once, then activation progresses through stages", () => {
   assert.equal(advanceActivation(state, "EndActivation"), true);
 });
 
-test("atomic movement blocks incompatible capital passage", () => {
+test("atomic movement enforces active maneuver ownership", () => {
   const state = deployedBattle();
+  assert.equal(moveAtomic(state, "l-cap", [{ q: 1, r: 0 }]).moved, 0);
   state.lifecycle = "Maneuver";
+  state.activeUnitId = "r-cap";
+  assert.equal(moveAtomic(state, "l-cap", [{ q: 1, r: 0 }]).moved, 0);
+  state.activeUnitId = "l-cap";
   const result = moveAtomic(state, "l-cap", [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }]);
   assert.equal(result.status, "blocked");
   assert.equal(result.moved, 2);
