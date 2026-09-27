@@ -25,6 +25,7 @@ function sideForLifecycle(lifecycle) { return lifecycle === "DeploymentLeft" ? "
 function samePosition(a, b) { return a && b && a.q === b.q && a.r === b.r; }
 function unitAt(state, position, except) { return state.units.find(unit => unit.id !== except && samePosition(unit.position, position)); }
 function distance(a, b) { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; }
+function withinBounds(bounds, position) { return position.q >= bounds.minCol && position.q <= bounds.maxCol && position.r >= bounds.minRow && position.r <= bounds.maxRow && position.q + position.r >= (bounds.minCol + bounds.minRow) && position.q + position.r <= (bounds.maxCol + bounds.maxRow); }
 
 export function refreshInterception(state) {
   state.units.forEach(unit => { if (unit.kind === "squadron") unit.engagedWith = []; });
@@ -166,7 +167,7 @@ export function advanceActivation(state, stage) {
 }
 
 export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
-  if (!unit || !position || (state.bounds && (position.q < state.bounds.minCol || position.q > state.bounds.maxCol || position.r < state.bounds.minRow || position.r > state.bounds.maxRow))) return false;
+  if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");
 if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind === "capital" && occupant.kind === "capital")) || (occupant && final)) return false;
    if (occupant && unit.kind === "capital") return false;

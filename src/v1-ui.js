@@ -15,10 +15,12 @@ const store = createBattleStore({ persistence: createLocalPersistence("v1-combat
 const state = store.getState();
 const els = {
   menu: document.getElementById("menuScreen"), battle: document.getElementById("battleScreen"), start: document.getElementById("startBattleButton"),
-  confirm: document.getElementById("confirmDeploymentButton"), wait: document.getElementById("waitButton"), end: document.getElementById("endActivationButton"), reset: document.getElementById("resetButton"),
+  confirm: document.getElementById("confirmDeploymentButton"), confirmMove: document.getElementById("confirmMoveButton"), skipAttack: document.getElementById("skipAttackButton"), wait: document.getElementById("waitButton"), end: document.getElementById("endActivationButton"), reset: document.getElementById("resetButton"),
   round: document.getElementById("roundNumber"), stage: document.getElementById("stageLabel"), mode: document.getElementById("modeLabel"), list: document.getElementById("initiativeList"), log: document.getElementById("combatLog")
 };
 let selected = null;
+let plannedPosition = null;
+let selectedTargetId = null;
 const origin = { x: 90, y: 90, size: 38 };
 const pixel = ({ q, r }) => ({ x: origin.x + origin.size * Math.sqrt(3) * (q + r / 2), y: origin.y + origin.size * 1.5 * r });
 const hex = (x, y) => { const q = (x - origin.x) / (origin.size * Math.sqrt(3)) - (y - origin.y) / (origin.size * 3); const r = (y - origin.y) / (origin.size * 1.5); return { q: Math.round(q), r: Math.round(r) }; };
@@ -31,8 +33,9 @@ function log() {
 }
 function render() {
   els.round.textContent = state.round; els.stage.textContent = state.lifecycle; els.mode.textContent = state.winner ? `ПОБЕДА: ${state.winner}` : "КАНОНИЧЕСКИЙ V1";
-  els.confirm.hidden = !(state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight");
-  els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["SystemActions", "Maneuver", "Attack"].includes(state.lifecycle);
+  const deploying = state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight";
+  els.confirm.hidden = !deploying; els.confirmMove.hidden = state.lifecycle !== "Maneuver"; els.skipAttack.hidden = state.lifecycle !== "Attack";
+  els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["SystemActions", "Maneuver"].includes(state.lifecycle);
   els.list.replaceChildren(...state.units.map(unit => {
     const item = document.createElement("div"); item.className = "mission-card";
     const name = document.createElement("strong"); name.textContent = unit.name;
@@ -45,7 +48,9 @@ function render() {
   log();
 }
 function transact(command) { store.transact(command); render(); }
-canvas.addEventListener("click", event => { const rect = canvas.getBoundingClientRect(); const position = hex(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position)); if (unit) { selected = unit.id; return render(); } if (selected && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, selected, position, 2)); else if (selected && state.lifecycle === "Maneuver") transact(current => moveAtomic(current, selected, [position])); });
+canvas.addEventListener("click", event => { const rect = canvas.getBoundingClientRect(); const position = hex(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position)); if (unit) { if (state.lifecycle === "Attack" && unit.side !== state.units.find(candidate => candidate.id === state.activeUnitId)?.side) selectedTargetId = unit.id; else selected = unit.id; return render(); } if (selected && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, selected, position, 2)); else if (selected && state.lifecycle === "Maneuver") { plannedPosition = position; render(); } });
+els.confirmMove.addEventListener("click", () => transact(current => { if (!plannedPosition) return false; const result = moveAtomic(current, current.activeUnitId, [plannedPosition]); plannedPosition = null; return result; }));
+els.skipAttack.addEventListener("click", () => transact(current => advanceActivation(current, "EndActivation")));
 els.confirm.addEventListener("click", () => transact(current => confirmDeployment(current, current.lifecycle === "DeploymentLeft" ? "left" : "right")));
 els.wait.addEventListener("click", () => transact(current => decide(current, "wait")));
 els.end.addEventListener("click", () => transact(current => {
@@ -53,7 +58,7 @@ els.end.addEventListener("click", () => transact(current => {
   else if (current.lifecycle === "Maneuver") advanceActivation(current, "Attack");
   else if (current.lifecycle === "Attack") {
     const attacker = current.units.find(unit => unit.id === current.activeUnitId);
-    const target = current.units.find(unit => unit.side !== attacker?.side && unit.position);
+    const target = current.units.find(unit => unit.id === selectedTargetId);
     const weapon = attacker?.weapons?.[0];
     if (attacker && target && weapon && previewAttack(current, attacker, target, weapon).canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
     if (current.lifecycle !== "Finished") advanceActivation(current, "EndActivation");
