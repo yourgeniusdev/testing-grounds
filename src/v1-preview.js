@@ -1,10 +1,17 @@
 import { previewAttack } from "./v1-domain.js";
 
+export function getWeaponSelection(attacker, weaponIndex = 0) {
+  const slot = (attacker?.weapons ?? attacker?.weaponSlots)?.[weaponIndex];
+  const weapon = slot?.weapon ?? slot;
+  const available = Boolean(weapon && slot?.destroyed !== true && slot?.ready !== false && (slot?.ammo ?? weapon?.ammo ?? 1) > 0);
+  return { slot, weapon, available };
+}
+
 export function getAttackPreview(state, attackerId, targetId, weaponIndex = 0) {
   const attacker = state.units.find(unit => unit.id === attackerId);
   const target = state.units.find(unit => unit.id === targetId);
-  const weapon = attacker?.weapons?.[weaponIndex];
-  if (!attacker || !target || !weapon) return null;
+  const { weapon, available } = getWeaponSelection(attacker, weaponIndex);
+  if (!attacker || !target || !available) return null;
   return { ...previewAttack(state, attacker, target, weapon), weaponId: weapon.id ?? `weapon-${weaponIndex}`, weaponIndex };
 }
 

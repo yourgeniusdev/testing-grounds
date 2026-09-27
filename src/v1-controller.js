@@ -1,0 +1,36 @@
+import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, progress, resolveAttack } from "./v1-domain.js";
+import { getAttackPreview, getWeaponSelection } from "./v1-preview.js";
+import { hexForPixel } from "./v1-renderer.js";
+
+const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
+
+export function createBattleController({ document, store, renderer }) {
+  const view = { selectedUnitId: null, plannedPosition: null, selectedTargetId: null, selectedWeaponIndex: 0 };
+  const render = () => renderer.render(store.getState(), view);
+  const transact = command => store.transact(command);
+  renderer.canvas.addEventListener("click", event => {
+    const state = store.getState(); const rect = renderer.canvas.getBoundingClientRect(); const position = hexForPixel(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position));
+    if (unit) { if (state.lifecycle === "Attack" && unit.side !== state.units.find(candidate => candidate.id === state.activeUnitId)?.side) view.selectedTargetId = unit.id; else view.selectedUnitId = unit.id; return render(); }
+    if (view.selectedUnitId && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, view.selectedUnitId, position, 2));
+    else if (view.selectedUnitId && state.lifecycle === "Maneuver") { view.plannedPosition = position; render(); }
+  });
+  renderer.els.weapons.addEventListener("click", event => { const button = event.target.closest("[data-weapon-index]"); if (!button) return; view.selectedWeaponIndex = Number(button.dataset.weaponIndex); render(); });
+  renderer.els.confirmMove.addEventListener("click", () => transact(current => { if (!view.plannedPosition) return false; const result = moveAtomic(current, current.activeUnitId, [view.plannedPosition]); view.plannedPosition = null; return result; }));
+  renderer.els.skipAttack.addEventListener("click", () => { view.selectedTargetId = null; view.selectedWeaponIndex = 0; transact(current => advanceActivation(current, "EndActivation")); });
+  renderer.els.confirm.addEventListener("click", () => transact(current => confirmDeployment(current, current.lifecycle === "DeploymentLeft" ? "left" : "right")));
+  renderer.els.wait.addEventListener("click", () => transact(current => decide(current, "wait")));
+  renderer.els.end.addEventListener("click", () => transact(current => {
+    if (current.lifecycle === "SystemActions") advanceActivation(current, "Maneuver");
+    else if (current.lifecycle === "Maneuver") advanceActivation(current, "Attack");
+    else if (current.lifecycle === "Attack") {
+      const attacker = current.units.find(unit => unit.id === current.activeUnitId); const target = current.units.find(unit => unit.id === view.selectedTargetId); const { weapon, available } = getWeaponSelection(attacker, view.selectedWeaponIndex);
+      if (attacker && target && available && getAttackPreview(current, attacker.id, target.id, view.selectedWeaponIndex)?.canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
+      if (current.lifecycle !== "Finished") advanceActivation(current, "EndActivation");
+      view.selectedTargetId = null; view.selectedWeaponIndex = 0;
+    } else progress(current);
+  }));
+  document.getElementById("resetButton").addEventListener("click", () => { Object.assign(view, { selectedUnitId: null, plannedPosition: null, selectedTargetId: null, selectedWeaponIndex: 0 }); store.reset(); });
+  document.getElementById("startBattleButton").addEventListener("click", () => { document.getElementById("menuScreen").hidden = true; document.getElementById("battleScreen").hidden = false; render(); });
+  store.subscribe(render); render();
+  return { view, render };
+}

@@ -4,11 +4,15 @@
   "type": "module",
   "scripts": {
     "test": "node --test src/*.test.mjs",
+    "test:browser": "playwright test",
+    "serve": "http-server . -p 4173 -c-1",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint src --ext .js,.mjs"
+    "lint": "eslint src tests --ext .js,.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "eslint": "^9.0.0",
+    "http-server": "^14.1.1",
     "typescript": "^5.0.0"
   }
 }
