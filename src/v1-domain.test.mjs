@@ -10,7 +10,8 @@ import {
   applyDamagePacket,
   refreshInterception,
   disengage,
-  previewAttack
+  previewAttack,
+  ram
 } from "./v1-domain.js";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
@@ -104,6 +105,18 @@ test("attack preview applies endpoint cover and weapon range", () => {
   const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
   assert.equal(result.canAttack, true);
   assert.equal(result.accuracy, 65);
+});
+
+test("ramming applies mass damage and resets attacker evasion", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 3, evasion: 12, integrity: 10 },
+    { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 2, integrity: 10 }
+  ] });
+  const result = ram(state, "a", "b", [{ q: 1, r: 0 }]);
+  assert.equal(result.success, true);
+  assert.equal(state.units.find(unit => unit.id === "a").evasion, 0);
+  assert.equal(state.units.find(unit => unit.id === "b").integrity, 4);
+  assert.ok(state.events.some(event => event.action === "ramming"));
 });
 
 test("memory store persists and notifies domain snapshots", async () => {
