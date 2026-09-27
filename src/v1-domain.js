@@ -34,7 +34,7 @@ export function deploymentZone(state, side) {
 
 export function deployUnit(state, unitId, position, heading = null) {
   const side = sideForLifecycle(state.lifecycle), unit = state.units.find(candidate => candidate.id === unitId);
-  if (!side || !unit || unit.side !== side || state.deployment[side] || unitAt(state, position, unitId) || !deploymentZone(state, side).some(cell => samePosition(cell, position))) return false;
+  if (!side || !unit || unit.side !== side || state.deployment[side] || unitAt(state, position, unitId) || state.contents.some(item => samePosition(item.position, position)) || !deploymentZone(state, side).some(cell => samePosition(cell, position))) return false;
   unit.position = { ...position };
   if (heading !== null && unit.kind === "capital") unit.heading = heading;
   recordEvent(state, "deployment-place", { actorId: unitId, subjectIds: [unitId], position: { ...position } });
@@ -86,8 +86,9 @@ export function advanceActivation(state, stage) {
 export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && (position.q < state.bounds.minCol || position.q > state.bounds.maxCol || position.r < state.bounds.minRow || position.r > state.bounds.maxRow))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");
-  if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind === "capital" && occupant.kind === "capital")) || (occupant && final)) return false;
-  if (occupant && unit.kind === "capital") return false;
+if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind === "capital" && occupant.kind === "capital")) || (occupant && final)) return false;
+   if (occupant && unit.kind === "capital") return false;
+   if (occupant && unit.kind === "squadron" && occupant.kind === "capital") return false;
   return true;
 }
 
