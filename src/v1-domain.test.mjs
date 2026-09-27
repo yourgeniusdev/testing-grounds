@@ -11,7 +11,9 @@ import {
   refreshInterception,
   disengage,
   previewAttack,
-  ram
+  ram,
+  progress,
+  resolveOverwatch
 } from "./v1-domain.js";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
@@ -117,6 +119,20 @@ test("ramming applies mass damage and resets attacker evasion", () => {
   assert.equal(state.units.find(unit => unit.id === "a").evasion, 0);
   assert.equal(state.units.find(unit => unit.id === "b").integrity, 4);
   assert.ok(state.events.some(event => event.action === "ramming"));
+});
+
+test("overwatch arms, fires once per slot and target, and records deterministic damage", () => {
+  const state = createBattle({ id: "aa", round: 1, units: [
+    { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 100 }] },
+    { id: "squad", side: "right", kind: "squadron", position: { q: 2, r: 0 }, integrity: 5 }
+  ] });
+  state.lifecycle = "EndActivation"; state.activeUnitId = "cap"; progress(state);
+  assert.equal(state.units[0].weapons[0].overwatch, true);
+  const first = resolveOverwatch(state, "squad", { random: () => 0.1 });
+  assert.equal(first[0].damage, 3);
+  assert.equal(state.units[0].weapons[0].ready, false);
+  assert.deepEqual(resolveOverwatch(state, "squad", { random: () => 0 }), []);
+  assert.ok(state.events.some(event => event.action === "overwatch-shot" && event.random));
 });
 
 test("memory store persists and notifies domain snapshots", async () => {

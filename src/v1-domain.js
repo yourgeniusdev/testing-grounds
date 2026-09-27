@@ -77,16 +77,73 @@ export function confirmDeployment(state, side) {
   return true;
 }
 
+function weaponSlots(unit) {
+  return unit?.weapons ?? unit?.weaponSlots ?? [];
+}
+
+function slotCanOverwatch(state, owner, slot, target) {
+  const weapon = slot.weapon ?? slot;
+  return owner && target && owner.side !== target.side && target.kind === "squadron" &&
+    (slot.destroyed !== true) && (slot.ready !== false) && (slot.overwatch !== false) &&
+    (slot.ammo ?? weapon.ammo ?? 1) > 0 && arcAllows(owner, target, weapon) &&
+    previewAttack(state, owner, target, weapon).canAttack;
+}
+
+export function armOverwatch(state, unitId = state.activeUnitId) {
+  const owner = state.units.find(unit => unit.id === unitId);
+  if (!owner) return [];
+  const armed = [];
+  weaponSlots(owner).forEach((slot, index) => {
+    const weapon = slot.weapon ?? slot;
+    if ((slot.ready !== false) && (slot.overwatch !== false) && (slot.ammo ?? weapon.ammo ?? 1) > 0) {
+      slot.overwatch = true;
+      slot.overwatchRound = state.round;
+      slot.overwatchTargets = slot.overwatchTargets ?? [];
+      armed.push(`${owner.id}:${slot.id ?? index}`);
+    }
+  });
+  if (armed.length) recordEvent(state, "overwatch-armed", { actorId: owner.id, subjectIds: armed });
+  return armed;
+}
+
+export function resolveOverwatch(state, targetId, { random = Math.random, causeEventId = null } = {}) {
+  const target = state.units.find(unit => unit.id === targetId);
+  if (!target || target.kind !== "squadron") return [];
+  const candidates = [];
+  state.units.forEach(owner => weaponSlots(owner).forEach((slot, index) => {
+    if (slot.overwatch && slot.overwatchRound === state.round && slotCanOverwatch(state, owner, slot, target) && !(slot.overwatchTargets ?? []).includes(target.id))
+      candidates.push({ owner, slot, index });
+  }));
+  candidates.sort((a, b) => (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0) || `${a.owner.id}:${a.index}`.localeCompare(`${b.owner.id}:${b.index}`));
+  const results = [];
+  for (const candidate of candidates) {
+    if (!state.units.includes(target) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) break;
+    const { owner, slot } = candidate, weapon = slot.weapon ?? slot;
+    slot.ready = false; slot.overwatch = false; slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
+    const declared = recordEvent(state, "overwatch-declared", { actorId: owner.id, subjectIds: [target.id], causeEventId });
+    const preview = previewAttack(state, owner, target, weapon);
+    const roll = random() * 100;
+    recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, random: { roll, accuracy: preview.accuracy } });
+    const result = roll < preview.accuracy ? resolveAttack(state, owner, target, weapon, { random: () => 0 }) : { damage: 0, hits: 0, destroyed: false };
+    results.push({ ownerId: owner.id, targetId: target.id, roll, ...result });
+  }
+  return results;
+}
+
+function clearOverwatch(state) {
+  state.units.forEach(unit => weaponSlots(unit).forEach(slot => { slot.overwatch = false; slot.overwatchTargets = []; }));
+}
+
 export function progress(state) {
   if (state.lifecycle === "Finished") return state.lifecycle;
   if (state.lifecycle === "RoundStart") {
-    state.round += 1; state.units.forEach(unit => { unit.hasActivated = false; unit.hasWaited = false; });
+    state.round += 1; clearOverwatch(state); state.units.forEach(unit => { unit.hasActivated = false; unit.hasWaited = false; });
     state.queue = state.units.filter(unit => unit.position).slice().sort((a, b) => (b.initiative ?? 0) - (a.initiative ?? 0)).map(unit => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
   } else if (state.lifecycle === "ActivationStart") {
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
   } else if (state.lifecycle === "EndActivation") {
-    const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) unit.hasActivated = true;
+    const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; armOverwatch(state, unit.id); }
     const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
     if (next) { state.activeUnitId = next; state.lifecycle = "WaitDecision"; }
     else state.lifecycle = "RoundEnd";
@@ -121,7 +178,7 @@ export function moveAtomic(state, unitId, steps, { ramming = false } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId); if (!unit || state.lifecycle === "Finished") return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   let moved = 0;
-  for (const position of steps) { if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break; unit.position = { ...position }; moved += 1; recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } }); }
+  for (const position of steps) { if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break; unit.position = { ...position }; moved += 1; const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } }); if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId }); }
   return { status: moved === steps.length ? "moved" : "blocked", moved };
 }
 
@@ -150,6 +207,7 @@ export function destroyUnit(state, target, { causeEventId = null } = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
   if (!unit || !state.units.includes(unit)) return { destroyed: false };
   const position = unit.position ? { ...unit.position } : null;
+  weaponSlots(unit).forEach(slot => { slot.overwatch = false; slot.overwatchTargets = []; });
   state.units = state.units.filter(candidate => candidate !== unit);
   state.queue = state.queue.filter(id => id !== unit.id);
   state.contents = state.contents.filter(item => item.kind !== "debris" || !samePosition(item.position, position));
