@@ -7,7 +7,10 @@ import {
   decide,
   advanceActivation,
   moveAtomic,
-  applyDamagePacket
+  applyDamagePacket,
+  refreshInterception,
+  disengage,
+  previewAttack
 } from "./v1-domain.js";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
@@ -79,4 +82,38 @@ test("damage crosses layers and destruction creates debris and victory", () => {
   assert.equal(state.winner, "left");
   assert.ok(state.contents.some(item => item.kind === "debris"));
   assert.ok(state.events.some(event => event.action === "unit-destroyed"));
+});
+
+test("interception graph blocks engaged squadron movement and disengage clears links", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "squadron", position: { q: 1, r: 0 }, stack: 2 },
+    { id: "b", side: "right", kind: "squadron", position: { q: 2, r: 0 }, stack: 1 }
+  ] });
+  refreshInterception(state);
+  assert.deepEqual(state.units[0].engagedWith, ["b"]);
+  assert.equal(moveAtomic(state, "a", [{ q: 0, r: 0 }]).moved, 0);
+  assert.equal(disengage(state, "a", { random: () => 0 }).success, true);
+  assert.deepEqual(state.units[0].engagedWith, []);
+});
+
+test("attack preview applies endpoint cover and weapon range", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
+  ], contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }] });
+  const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
+  assert.equal(result.canAttack, true);
+  assert.equal(result.accuracy, 65);
+});
+
+test("memory store persists and notifies domain snapshots", async () => {
+  const { createMemoryPersistence, createBattleStore } = await import("./v1-store.js");
+  const persistence = createMemoryPersistence();
+  const store = createBattleStore({ persistence, initial: { id: "stored", bounds, units } });
+  let notifications = 0;
+  store.subscribe(() => { notifications += 1; });
+  store.transact(state => { state.round = 7; return state.round; });
+  assert.equal(store.getState().round, 7);
+  assert.equal(notifications, 1);
+  assert.equal(persistence.load().round, 7);
 });

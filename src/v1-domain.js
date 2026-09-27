@@ -24,6 +24,31 @@ export function recordEvent(state, action, data = {}) {
 function sideForLifecycle(lifecycle) { return lifecycle === "DeploymentLeft" ? "left" : lifecycle === "DeploymentRight" ? "right" : null; }
 function samePosition(a, b) { return a && b && a.q === b.q && a.r === b.r; }
 function unitAt(state, position, except) { return state.units.find(unit => unit.id !== except && samePosition(unit.position, position)); }
+function distance(a, b) { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; }
+
+export function refreshInterception(state) {
+  state.units.forEach(unit => { if (unit.kind === "squadron") unit.engagedWith = []; });
+  const squadrons = state.units.filter(unit => unit.kind === "squadron" && unit.position && unit.interception !== false);
+  for (const a of squadrons) for (const b of squadrons) if (a !== b && a.side !== b.side && (a.role ?? a.type) !== "bomber" && distance(a.position, b.position) <= (a.interceptRange ?? 1)) {
+    a.engagedWith.push(b.id);
+  }
+  return state.units.filter(unit => unit.kind === "squadron").map(unit => ({ id: unit.id, engagedWith: [...(unit.engagedWith ?? [])] }));
+}
+
+export function disengage(state, unitId, { random = Math.random } = {}) {
+  const unit = state.units.find(candidate => candidate.id === unitId);
+  if (!unit || unit.kind !== "squadron" || !(unit.engagedWith?.length)) return { success: false, chance: 0, cost: 0 };
+  const enemies = unit.engagedWith.map(id => state.units.find(candidate => candidate.id === id)).filter(Boolean);
+  const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1))[0];
+  const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (closest?.stack ?? 1) - 1) * 10 - Math.max(0, enemies.length - 1) * 10 + (unit.friendlyLinked ?? 0) * 10));
+  unit.speed = Math.max(0, (unit.speed ?? 0) - enemies.length);
+  unit.evasionPenalty = (unit.evasionPenalty ?? 0) - 10;
+  const success = random() * 100 < chance;
+  if (success) { unit.engagedWith = []; unit.disengagedUntilRound = state.round; enemies.forEach(enemy => { enemy.engagedWith = (enemy.engagedWith ?? []).filter(id => id !== unit.id); }); }
+  recordEvent(state, "disengage", { actorId: unitId, chance, success });
+  return { success, chance, cost: enemies.length };
+}
+
 
 export function deploymentZone(state, side) {
   if (!state.bounds) return [];
@@ -94,6 +119,7 @@ if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind
 
 export function moveAtomic(state, unitId, steps, { ramming = false } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId); if (!unit || state.lifecycle === "Finished") return { status: "blocked", moved: 0 };
+  if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   let moved = 0;
   for (const position of steps) { if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break; unit.position = { ...position }; moved += 1; recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } }); }
   return { status: moved === steps.length ? "moved" : "blocked", moved };
@@ -138,13 +164,33 @@ export function destroyUnit(state, target, { causeEventId = null } = {}) {
   return { destroyed: true, unitId: unit.id, winner: state.winner };
 }
 
+function lineCells(a, b) {
+  const n = Math.max(1, distance(a, b)), cells = [];
+  for (let i = 0; i <= n; i += 1) cells.push({ q: Math.round(a.q + (b.q - a.q) * i / n), r: Math.round(a.r + (b.r - a.r) * i / n) });
+  return cells.filter((cell, index) => index === 0 || !samePosition(cell, cells[index - 1]));
+}
+
+function arcAllows(source, victim, weapon) {
+  const range = distance(source.position, victim.position), min = weapon.minRange ?? (weapon.profile === "linear" ? 3 : 1), max = weapon.maxRange ?? 3;
+  if (range < min || range > max) return false;
+  if (weapon.arc === "360" || weapon.arc === "turret") return true;
+  if (weapon.arc === "linear") return source.heading === undefined || Math.sign(victim.position.q - source.position.q) === (source.heading === 2 ? 1 : source.heading === 5 ? -1 : 0);
+  return true;
+}
+
 export function previewAttack(state, attacker, target, weapon = {}) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
   const accuracy = Math.max(0, Math.min(100, weapon.accuracy ?? 100));
   const shots = weapon.shots ?? 1;
   const damage = weapon.damage ?? 0;
-  return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy, shots, damage, totalDamage: shots * damage, canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side) };
+  const terrain = victim?.position && state.contents.find(item => samePosition(item.position, victim.position) && item.cover);
+  const coverPenalty = terrain?.cover === "nebula" ? 15 : terrain?.cover === "debris" ? 10 : terrain?.cover === "asteroid" ? 20 : 0;
+  const cells = source?.position && victim?.position ? lineCells(source.position, victim.position) : [];
+  const blocker = cells.slice(1, -1).map(position => state.units.find(unit => unit.position && samePosition(unit.position, position) && unit !== source && unit !== victim && unit.kind !== "squadron" && unit.size)).find(Boolean);
+  const blockerCover = blocker ? ({ small: 25, medium: 50, large: 100 }[blocker.size] ?? 0) : 0;
+  const effectiveAccuracy = Math.max(0, accuracy - coverPenalty);
+  return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: effectiveAccuracy, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && arcAllows(source, victim, weapon)) };
 }
 
 export function resolveAttack(state, attacker, target, weapon = {}, { random = Math.random } = {}) {
