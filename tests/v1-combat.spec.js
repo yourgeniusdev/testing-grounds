@@ -1,5 +1,21 @@
 import { test, expect } from "@playwright/test";
 
+test("ships start visible and can be repositioned during deployment", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  const positions = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.map(unit => unit.position));
+  expect(positions.every(Boolean)).toBe(true);
+  const canvas = page.locator("#battlefield");
+  const box = await canvas.boundingBox();
+  const points = await page.evaluate(async () => { const { renderer } = await import("/src/v1-ui.js"); return [renderer.pointForHex({ q: 0, r: 1 }), renderer.pointForHex({ q: 1, r: 2 })]; });
+  await page.mouse.click(box.x + points[0].x, box.y + points[0].y);
+  await page.mouse.click(box.x + points[1].x, box.y + points[1].y);
+  const moved = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position);
+  expect(moved).toEqual({ q: 1, r: 2 });
+});
+
 test("battlefield canvas covers the visible central panel", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Перейти к бою" }).click();
