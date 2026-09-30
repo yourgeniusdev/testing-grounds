@@ -49,11 +49,15 @@ export function createBattleRenderer(document) {
       const weapon = slot.weapon ?? slot; const button = document.createElement("button"); button.type = "button"; button.className = `action-slot weapon-action${view.selectedWeaponIndex === index ? " active" : ""}`; button.dataset.weaponIndex = index; button.textContent = weapon.id ?? `Орудие ${index + 1}`; return button;
     }));
     const preview = state.lifecycle === "Attack" && attacker && view.selectedTargetId ? getAttackPreview(state, attacker.id, view.selectedTargetId, view.selectedWeaponIndex) : null;
-    els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : (view.routeReason || (view.plannedRoute.length ? `Маршрут: ${view.plannedRoute.length} шаг.` : ""));
     const selected = state.units.find(unit => unit.id === view.selectedUnitId);
+    const routeText = view.routeReason || (view.plannedRoute.length ? `Маршрут: ${view.plannedRoute.length} шаг. → (${view.plannedRoute.at(-1).q}, ${view.plannedRoute.at(-1).r})` : "");
+    els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : routeText;
     const canPlanHeading = state.lifecycle === "Maneuver" && selected?.kind === "capital" && selected.id === state.activeUnitId;
     els.heading.parentElement.hidden = !canPlanHeading;
-    if (canPlanHeading) els.heading.replaceChildren(...Array.from({ length: 6 }, (_, heading) => { const button = document.createElement("button"); button.type = "button"; button.dataset.heading = heading; button.textContent = String(heading + 1); button.className = `heading-button${(view.plannedHeading ?? selected.heading) === heading ? " active" : ""}`; return button; }));
+    if (canPlanHeading) {
+      els.heading.parentElement.querySelector("span").textContent = `Курс: текущий ${selected.heading + 1} · выбранный ${(view.plannedHeading ?? selected.heading) + 1}`;
+      els.heading.replaceChildren(...Array.from({ length: 6 }, (_, heading) => { const button = document.createElement("button"); button.type = "button"; button.dataset.heading = heading; button.textContent = String(heading + 1);       button.title = `Курс ${heading + 1}`; button.className = `heading-button${(view.plannedHeading ?? selected.heading) === heading ? " active" : ""}`; return button; }));
+    }
     if (state.lifecycle === "Attack") els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${formatAttackPreview(preview)}` : `АТАКА · ${formatAttackPreview(preview)}`;
     els.list.replaceChildren(...state.units.map(unit => { const item = document.createElement("div"); item.className = "mission-card"; const name = document.createElement("strong"); name.textContent = unit.name; const details = document.createElement("span"); details.textContent = `${unit.side} · ${unit.kind} · ${unit.integrity} HP`; item.append(name, details); return item; }));
      ctx.clearRect(0, 0, dimensions.width, dimensions.height);
