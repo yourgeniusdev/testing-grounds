@@ -24,6 +24,7 @@ test("battlefield legend explains terrain, cover, and route states", async ({ pa
   await expect(legend).toContainText("Туманность");
   await expect(legend).toContainText("−15 п.п.");
   await expect(legend).toContainText("Астероид");
+  await expect(legend).toContainText("−20 п.п.");
   await expect(legend).toContainText("Обломки");
   await expect(legend).toContainText("маршрут недоступны");
 });
