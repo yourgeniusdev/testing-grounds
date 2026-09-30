@@ -23,7 +23,7 @@ export function createBattleRenderer(document) {
   let layout = createHexLayout(300, 150, { minCol: 0, maxCol: 7, minRow: 0, maxRow: 5 });
   const els = {
     confirm: document.getElementById("confirmDeploymentButton"), confirmMove: document.getElementById("confirmMoveButton"), skipAttack: document.getElementById("skipAttackButton"), wait: document.getElementById("waitButton"), end: document.getElementById("endActivationButton"),
-    round: document.getElementById("roundNumber"), stage: document.getElementById("stageLabel"), mode: document.getElementById("modeLabel"), list: document.getElementById("initiativeList"), log: document.getElementById("combatLog"), weapons: document.getElementById("attackWeaponActions"), summary: document.getElementById("weaponSummary"), heading: document.getElementById("headingButtons"), cancelManeuver: document.getElementById("cancelManeuverButton")
+    round: document.getElementById("roundNumber"), stage: document.getElementById("stageLabel"), mode: document.getElementById("modeLabel"), list: document.getElementById("initiativeList"), log: document.getElementById("combatLog"), weapons: document.getElementById("attackWeaponActions"), summary: document.getElementById("weaponSummary"), heading: document.getElementById("headingButtons"), cancelManeuver: document.getElementById("cancelManeuverButton"), maneuverDetails: document.getElementById("maneuverDetails"), maneuverPopup: document.getElementById("maneuverPopup"), routeBadge: document.getElementById("maneuverBadge")
   };
   function resize(state) {
     const ratio = globalThis.devicePixelRatio || 1;
@@ -51,14 +51,21 @@ export function createBattleRenderer(document) {
     const preview = state.lifecycle === "Attack" && attacker && view.selectedTargetId ? getAttackPreview(state, attacker.id, view.selectedTargetId, view.selectedWeaponIndex) : null;
     const selected = state.units.find(unit => unit.id === view.selectedUnitId);
     const routeText = view.routeReason || (view.plannedRoute.length ? `Маршрут: ${view.plannedRoute.length} шаг. → (${view.plannedRoute.at(-1).q}, ${view.plannedRoute.at(-1).r})` : "");
-    els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : routeText;
-    const canPlanHeading = state.lifecycle === "Maneuver" && selected?.kind === "capital" && selected.id === state.activeUnitId;
+     els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : routeText;
+     const maneuverActive = state.lifecycle === "Maneuver" && selected?.id === state.activeUnitId;
+     els.maneuverPopup.hidden = !maneuverActive;
+     if (maneuverActive) {
+       els.maneuverDetails.textContent = view.plannedRoute.length ? `${routeText} · скорость ${selected.speed ?? 0}` : `Выберите допустимый гекс для маршрута · скорость ${selected.speed ?? 0}`;
+       els.routeBadge.textContent = view.routeReason ? "ЗАБЛОКИРОВАН" : view.plannedRoute.length ? "ГОТОВ" : "ОЖИДАНИЕ";
+     }
+     const canPlanHeading = maneuverActive && selected?.kind === "capital";
     els.heading.parentElement.hidden = !canPlanHeading;
     if (canPlanHeading) {
       els.heading.parentElement.querySelector("span").textContent = `Курс: текущий ${selected.heading + 1} · выбранный ${(view.plannedHeading ?? selected.heading) + 1}`;
       els.heading.replaceChildren(...Array.from({ length: 6 }, (_, heading) => { const button = document.createElement("button"); button.type = "button"; button.dataset.heading = heading; button.textContent = String(heading + 1);       button.title = `Курс ${heading + 1}`; button.className = `heading-button${(view.plannedHeading ?? selected.heading) === heading ? " active" : ""}`; return button; }));
     }
-    if (state.lifecycle === "Attack") els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${formatAttackPreview(preview)}` : `АТАКА · ${formatAttackPreview(preview)}`;
+     if (state.lifecycle === "Attack") els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${formatAttackPreview(preview)}` : `АТАКА · ${formatAttackPreview(preview)}`;
+     if (state.lifecycle !== "Maneuver") els.maneuverPopup.hidden = true;
     els.list.replaceChildren(...state.units.map(unit => { const item = document.createElement("div"); item.className = "mission-card"; const name = document.createElement("strong"); name.textContent = unit.name; const details = document.createElement("span"); details.textContent = `${unit.side} · ${unit.kind} · ${unit.integrity} HP`; item.append(name, details); return item; }));
      ctx.clearRect(0, 0, dimensions.width, dimensions.height);
      const deploySide = state.lifecycle === "DeploymentLeft" ? "left" : state.lifecycle === "DeploymentRight" ? "right" : null;
