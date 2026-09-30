@@ -23,7 +23,7 @@ export function createBattleRenderer(document) {
   let layout = createHexLayout(300, 150, { minCol: 0, maxCol: 7, minRow: 0, maxRow: 5 });
   const els = {
     confirm: document.getElementById("confirmDeploymentButton"), confirmMove: document.getElementById("confirmMoveButton"), skipAttack: document.getElementById("skipAttackButton"), wait: document.getElementById("waitButton"), end: document.getElementById("endActivationButton"),
-    round: document.getElementById("roundNumber"), stage: document.getElementById("stageLabel"), mode: document.getElementById("modeLabel"), list: document.getElementById("initiativeList"), log: document.getElementById("combatLog"), weapons: document.getElementById("attackWeaponActions"), summary: document.getElementById("weaponSummary")
+    round: document.getElementById("roundNumber"), stage: document.getElementById("stageLabel"), mode: document.getElementById("modeLabel"), list: document.getElementById("initiativeList"), log: document.getElementById("combatLog"), weapons: document.getElementById("attackWeaponActions"), summary: document.getElementById("weaponSummary"), heading: document.getElementById("headingButtons")
   };
   function resize(state) {
     const ratio = globalThis.devicePixelRatio || 1;
@@ -50,10 +50,12 @@ export function createBattleRenderer(document) {
     }));
     const preview = state.lifecycle === "Attack" && attacker && view.selectedTargetId ? getAttackPreview(state, attacker.id, view.selectedTargetId, view.selectedWeaponIndex) : null;
     els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : "";
+    const selected = state.units.find(unit => unit.id === view.selectedUnitId);
+    els.heading.parentElement.hidden = state.lifecycle !== "Maneuver" || selected?.kind !== "capital";
+    if (selected?.kind === "capital") els.heading.replaceChildren(...Array.from({ length: 6 }, (_, heading) => { const button = document.createElement("button"); button.type = "button"; button.dataset.heading = heading; button.textContent = String(heading + 1); button.className = `heading-button${selected.heading === heading ? " active" : ""}`; return button; }));
     if (state.lifecycle === "Attack") els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${formatAttackPreview(preview)}` : `АТАКА · ${formatAttackPreview(preview)}`;
     els.list.replaceChildren(...state.units.map(unit => { const item = document.createElement("div"); item.className = "mission-card"; const name = document.createElement("strong"); name.textContent = unit.name; const details = document.createElement("span"); details.textContent = `${unit.side} · ${unit.kind} · ${unit.integrity} HP`; item.append(name, details); return item; }));
-    ctx.clearRect(0, 0, dimensions.width, dimensions.height);
-     const selected = state.units.find(unit => unit.id === view.selectedUnitId);
+     ctx.clearRect(0, 0, dimensions.width, dimensions.height);
      const deploySide = state.lifecycle === "DeploymentLeft" ? "left" : state.lifecycle === "DeploymentRight" ? "right" : null;
      const highlighted = deploySide ? deploymentZone(state, deploySide) : state.lifecycle === "Maneuver" && selected ? movementDestinations(state, selected.id) : [];
      for (let q = state.bounds.minCol; q <= state.bounds.maxCol; q += 1) for (let r = state.bounds.minRow; r <= state.bounds.maxRow; r += 1) { const cell = { q, r }; const p = pixelForHex(cell, layout); if (highlighted.some(item => item.q === q && item.r === r)) { ctx.fillStyle = deploySide ? "rgba(85,185,255,.15)" : "rgba(255,214,92,.2)"; ctx.beginPath(); for (let i = 0; i < 6; i += 1) { const a = Math.PI / 180 * (60 * i - 30); ctx.lineTo(p.x + layout.size * Math.cos(a), p.y + layout.size * Math.sin(a)); } ctx.closePath(); ctx.fill(); } ctx.strokeStyle = "#536174"; ctx.beginPath(); for (let i = 0; i < 6; i += 1) { const a = Math.PI / 180 * (60 * i - 30); ctx.lineTo(p.x + layout.size * Math.cos(a), p.y + layout.size * Math.sin(a)); } ctx.closePath(); ctx.stroke(); }

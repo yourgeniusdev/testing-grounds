@@ -211,12 +211,13 @@ export function canEnter(state, unit, position, { final = false, ramming = false
   return true;
 }
 
-export function moveAtomic(state, unitId, steps, { ramming = false } = {}) {
+export function moveAtomic(state, unitId, steps, { ramming = false, heading = null } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   let moved = 0;
   for (const position of steps) { if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break; unit.position = { ...position }; moved += 1; const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } }); if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId }); }
+  if (moved === steps.length && heading !== null && unit.kind === "capital") changeHeading(state, unitId, heading);
   return { status: moved === steps.length ? "moved" : "blocked", moved };
 }
 
