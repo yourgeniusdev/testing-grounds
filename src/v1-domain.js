@@ -189,7 +189,14 @@ export function planMovement(state, unitId, destination) {
       .filter(position => distance(position, destination) < distance(current, destination))
       .sort((a, b) => distance(a, destination) - distance(b, destination))[0];
     if (!next) return { valid: false, steps, reason: "Маршрут не приближает к цели" };
-    if (!canEnter(state, unit, next, { final: samePosition(next, destination) })) return { valid: false, steps, reason: "Путь заблокирован препятствием или кораблём" };
+    if (!canEnter(state, unit, next, { final: samePosition(next, destination) })) {
+      const object = state.contents.find(item => samePosition(item.position, next) && item.kind === "object");
+      const occupant = unitAt(state, next, unit.id);
+      const reason = object ? `Маршрут заблокирован объектом: ${object.type ?? "препятствие"}`
+        : occupant ? `Гекс занят кораблём: ${occupant.name ?? occupant.id}`
+          : "Гекс недоступен для этого юнита";
+      return { valid: false, steps, reason };
+    }
     steps.push(next); current = next;
   }
   return samePosition(current, destination)

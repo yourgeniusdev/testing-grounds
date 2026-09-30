@@ -6,6 +6,7 @@ const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
 export function createBattleController({ document, store, renderer }) {
   const view = { selectedUnitId: null, plannedPosition: null, plannedRoute: [], plannedHeading: null, routeReason: null, selectedTargetId: null, selectedWeaponIndex: 0 };
   const clearRoute = () => { view.plannedPosition = null; view.plannedRoute = []; view.routeReason = null; };
+  const clearSelection = () => { view.selectedUnitId = null; view.selectedTargetId = null; view.selectedWeaponIndex = 0; clearRoute(); view.plannedHeading = null; };
   const render = () => { const state = store.getState(); if (state.lifecycle !== "Maneuver") { clearRoute(); view.plannedHeading = null; } renderer.render(state, view); };
   const transact = command => store.transact(command);
   renderer.canvas.addEventListener("click", event => {
@@ -31,8 +32,8 @@ export function createBattleController({ document, store, renderer }) {
       view.selectedTargetId = null; view.selectedWeaponIndex = 0;
     } else progress(current);
   }));
-  document.getElementById("resetButton").addEventListener("click", () => { Object.assign(view, { selectedUnitId: null, plannedPosition: null, plannedRoute: [], plannedHeading: null, selectedTargetId: null, selectedWeaponIndex: 0 }); store.reset(); });
-  document.getElementById("startBattleButton").addEventListener("click", () => { store.reset(); Object.assign(view, { selectedUnitId: null, plannedPosition: null, plannedRoute: [], plannedHeading: null, selectedTargetId: null, selectedWeaponIndex: 0 }); document.getElementById("menuScreen").hidden = true; document.getElementById("battleScreen").hidden = false; render(); });
+  document.getElementById("resetButton").addEventListener("click", () => { clearSelection(); store.reset(); });
+  document.getElementById("startBattleButton").addEventListener("click", () => { clearSelection(); store.reset(); document.getElementById("menuScreen").hidden = true; document.getElementById("battleScreen").hidden = false; render(); });
   store.subscribe(render); render();
   return { view, render };
 }
