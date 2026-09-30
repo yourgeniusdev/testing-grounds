@@ -79,6 +79,16 @@ test("atomic movement enforces active maneuver ownership", () => {
   assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 2, r: 0 });
 });
 
+test("movement planning reports blocked route reasons", () => {
+  const state = deployedBattle();
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "l-cap";
+  state.contents.push({ id: "rock", kind: "object", position: { q: 1, r: 0 } });
+  const plan = planMovement(state, "l-cap", { q: 2, r: 0 });
+  assert.equal(plan.valid, false);
+  assert.match(plan.reason, /заблокирован/i);
+});
+
 test("movement planning returns deterministic route and heading changes during maneuver", () => {
   const state = deployedBattle();
   state.lifecycle = "Maneuver";

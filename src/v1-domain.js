@@ -180,7 +180,7 @@ export function movementDestinations(state, unitId) {
 
 export function planMovement(state, unitId, destination) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit?.position || !destination) return { valid: false, steps: [] };
+  if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Нет исходной позиции" };
   const steps = [];
   let current = { ...unit.position };
   const directions = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
@@ -188,10 +188,13 @@ export function planMovement(state, unitId, destination) {
     const next = directions.map(direction => ({ q: current.q + direction.q, r: current.r + direction.r }))
       .filter(position => distance(position, destination) < distance(current, destination))
       .sort((a, b) => distance(a, destination) - distance(b, destination))[0];
-    if (!next || !canEnter(state, unit, next, { final: samePosition(next, destination) })) return { valid: false, steps };
+    if (!next) return { valid: false, steps, reason: "Маршрут не приближает к цели" };
+    if (!canEnter(state, unit, next, { final: samePosition(next, destination) })) return { valid: false, steps, reason: "Путь заблокирован препятствием или кораблём" };
     steps.push(next); current = next;
   }
-  return { valid: samePosition(current, destination), steps };
+  return samePosition(current, destination)
+    ? { valid: true, steps, reason: null }
+    : { valid: false, steps, reason: "Цель вне доступной дальности" };
 }
 
 export function changeHeading(state, unitId, heading) {
