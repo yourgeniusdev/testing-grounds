@@ -178,6 +178,30 @@ export function movementDestinations(state, unitId) {
   return cells;
 }
 
+export function planMovement(state, unitId, destination) {
+  const unit = state.units.find(candidate => candidate.id === unitId);
+  if (!unit?.position || !destination) return { valid: false, steps: [] };
+  const steps = [];
+  let current = { ...unit.position };
+  const directions = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
+  while (!samePosition(current, destination) && steps.length < Math.max(1, unit.speed ?? 1)) {
+    const next = directions.map(direction => ({ q: current.q + direction.q, r: current.r + direction.r }))
+      .filter(position => distance(position, destination) < distance(current, destination))
+      .sort((a, b) => distance(a, destination) - distance(b, destination))[0];
+    if (!next || !canEnter(state, unit, next, { final: samePosition(next, destination) })) return { valid: false, steps };
+    steps.push(next); current = next;
+  }
+  return { valid: samePosition(current, destination), steps };
+}
+
+export function changeHeading(state, unitId, heading) {
+  const unit = state.units.find(candidate => candidate.id === unitId);
+  if (!unit || unit.kind !== "capital" || !Number.isInteger(heading) || heading < 0 || heading > 5 || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId) return false;
+  unit.heading = heading;
+  recordEvent(state, "heading-change", { actorId: unitId, subjectIds: [unitId], heading });
+  return true;
+}
+
 export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");

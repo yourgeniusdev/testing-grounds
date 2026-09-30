@@ -1,20 +1,20 @@
-import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, progress, resolveAttack } from "./v1-domain.js";
+import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, planMovement, progress, resolveAttack } from "./v1-domain.js";
 import { getAttackPreview, getWeaponSelection } from "./v1-preview.js";
 
 const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
 
 export function createBattleController({ document, store, renderer }) {
-  const view = { selectedUnitId: null, plannedPosition: null, selectedTargetId: null, selectedWeaponIndex: 0 };
+  const view = { selectedUnitId: null, plannedPosition: null, plannedRoute: [], selectedTargetId: null, selectedWeaponIndex: 0 };
   const render = () => renderer.render(store.getState(), view);
   const transact = command => store.transact(command);
   renderer.canvas.addEventListener("click", event => {
     const state = store.getState(); const rect = renderer.canvas.getBoundingClientRect(); const position = renderer.hexForPoint(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position));
     if (unit) { if (state.lifecycle === "Attack" && unit.side !== state.units.find(candidate => candidate.id === state.activeUnitId)?.side) view.selectedTargetId = unit.id; else view.selectedUnitId = unit.id; return render(); }
     if (view.selectedUnitId && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, view.selectedUnitId, position, 2));
-    else if (view.selectedUnitId && state.lifecycle === "Maneuver") { view.plannedPosition = position; render(); }
+    else if (view.selectedUnitId && state.lifecycle === "Maneuver") { const plan = planMovement(state, view.selectedUnitId, position); view.plannedPosition = plan.valid ? position : null; view.plannedRoute = plan.valid ? plan.steps : []; render(); }
   });
   renderer.els.weapons.addEventListener("click", event => { const button = event.target.closest("[data-weapon-index]"); if (!button) return; view.selectedWeaponIndex = Number(button.dataset.weaponIndex); render(); });
-  renderer.els.confirmMove.addEventListener("click", () => transact(current => { if (!view.plannedPosition) return false; const result = moveAtomic(current, current.activeUnitId, [view.plannedPosition]); view.plannedPosition = null; return result; }));
+  renderer.els.confirmMove.addEventListener("click", () => transact(current => { if (!view.plannedRoute.length) return false; const result = moveAtomic(current, current.activeUnitId, view.plannedRoute); view.plannedPosition = null; view.plannedRoute = []; return result; }));
   renderer.els.skipAttack.addEventListener("click", () => { view.selectedTargetId = null; view.selectedWeaponIndex = 0; transact(current => advanceActivation(current, "EndActivation")); });
   renderer.els.confirm.addEventListener("click", () => transact(current => confirmDeployment(current, current.lifecycle === "DeploymentLeft" ? "left" : "right")));
   renderer.els.wait.addEventListener("click", () => transact(current => decide(current, "wait")));

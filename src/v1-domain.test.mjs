@@ -13,7 +13,9 @@ import {
   previewAttack,
   ram,
   progress,
-  resolveOverwatch
+  resolveOverwatch,
+  planMovement,
+  changeHeading
 } from "./v1-domain.js";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
@@ -75,6 +77,30 @@ test("atomic movement enforces active maneuver ownership", () => {
   assert.equal(result.status, "blocked");
   assert.equal(result.moved, 2);
   assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 2, r: 0 });
+});
+
+test("movement planning returns deterministic route and heading changes during maneuver", () => {
+  const state = deployedBattle();
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "l-cap";
+  state.units.find(unit => unit.id === "l-cap").speed = 2;
+  const plan = planMovement(state, "l-cap", { q: 2, r: 0 });
+  assert.equal(plan.valid, true);
+  assert.deepEqual(plan.steps, [{ q: 1, r: 0 }, { q: 2, r: 0 }]);
+  assert.equal(changeHeading(state, "l-cap", 3), true);
+  assert.equal(state.units.find(unit => unit.id === "l-cap").heading, 3);
+  assert.equal(state.events.at(-1).action, "heading-change");
+});
+
+test("movement planning rejects blocked route without mutating state", () => {
+  const state = deployedBattle();
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "l-cap";
+  state.units.find(unit => unit.id === "l-cap").speed = 2;
+  state.contents.push({ id: "rock", kind: "object", position: { q: 1, r: 0 } });
+  const plan = planMovement(state, "l-cap", { q: 2, r: 0 });
+  assert.equal(plan.valid, false);
+  assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 0, r: 0 });
 });
 
 test("damage crosses layers and destruction creates debris and victory", () => {
