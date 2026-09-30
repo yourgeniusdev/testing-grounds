@@ -60,7 +60,7 @@ export function createBattleRenderer(document) {
      const maneuverActive = state.lifecycle === "Maneuver" && selected?.id === state.activeUnitId;
      els.maneuverPopup.hidden = !maneuverActive;
      if (maneuverActive) {
-        els.maneuverDetails.textContent = view.plannedRoute.length ? `${routeText}${headingText} · стоимость ${routeCost} · скорость ${selected.speed ?? 0}` : `Выберите допустимый гекс для маршрута${headingText} · скорость ${selected.speed ?? 0}`;
+        els.maneuverDetails.textContent = view.routeReason ? `${view.routeReason}${headingText} · скорость ${selected.speed ?? 0}` : view.plannedRoute.length ? `${routeText}${headingText} · стоимость ${routeCost} · скорость ${selected.speed ?? 0}` : `Выберите допустимый гекс для маршрута${headingText} · скорость ${selected.speed ?? 0}`;
        els.routeBadge.textContent = view.routeReason ? "ЗАБЛОКИРОВАН" : view.plannedRoute.length ? "ГОТОВ" : "ОЖИДАНИЕ";
      }
      const canPlanHeading = maneuverActive && selected?.kind === "capital";

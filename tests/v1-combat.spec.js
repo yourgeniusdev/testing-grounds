@@ -71,6 +71,36 @@ test("browser shows planned multi-cell route and ordered event log", async ({ pa
   await expect(page.locator("#combatLog [data-event-action='movement-step']").first()).toBeVisible();
 });
 
+test("browser blocks routes through obstacles and records final position", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  await page.evaluate(async () => {
+    const { store, controller } = await import("/src/v1-ui.js");
+    store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit), contents: [...store.getState().contents, { id: "route-blocker", kind: "object", type: "asteroid", position: { q: 1, r: 0 } }] });
+    controller.view.selectedUnitId = "left-cap";
+    controller.render();
+  });
+  const canvas = page.locator("#battlefield");
+  const box = await canvas.boundingBox();
+  const blockedDestination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  await page.mouse.click(box.x + blockedDestination.x, box.y + blockedDestination.y);
+  await expect(page.locator("#maneuverDetails")).toContainText("Маршрут заблокирован объектом: asteroid");
+  const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 0, r: 2 }));
+  await page.mouse.click(box.x + destination.x, box.y + destination.y);
+  await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
+  await page.locator("#headingButtons [data-heading='2']").click();
+  await page.locator("#confirmMoveButton").click();
+  const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-3).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
+  expect(events).toEqual([
+    { action: "movement-step", position: { q: 0, r: 1 }, heading: undefined },
+    { action: "movement-step", position: { q: 0, r: 2 }, heading: undefined },
+    { action: "heading-change", position: undefined, heading: 2 }
+  ]);
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 0, r: 2 });
+});
+
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
