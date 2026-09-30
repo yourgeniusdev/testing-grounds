@@ -24,6 +24,23 @@ test("battlefield canvas covers the visible central panel", async ({ page }) => 
   expect(dimensions.height).toBe(Math.round(dimensions.clientHeight * dimensions.ratio));
 });
 
+test("capital heading changes only when the planned maneuver is confirmed", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  await page.evaluate(async () => {
+    const { store } = await import("/src/v1-ui.js");
+    store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit) });
+  });
+  await page.evaluate(async () => { const { controller, renderer } = await import("/src/v1-ui.js"); controller.view.selectedUnitId = "left-cap"; controller.view.plannedRoute = [{ q: 0, r: 1 }]; controller.view.plannedPosition = { q: 0, r: 1 }; controller.render(); });
+  await page.locator("#headingButtons [data-heading='2']").dispatchEvent("click");
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(0);
+  await page.getByRole("button", { name: "Подтвердить манёвр" }).click();
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(2);
+  await expect(page.locator("#combatLog")).toContainText("heading-change");
+});
+
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
