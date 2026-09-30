@@ -118,7 +118,7 @@ export function resolveOverwatch(state, targetId, { random = Math.random, causeE
   candidates.sort((a, b) => (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0) || `${a.owner.id}:${a.index}`.localeCompare(`${b.owner.id}:${b.index}`));
   const results = [];
   for (const candidate of candidates) {
-    if (!state.units.includes(target) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) break;
+    if (!state.units.includes(target) || !state.units.includes(candidate.owner) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) break;
     const { owner, slot } = candidate, weapon = slot.weapon ?? slot;
     slot.ready = false; slot.overwatch = false; slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
     const declared = recordEvent(state, "overwatch-declared", { actorId: owner.id, subjectIds: [target.id], causeEventId });
@@ -226,8 +226,16 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
   if (!unit || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   let moved = 0;
-  for (const position of steps) { if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break; unit.position = { ...position }; moved += 1; const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } }); if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId }); }
-  if (moved === steps.length && heading !== null && unit.kind === "capital") changeHeading(state, unitId, heading);
+  for (const position of steps) {
+    if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break;
+    unit.position = { ...position };
+    moved += 1;
+    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } });
+    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId });
+    if (!state.units.includes(unit)) break;
+    refreshInterception(state);
+  }
+  if (moved === steps.length && state.units.includes(unit) && heading !== null && unit.kind === "capital") changeHeading(state, unitId, heading);
   return { status: moved === steps.length ? "moved" : "blocked", moved };
 }
 

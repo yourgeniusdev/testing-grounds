@@ -179,6 +179,23 @@ test("explicit ramming can enter an enemy capital hex", () => {
   assert.equal(ram(state, "a", "b", [{ q: 1, r: 0 }]).success, true);
 });
 
+test("movement refreshes interception and stops after lethal overwatch", () => {
+  const state = createBattle({ id: "movement-reaction", round: 1, units: [
+    { id: "cap", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 1, maxRange: 3, damage: 5, accuracy: 100 }] },
+    { id: "squad", side: "right", kind: "squadron", position: { q: 3, r: 0 }, integrity: 5, interceptRange: 1, speed: 3 }
+  ] });
+  state.lifecycle = "Maneuver";
+  refreshInterception(state);
+  state.round = 1;
+  state.activeUnitId = "squad";
+  state.units[0].weapons[0].overwatch = true;
+  state.units[0].weapons[0].overwatchRound = 1;
+  const result = moveAtomic(state, "squad", [{ q: 2, r: 0 }, { q: 1, r: 0 }, { q: 0, r: 0 }], { });
+  assert.equal(result.moved, 1);
+  assert.equal(state.units.some(unit => unit.id === "squad"), false);
+  assert.equal(state.events.filter(event => event.action === "movement-step").length, 1);
+});
+
 test("overwatch arms, fires once per slot and target, and records deterministic damage", () => {
   const state = createBattle({ id: "aa", round: 1, units: [
     { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 100 }] },
