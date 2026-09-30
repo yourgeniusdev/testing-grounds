@@ -42,7 +42,15 @@
       <section class="battlefield-wrap">
         <div class="canvas-toolbar"><div><span class="live-indicator"></span><span id="modeLabel">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
         <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
-        <div id="tooltip" class="hex-tooltip" hidden></div>
+        <section id="battlefieldLegend" class="legend battlefield-legend" aria-label="Легенда поля боя">
+           <h3>ЛЕГЕНДА ПОЛЯ</h3>
+           <div><span class="legend-swatch terrain-nebula"></span><span><b>Туманность</b> — укрытие цели, −15 п.п. точности</span></div>
+           <div><span class="legend-swatch terrain-asteroid"></span><span><b>Астероид</b> — блокирующее препятствие для капшипов</span></div>
+           <div><span class="legend-swatch terrain-debris"></span><span><b>Обломки</b> — укрытие цели, −10 п.п. точности</span></div>
+           <div><span class="legend-swatch reachable"></span><span>Подсветка — допустимый или запланированный маршрут</span></div>
+           <div><span class="legend-swatch blocked"></span><span>Красная клетка — действие или маршрут недоступны</span></div>
+         </section>
+         <div id="tooltip" class="hex-tooltip" hidden></div>
         <div id="maneuverPopup" class="maneuver-popup" hidden>
           <div class="maneuver-popup-title"><span>План манёвра</span><span id="maneuverBadge">ГОТОВ</span></div>
           <div id="maneuverDetails" class="maneuver-details"></div>

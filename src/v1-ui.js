@@ -10,7 +10,7 @@ const store = createBattleStore({ persistence: createLocalPersistence("v1-combat
     { id: "right-squad", side: "right", kind: "squadron", name: "Raptor", initiative: 2, integrity: 6, unitHealth: 2, stack: 3, speed: 3, position: { q: 7, r: 3 } }
    ], contents: [
      { id: "asteroid-1", kind: "object", type: "asteroid", position: { q: 3, r: 1 } },
-     { id: "nebula-1", kind: "terrain", type: "nebula", position: { q: 3, r: 4 } }
+      { id: "nebula-1", kind: "terrain", type: "nebula", cover: "nebula", position: { q: 3, r: 4 } }
    ]
  } });
 

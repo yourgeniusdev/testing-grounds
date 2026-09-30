@@ -16,6 +16,18 @@ test("ships start visible and can be repositioned during deployment", async ({ p
   expect(moved).toEqual({ q: 1, r: 2 });
 });
 
+test("battlefield legend explains terrain, cover, and route states", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  const legend = page.locator("#battlefieldLegend");
+  await expect(legend).toBeVisible();
+  await expect(legend).toContainText("Туманность");
+  await expect(legend).toContainText("−15 п.п.");
+  await expect(legend).toContainText("Астероид");
+  await expect(legend).toContainText("Обломки");
+  await expect(legend).toContainText("маршрут недоступны");
+});
+
 test("battlefield canvas covers the visible central panel", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Перейти к бою" }).click();
