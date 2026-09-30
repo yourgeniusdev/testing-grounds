@@ -30,7 +30,7 @@ export function createBattleController({ document, store, renderer }) {
     } else progress(current);
   }));
   document.getElementById("resetButton").addEventListener("click", () => { Object.assign(view, { selectedUnitId: null, plannedPosition: null, selectedTargetId: null, selectedWeaponIndex: 0 }); store.reset(); });
-  document.getElementById("startBattleButton").addEventListener("click", () => { document.getElementById("menuScreen").hidden = true; document.getElementById("battleScreen").hidden = false; render(); });
+  document.getElementById("startBattleButton").addEventListener("click", () => { store.reset(); Object.assign(view, { selectedUnitId: null, plannedPosition: null, plannedRoute: [], plannedHeading: null, selectedTargetId: null, selectedWeaponIndex: 0 }); document.getElementById("menuScreen").hidden = true; document.getElementById("battleScreen").hidden = false; render(); });
   store.subscribe(render); render();
   return { view, render };
 }
