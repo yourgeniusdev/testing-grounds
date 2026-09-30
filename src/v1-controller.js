@@ -5,7 +5,7 @@ const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
 
 export function createBattleController({ document, store, renderer }) {
   const view = { selectedUnitId: null, plannedPosition: null, plannedRoute: [], plannedHeading: null, selectedTargetId: null, selectedWeaponIndex: 0 };
-  const render = () => renderer.render(store.getState(), view);
+  const render = () => { const state = store.getState(); if (state.lifecycle !== "Maneuver") { view.plannedPosition = null; view.plannedRoute = []; view.plannedHeading = null; } renderer.render(state, view); };
   const transact = command => store.transact(command);
   renderer.canvas.addEventListener("click", event => {
     const state = store.getState(); const rect = renderer.canvas.getBoundingClientRect(); const position = renderer.hexForPoint(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position));
@@ -16,7 +16,7 @@ export function createBattleController({ document, store, renderer }) {
   renderer.els.weapons.addEventListener("click", event => { const button = event.target.closest("[data-weapon-index]"); if (!button) return; view.selectedWeaponIndex = Number(button.dataset.weaponIndex); render(); });
   renderer.els.confirmMove.addEventListener("click", () => transact(current => { if (!view.plannedRoute.length || view.selectedUnitId !== current.activeUnitId) return false; const result = moveAtomic(current, view.selectedUnitId, view.plannedRoute, { heading: view.plannedHeading }); view.plannedPosition = null; view.plannedRoute = []; view.plannedHeading = null; return result; }));
   renderer.els.heading.addEventListener("click", event => { const button = event.target.closest("[data-heading]"); if (!button) return; view.plannedHeading = Number(button.dataset.heading); render(); });
-  renderer.els.cancelManeuver.addEventListener("click", () => { view.plannedPosition = null; view.plannedRoute = []; view.plannedHeading = null; render(); });
+  renderer.els.cancelManeuver.addEventListener("click", () => { view.plannedPosition = null; view.plannedRoute = []; const selected = store.getState().units.find(unit => unit.id === view.selectedUnitId); view.plannedHeading = selected?.kind === "capital" ? selected.heading : null; render(); });
   renderer.els.skipAttack.addEventListener("click", () => { view.selectedTargetId = null; view.selectedWeaponIndex = 0; transact(current => advanceActivation(current, "EndActivation")); });
   renderer.els.confirm.addEventListener("click", () => transact(current => confirmDeployment(current, current.lifecycle === "DeploymentLeft" ? "left" : "right")));
   renderer.els.wait.addEventListener("click", () => transact(current => decide(current, "wait")));
