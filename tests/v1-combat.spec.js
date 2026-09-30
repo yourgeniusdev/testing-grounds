@@ -51,7 +51,9 @@ test("browser shows planned multi-cell route and ordered event log", async ({ pa
   const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
   await page.mouse.click(box.x + destination.x, box.y + destination.y);
   await expect(page.locator("#maneuverDetails")).toContainText("Маршрут");
-  await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
+   await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
+   await expect(page.locator("#maneuverDetails")).toContainText("стоимость 2");
+   await expect(page.locator("#maneuverDetails")).toContainText("курс 1");
   await page.locator("#confirmMoveButton").click();
   await expect(page.locator("#combatLog [data-event-action='movement-step']").first()).toBeVisible();
 });
