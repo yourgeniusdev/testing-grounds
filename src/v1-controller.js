@@ -1,4 +1,4 @@
-import { advanceActivation, confirmDeployment, decide, deployUnit, moveAtomic, planMovement, progress, resolveAttack } from "./v1-domain.js";
+import { advanceActivation, confirmDeployment, decide, deployUnit, disengage, moveAtomic, planMovement, progress, ram, resolveAttack } from "./v1-domain.js";
 import { getAttackPreview, getWeaponSelection } from "./v1-preview.js";
 
 const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
@@ -17,6 +17,15 @@ export function createBattleController({ document, store, renderer }) {
   });
   renderer.els.weapons.addEventListener("click", event => { const button = event.target.closest("[data-weapon-index]"); if (!button) return; view.selectedWeaponIndex = Number(button.dataset.weaponIndex); render(); });
   renderer.els.confirmMove.addEventListener("click", () => transact(current => { if (!view.plannedRoute.length || view.selectedUnitId !== current.activeUnitId) return false; const result = moveAtomic(current, view.selectedUnitId, view.plannedRoute, { heading: view.plannedHeading }); clearRoute(); view.plannedHeading = null; return result; }));
+  renderer.els.disengage.addEventListener("click", () => transact(current => disengage(current, view.selectedUnitId, { random: () => 0 })));
+  renderer.els.ram.addEventListener("click", () => transact(current => {
+    const attacker = current.units.find(unit => unit.id === current.activeUnitId);
+    const target = current.units.find(unit => unit.id === view.selectedTargetId);
+    if (!attacker || !target || !view.plannedRoute.length) return false;
+    const result = ram(current, attacker, target, view.plannedRoute, { random: () => 0 });
+    view.selectedTargetId = null; clearRoute();
+    return result;
+  }));
   renderer.els.heading.addEventListener("click", event => { const button = event.target.closest("[data-heading]"); if (!button) return; view.plannedHeading = Number(button.dataset.heading); render(); });
   renderer.els.cancelManeuver.addEventListener("click", () => { clearRoute(); const selected = store.getState().units.find(unit => unit.id === view.selectedUnitId); view.plannedHeading = selected?.kind === "capital" ? selected.heading : null; render(); });
   renderer.els.skipAttack.addEventListener("click", () => { view.selectedTargetId = null; view.selectedWeaponIndex = 0; transact(current => advanceActivation(current, "EndActivation")); });
