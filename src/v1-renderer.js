@@ -1,4 +1,5 @@
 import { formatAttackPreview, getAttackPreview } from "./v1-preview.js";
+import { deploymentZone, movementDestinations } from "./v1-domain.js";
 
 function createHexLayout(width, height, bounds) {
   const padding = 18;
@@ -52,8 +53,12 @@ export function createBattleRenderer(document) {
     if (state.lifecycle === "Attack") els.mode.textContent = preview?.canAttack ? `ЗАЛП: ${formatAttackPreview(preview)}` : `АТАКА · ${formatAttackPreview(preview)}`;
     els.list.replaceChildren(...state.units.map(unit => { const item = document.createElement("div"); item.className = "mission-card"; const name = document.createElement("strong"); name.textContent = unit.name; const details = document.createElement("span"); details.textContent = `${unit.side} · ${unit.kind} · ${unit.integrity} HP`; item.append(name, details); return item; }));
     ctx.clearRect(0, 0, dimensions.width, dimensions.height);
-    for (let q = state.bounds.minCol; q <= state.bounds.maxCol; q += 1) for (let r = state.bounds.minRow; r <= state.bounds.maxRow; r += 1) { const p = pixelForHex({ q, r }, layout); ctx.strokeStyle = "#536174"; ctx.beginPath(); for (let i = 0; i < 6; i += 1) { const a = Math.PI / 180 * (60 * i - 30); ctx.lineTo(p.x + layout.size * Math.cos(a), p.y + layout.size * Math.sin(a)); } ctx.closePath(); ctx.stroke(); }
-    state.units.forEach(unit => { if (!unit.position) return; const p = pixelForHex(unit.position, layout); ctx.fillStyle = unit.side === "left" ? "#55b9ff" : "#ff6e7a"; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(5, layout.size * .4), 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#08111f"; ctx.textAlign = "center"; ctx.fillText(unit.name[0], p.x, p.y + 5); });
+     const selected = state.units.find(unit => unit.id === view.selectedUnitId);
+     const deploySide = state.lifecycle === "DeploymentLeft" ? "left" : state.lifecycle === "DeploymentRight" ? "right" : null;
+     const highlighted = deploySide ? deploymentZone(state, deploySide) : state.lifecycle === "Maneuver" && selected ? movementDestinations(state, selected.id) : [];
+     for (let q = state.bounds.minCol; q <= state.bounds.maxCol; q += 1) for (let r = state.bounds.minRow; r <= state.bounds.maxRow; r += 1) { const cell = { q, r }; const p = pixelForHex(cell, layout); if (highlighted.some(item => item.q === q && item.r === r)) { ctx.fillStyle = deploySide ? "rgba(85,185,255,.15)" : "rgba(255,214,92,.2)"; ctx.beginPath(); for (let i = 0; i < 6; i += 1) { const a = Math.PI / 180 * (60 * i - 30); ctx.lineTo(p.x + layout.size * Math.cos(a), p.y + layout.size * Math.sin(a)); } ctx.closePath(); ctx.fill(); } ctx.strokeStyle = "#536174"; ctx.beginPath(); for (let i = 0; i < 6; i += 1) { const a = Math.PI / 180 * (60 * i - 30); ctx.lineTo(p.x + layout.size * Math.cos(a), p.y + layout.size * Math.sin(a)); } ctx.closePath(); ctx.stroke(); }
+     state.contents.forEach(item => { if (!item.position) return; const p = pixelForHex(item.position, layout); ctx.fillStyle = item.kind === "object" ? "#7d8795" : item.kind === "terrain" ? "#5f8f68" : "#8f6b52"; ctx.fillRect(p.x - layout.size * .28, p.y - layout.size * .28, layout.size * .56, layout.size * .56); });
+     state.units.forEach(unit => { if (!unit.position) return; const p = pixelForHex(unit.position, layout); if (unit.id === view.selectedUnitId) { ctx.strokeStyle = "#ffe27a"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(8, layout.size * .52), 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; } ctx.fillStyle = unit.side === "left" ? "#55b9ff" : "#ff6e7a"; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(5, layout.size * .4), 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#08111f"; ctx.textAlign = "center"; ctx.fillText(unit.name[0], p.x, p.y + 5); });
     els.log.replaceChildren(...state.events.slice(-30).reverse().map(event => { const item = document.createElement("li"); item.textContent = event.action; return item; }));
   }
   return { canvas, els, hexForPoint: (x, y) => hexForPixel(x, y, layout), pointForHex: position => pixelForHex(position, layout), render };

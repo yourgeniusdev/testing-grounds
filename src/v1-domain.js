@@ -166,6 +166,18 @@ export function advanceActivation(state, stage) {
   state.lifecycle = stage; state.activationStage = stage; recordEvent(state, "activation-stage", { actorId: state.activeUnitId, after: stage }); return true;
 }
 
+export function movementDestinations(state, unitId) {
+  const unit = state.units.find(candidate => candidate.id === unitId);
+  if (!unit?.position) return [];
+  const range = Math.max(1, unit.speed ?? 1);
+  const cells = [];
+  for (let q = -range; q <= range; q += 1) for (let r = -range; r <= range; r += 1) {
+    const position = { q: unit.position.q + q, r: unit.position.r + r };
+    if ((Math.abs(q) + Math.abs(r) + Math.abs(q + r)) / 2 <= range && canEnter(state, unit, position, { final: true })) cells.push(position);
+  }
+  return cells;
+}
+
 export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");

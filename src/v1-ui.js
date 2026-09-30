@@ -8,8 +8,11 @@ const store = createBattleStore({ persistence: createLocalPersistence("v1-combat
     { id: "left-squad", side: "left", kind: "squadron", name: "Lance", initiative: 4, integrity: 6, unitHealth: 2, stack: 3, speed: 3, position: { q: 0, r: 3 } },
     { id: "right-cap", side: "right", kind: "capital", name: "Bastion", initiative: 3, integrity: 12, armor: 3, shield: 2, mass: 3, speed: 2, position: { q: 7, r: 1 }, heading: 5, weapons: [{ id: "battery", accuracy: 100, damage: 2, shots: 1, maxRange: 5 }] },
     { id: "right-squad", side: "right", kind: "squadron", name: "Raptor", initiative: 2, integrity: 6, unitHealth: 2, stack: 3, speed: 3, position: { q: 7, r: 3 } }
-  ]
-} });
+   ], contents: [
+     { id: "asteroid-1", kind: "object", type: "asteroid", position: { q: 3, r: 1 } },
+     { id: "nebula-1", kind: "terrain", type: "nebula", position: { q: 3, r: 4 } }
+   ]
+ } });
 
 const renderer = createBattleRenderer(document);
 const controller = createBattleController({ document, store, renderer });
