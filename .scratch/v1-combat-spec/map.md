@@ -69,7 +69,45 @@ Label: wayfinder:map
 - UI разделён на `src/v1-renderer.js` и `src/v1-controller.js`; canvas адаптируется к центральной панели, а преобразование координат отрисовки и ввода использует единый layout.
 - Флот получает видимые стартовые позиции в зонах расстановки; до подтверждения корабль можно выбрать и переместить в другой допустимый гекс.
 - Typecheck, lint, 17 доменных/unit-тестов и 3 браузерных Playwright-теста проходят.
-- Следующий этап: стартовые препятствия и их визуализация, подсветка зон/выбора/допустимых гексов и маршрута, управление курсом, развитие панелей действий и ручная проверка полного боевого цикла.
+- Стартовые препятствия добавлены в `src/v1-ui.js`: asteroid как блокирующий object и nebula как terrain/cover; `src/v1-renderer.js` визуализирует содержимое поля.
+- Добавлена базовая подсветка зон расстановки, допустимых клеток движения и выбранного юнита в `src/v1-renderer.js`.
+- Добавлено детерминированное планирование многоклеточного маршрута `planMovement` в `src/v1-domain.js`; контроллер передаёт полный маршрут в атомарное `moveAtomic`.
+- Добавлена доменная команда `changeHeading` с событием `heading-change`, но UI heading picker пока не подключён.
+- Текущее покрытие: 19 доменных/unit-тестов, typecheck и lint проходят; браузерные тесты маршрута и курса ещё не добавлены.
+
+## Implementation checklist
+
+### Completed
+
+- [x] Нормативные v1-спецификации и индекс `docs/specs/v1/`.
+- [x] Доменное ядро: lifecycle, deployment, movement, interception/disengagement, ramming, attacks, line of fire, cover, squadrons, AA-overwatch, damage/destruction/victory и event log.
+- [x] Store/persistence и подключение канонического ядра к UI.
+- [x] Базовый hot-seat UI: deployment, wait, maneuver, attack, skip attack и reset.
+- [x] Salvo preview и Playwright-проверки canvas, HiDPI, deployment, weapon selection и salvo confirmation.
+- [x] Стартовые позиции флота.
+- [x] Стартовые asteroid/nebula и базовая визуализация содержимого поля.
+- [x] Подсветка deployment zones, legal movement cells и selected unit.
+- [x] Детерминированное многоклеточное планирование маршрута и атомарное подтверждение движения.
+- [x] Доменная смена курса капитального корабля с журналированием события.
+
+### In progress
+
+- [ ] Подключить heading picker к контроллеру и подтверждению Maneuver.
+- [ ] Отображать текущий курс и выбранный курс в UI.
+- [ ] Рисовать planned destination, маршрут, направления и номера шагов.
+- [ ] Очищать маршрут при смене юнита, фазы или отмене.
+- [ ] Показывать причины недоступного маршрута и ограничения interception/ramming.
+- [ ] Различать asteroid, nebula и debris в renderer и отображать cover/legend.
+
+### Next implementation order
+
+1. UI управления курсом и его domain/browser acceptance-тест.
+2. Визуализация planned route и destination.
+3. Расширение action panels: маршрут, стоимость, курс, interception/ramming, weapons и AA-overwatch.
+4. Browser acceptance: многоклеточный маршрут, препятствие, курс, финальная позиция и event log.
+5. Ручная проверка полного UI-цикла до `Finished`.
+6. Преобразование оставшейся acceptance-матрицы в исполняемые сценарии.
+7. Повторный code review и финальный коммит.
 
 ## Not yet specified
 
