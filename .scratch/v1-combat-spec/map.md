@@ -96,7 +96,7 @@ Label: wayfinder:map
 
 - [x] Подключить heading picker к контроллеру и подтверждению Maneuver.
 - [x] Отображать текущий курс и выбранный курс в UI.
-- [ ] Рисовать planned destination, маршрут, направления и номера шагов.
+- [x] Рисовать planned destination, маршрут, направления и номера шагов.
 - [ ] Очищать маршрут при смене юнита, фазы или отмене.
 - [ ] Показывать причины недоступного маршрута и ограничения interception/ramming.
 - [ ] Различать asteroid, nebula и debris в renderer и отображать cover/legend.
