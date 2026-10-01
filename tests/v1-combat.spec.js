@@ -101,6 +101,60 @@ test("browser blocks routes through obstacles and records final position", async
   expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 0, r: 2 });
 });
 
+test("browser completes a lethal salvo and reaches Finished", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  await page.evaluate(async () => {
+    const { store } = await import("/src/v1-ui.js");
+    const state = store.getState();
+    store.replace({
+      ...state,
+      units: state.units.filter(unit => unit.id === "left-cap" || unit.id === "right-cap").map(unit => unit.id === "left-cap"
+        ? { ...unit, position: { q: 1, r: 1 }, heading: 2 }
+        : { ...unit, position: { q: 6, r: 1 }, shield: 0, armor: 0, integrity: 2 }),
+      contents: []
+    });
+  });
+  await page.getByRole("button", { name: "Завершить расстановку" }).click();
+  await page.getByRole("button", { name: "Завершить расстановку" }).click();
+  await page.getByRole("button", { name: "Продолжить" }).click();
+  await page.getByRole("button", { name: "Продолжить" }).click();
+  await page.getByRole("button", { name: "Продолжить" }).click();
+  const canvas = page.locator("#battlefield");
+  const box = await canvas.boundingBox();
+  const target = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 6, r: 1 }));
+  await page.mouse.click(box.x + target.x, box.y + target.y);
+  await page.getByRole("button", { name: "battery" }).click();
+  await page.getByRole("button", { name: "Подтвердить залп" }).click();
+  await expect(page.locator("#stageLabel")).toHaveText("Finished");
+  await expect(page.locator("#modeLabel")).toHaveText("ПОБЕДА: left");
+  const result = await page.evaluate(async () => {
+    const state = (await import("/src/v1-ui.js")).store.getState();
+    return {
+      units: state.units.map(unit => unit.id),
+      debris: state.contents.some(item => item.kind === "debris" && item.position.q === 6 && item.position.r === 1),
+      events: state.events.slice(-4).map(event => ({ action: event.action, after: event.after }))
+    };
+  });
+  expect(result).toEqual({
+    units: ["left-cap"],
+    debris: true,
+    events: [
+      { action: "attack-shot", after: undefined },
+      { action: "damage-packet", after: { shield: 0, armor: 0, integrity: 0 } },
+      { action: "unit-destroyed", after: { debris: true } },
+      { action: "victory", after: { winner: "left" } }
+    ]
+  });
+  const continueButton = page.getByRole("button", { name: "Продолжить" });
+  await expect(continueButton).toBeDisabled();
+  const eventCount = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.length);
+  await continueButton.dispatchEvent("click");
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.length)).toBe(eventCount);
+});
+
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());

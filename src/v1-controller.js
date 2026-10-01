@@ -39,7 +39,8 @@ export function createBattleController({ document, store, renderer }) {
       if (attacker && target && available && getAttackPreview(current, attacker.id, target.id, view.selectedWeaponIndex)?.canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
       if (current.lifecycle !== "Finished") advanceActivation(current, "EndActivation");
       view.selectedTargetId = null; view.selectedWeaponIndex = 0;
-    } else progress(current);
+    } else if (current.lifecycle === "WaitDecision") decide(current, "continue");
+    else progress(current);
   }));
   document.getElementById("resetButton").addEventListener("click", () => { clearSelection(); store.reset(); });
   document.getElementById("startBattleButton").addEventListener("click", () => { clearSelection(); store.reset(); document.getElementById("menuScreen").hidden = true; document.getElementById("battleScreen").hidden = false; render(); });

@@ -41,7 +41,7 @@ export function createBattleRenderer(document) {
     els.round.textContent = state.round; els.stage.textContent = state.lifecycle; els.mode.textContent = state.winner ? `ПОБЕДА: ${state.winner}` : "КАНОНИЧЕСКИЙ V1";
     const deploying = state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight";
     els.confirm.hidden = !deploying; els.confirmMove.hidden = state.lifecycle !== "Maneuver"; els.skipAttack.hidden = state.lifecycle !== "Attack";
-    els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["SystemActions", "Maneuver", "Attack"].includes(state.lifecycle);
+    els.wait.disabled = state.lifecycle !== "WaitDecision"; els.end.disabled = !["WaitDecision", "SystemActions", "Maneuver", "Attack"].includes(state.lifecycle);
     els.end.textContent = state.lifecycle === "Attack" ? "Подтвердить залп" : "Продолжить";
     const attacker = state.units.find(unit => unit.id === state.activeUnitId);
     const slots = attacker?.weapons ?? attacker?.weaponSlots ?? [];
