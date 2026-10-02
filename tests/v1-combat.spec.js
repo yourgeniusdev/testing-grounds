@@ -142,7 +142,7 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
     units: ["left-cap"],
     debris: true,
     events: [
-      { action: "attack-shot", after: undefined },
+      { action: "attack-shot", after: { hitId: "right-cap" } },
       { action: "damage-packet", after: { shield: 0, armor: 0, integrity: 0 } },
       { action: "unit-destroyed", after: { debris: true } },
       { action: "victory", after: { winner: "left" } }

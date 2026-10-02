@@ -20,6 +20,6 @@ export function formatAttackPreview(preview) {
   if (!preview.canAttack) return "Цель недоступна для этого оружия";
   const parts = [`${preview.shots} выстр.`, `${preview.accuracy}% точность`, `${preview.damage} урон/попадание`, `${preview.totalDamage} макс. урон`];
   if (preview.cover) parts.push(`укрытие −${preview.cover}%`);
-  if (preview.blockerId) parts.push(`перекрытие −${preview.blockerCover}%`);
+  if (preview.blockerId) parts.push(`${preview.friendlyFire ? "friendly fire" : "перекрытие"} −${preview.blockerCover}%`);
   return parts.join(" · ");
 }

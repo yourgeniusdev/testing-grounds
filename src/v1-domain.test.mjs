@@ -16,7 +16,8 @@ import {
   resolveAttack,
   resolveOverwatch,
   planMovement,
-  changeHeading
+  changeHeading,
+  supercoverLine
 } from "./v1-domain.js";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
@@ -244,6 +245,99 @@ test("attack preview applies endpoint cover and weapon range", () => {
   const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
   assert.equal(result.canAttack, true);
   assert.equal(result.accuracy, 65);
+});
+
+test("supercover includes both hexes touched along a shared boundary", () => {
+  assert.deepEqual(supercoverLine({ q: 0, r: 0 }, { q: 2, r: -1 }), [
+    { q: 0, r: 0 },
+    { q: 1, r: 0 },
+    { q: 1, r: -1 },
+    { q: 2, r: -1 }
+  ]);
+});
+
+test("friendly and enemy blockers use the same deterministic hit distribution", () => {
+  for (const side of ["left", "right"]) {
+    const state = createBattle({ units: [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10 },
+      { id: "blocker", side, kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 10 },
+      { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+    ] });
+    const preview = previewAttack(state, "a", "b", { accuracy: 80, damage: 3, arc: "360", maxRange: 3 });
+    assert.deepEqual({ hitBlocker: preview.hitBlocker, hitMain: preview.hitMain, miss: preview.miss, friendlyFire: preview.friendlyFire }, { hitBlocker: 50, hitMain: 30, miss: 20, friendlyFire: side === "left" });
+    const result = resolveAttack(state, "a", "b", { accuracy: 80, damage: 3, arc: "360", maxRange: 3 }, { random: () => 0.49 });
+    assert.equal(result.damage, 3);
+    assert.equal(state.units.find(unit => unit.id === "blocker").integrity, 7);
+    assert.equal(state.units.find(unit => unit.id === "b").integrity, 10);
+    assert.equal(state.events.at(-1).cause, side === "left" ? "friendly-fire" : "attack");
+  }
+});
+
+test("supercover finds a blocker in either boundary hex and ignores squadrons", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } },
+    { id: "squad", side: "left", kind: "squadron", size: "large", position: { q: 1, r: -1 }, integrity: 5 },
+    { id: "blocker", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 5 },
+    { id: "b", side: "right", kind: "capital", position: { q: 2, r: -1 }, integrity: 5 }
+  ] });
+  assert.equal(previewAttack(state, "a", "b", { arc: "360" }).blockerId, "blocker");
+});
+
+test("nearest blocker and boundary tie-break are independent of insertion order", () => {
+  for (const blockers of [
+    [
+      { id: "z-boundary", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 5 },
+      { id: "a-boundary", side: "left", kind: "capital", size: "medium", position: { q: 1, r: -1 }, integrity: 5 },
+      { id: "near", side: "left", kind: "capital", size: "medium", position: { q: 2, r: -1 }, integrity: 5 }
+    ],
+    [
+      { id: "near", side: "left", kind: "capital", size: "medium", position: { q: 2, r: -1 }, integrity: 5 },
+      { id: "a-boundary", side: "left", kind: "capital", size: "medium", position: { q: 1, r: -1 }, integrity: 5 },
+      { id: "z-boundary", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 5 }
+    ]
+  ]) {
+    const state = createBattle({ units: [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } },
+      ...blockers,
+      { id: "b", side: "right", kind: "capital", position: { q: 4, r: -2 } }
+    ] });
+    assert.equal(previewAttack(state, "a", "b", { arc: "360", maxRange: 5 }).blockerId, "a-boundary");
+  }
+});
+
+test("small objects do not block fire", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } },
+    { id: "blocker", side: "left", kind: "capital", size: "medium", position: { q: 2, r: 0 }, integrity: 5 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
+  ], contents: [{ id: "small", kind: "object", size: "small", position: { q: 1, r: 0 }, integrity: 5 }] });
+  assert.equal(previewAttack(state, "a", "b", { arc: "360", maxRange: 3 }).blockerId, "blocker");
+});
+
+test("a destroyed blocker is removed before the next salvo shot", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10 },
+    { id: "blocker", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 2 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ] });
+  const rolls = [0.1, 0.6];
+  resolveAttack(state, "a", "b", { accuracy: 80, shots: 2, damage: 2, arc: "360", maxRange: 3 }, { random: () => rolls.shift() });
+  assert.equal(state.units.some(unit => unit.id === "blocker"), false);
+  assert.equal(state.units.find(unit => unit.id === "b").integrity, 8);
+  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["attack-shot", "damage-packet", "unit-destroyed", "attack-shot", "damage-packet"]);
+});
+
+test("a large battlefield object fully obscures the target but remains hittable", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ], contents: [{ id: "station", side: "neutral", kind: "object", size: "large", position: { q: 1, r: 0 }, integrity: 5 }] });
+  const preview = previewAttack(state, "a", "b", { accuracy: 80, damage: 2, arc: "360", maxRange: 3 });
+  assert.equal(preview.hitMain, 0);
+  assert.equal(preview.canAttack, true);
+  resolveAttack(state, "a", "b", { accuracy: 80, damage: 2, arc: "360", maxRange: 3 }, { random: () => 0.79 });
+  assert.equal(state.contents.find(item => item.id === "station").integrity, 3);
+  assert.equal(state.units.find(unit => unit.id === "b").integrity, 10);
 });
 
 test("an attack outside the weapon line of fire is rejected without rolling or damage", () => {

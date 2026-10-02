@@ -300,10 +300,35 @@ export function destroyUnit(state, target, { causeEventId = null } = {}) {
   return { destroyed: true, unitId: unit.id, winner: state.winner };
 }
 
-function lineCells(a, b) {
-  const n = Math.max(1, distance(a, b)), cells = [];
-  for (let i = 0; i <= n; i += 1) cells.push({ q: Math.round(a.q + (b.q - a.q) * i / n), r: Math.round(a.r + (b.r - a.r) * i / n) });
-  return cells.filter((cell, index) => index === 0 || !samePosition(cell, cells[index - 1]));
+function roundCube({ x, y, z }) {
+  let rx = Math.round(x), ry = Math.round(y), rz = Math.round(z);
+  const dx = Math.abs(rx - x), dy = Math.abs(ry - y), dz = Math.abs(rz - z);
+  if (dx > dy && dx > dz) rx = -ry - rz;
+  else if (dy > dz) ry = -rx - rz;
+  else rz = -rx - ry;
+  return { q: rx || 0, r: rz || 0 };
+}
+
+function drawHexLine(a, b, nudge) {
+  const steps = distance(a, b);
+  if (!steps) return [{ ...a }];
+  const from = { x: a.q + nudge, z: a.r + nudge, y: -a.q - a.r - nudge * 2 };
+  const to = { x: b.q + nudge, z: b.r + nudge, y: -b.q - b.r - nudge * 2 };
+  return Array.from({ length: steps + 1 }, (_, index) => {
+    const t = index / steps;
+    return roundCube({ x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t, z: from.z + (to.z - from.z) * t });
+  });
+}
+
+export function supercoverLine(a, b) {
+  const cells = [...drawHexLine(a, b, 1e-6), ...drawHexLine(a, b, -1e-6)];
+  const unique = [...new Map(cells.map(cell => [`${cell.q},${cell.r}`, cell])).values()];
+  const delta = { q: b.q - a.q, r: b.r - a.r };
+  return unique.sort((left, right) => {
+    const leftProgress = (left.q - a.q) * delta.q + (left.r - a.r) * delta.r;
+    const rightProgress = (right.q - a.q) * delta.q + (right.r - a.r) * delta.r;
+    return leftProgress - rightProgress || left.q - right.q || left.r - right.r;
+  });
 }
 
 const hexDirections = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
@@ -331,6 +356,13 @@ function arcAllows(source, victim, weapon) {
   return false;
 }
 
+function attackBlocker(state, source, victim) {
+  if (!source?.position || !victim?.position) return null;
+  const candidates = [...state.units, ...state.contents].filter(item => item !== source && item !== victim && item.position && item.kind !== "squadron" && !(item.kind === "object" && item.size === "small") && ["small", "medium", "large"].includes(item.size));
+  const line = supercoverLine(source.position, victim.position).slice(1, -1);
+  return candidates.filter(item => line.some(position => samePosition(item.position, position))).sort((left, right) => distance(source.position, left.position) - distance(source.position, right.position) || left.id.localeCompare(right.id))[0] ?? null;
+}
+
 export function previewAttack(state, attacker, target, weapon = {}) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
@@ -339,19 +371,20 @@ export function previewAttack(state, attacker, target, weapon = {}) {
   const damage = weapon.damage ?? 0;
   const terrain = victim?.position && state.contents.find(item => samePosition(item.position, victim.position) && item.cover);
   const coverPenalty = terrain?.cover === "nebula" ? 15 : terrain?.cover === "debris" ? 10 : terrain?.cover === "asteroid" ? 20 : 0;
-  const cells = source?.position && victim?.position ? lineCells(source.position, victim.position) : [];
-  const blocker = cells.slice(1, -1).map(position => state.units.find(unit => unit.position && samePosition(unit.position, position) && unit !== source && unit !== victim && unit.kind !== "squadron" && unit.size)).find(Boolean);
+  const blocker = attackBlocker(state, source, victim);
   const blockerCover = blocker ? ({ small: 25, medium: 50, large: 100 }[blocker.size] ?? 0) : 0;
   const effectiveAccuracy = Math.max(0, accuracy - coverPenalty);
+  const hitBlocker = Math.min(blockerCover, 100);
   const hitMain = Math.max(0, effectiveAccuracy - blockerCover);
-  return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && state.attackSpentBy !== source.id && arcAllows(source, victim, weapon)) };
+  const miss = Math.max(0, 100 - effectiveAccuracy);
+  return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, effectiveAccuracy, hitBlocker, hitMain, miss, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, friendlyFire: Boolean(blocker && blocker.side === source?.side), canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && state.attackSpentBy !== source.id && arcAllows(source, victim, weapon)) };
 }
 
-function applyObjectDamage(state, object, amount, sourceId) {
+function applyObjectDamage(state, object, amount, sourceId, cause = "ramming") {
   const before = object.integrity ?? 0;
   object.integrity = Math.max(0, before - amount);
   const destroyed = object.integrity === 0;
-  recordEvent(state, "damage-packet", { actorId: sourceId, subjectIds: [object.id], cause: "ramming", before: { integrity: before }, after: { integrity: object.integrity }, layers: [{ layer: "integrity", amount: before - object.integrity, remaining: Math.max(0, amount - before) }] });
+  recordEvent(state, "damage-packet", { actorId: sourceId, subjectIds: [object.id], cause, before: { integrity: before }, after: { integrity: object.integrity }, layers: [{ layer: "integrity", amount: before - object.integrity, remaining: Math.max(0, amount - before) }] });
   if (destroyed) {
     state.contents = state.contents.filter(item => item !== object);
     state.contents.push({ id: `debris-${object.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", position: { ...object.position } });
@@ -382,9 +415,20 @@ export function resolveAttack(state, attacker, target, weapon = {}, { random = M
   if (!preview.canAttack || state.lifecycle === "Finished" || state.attackSpentBy === preview.attackerId) return { ...preview, hits: 0, damage: 0 };
   let hits = 0, damage = 0;
   for (let shot = 0; shot < preview.shots; shot += 1) {
+    const current = previewAttack(state, preview.attackerId, preview.targetId, weapon);
+    if (!current.canAttack) break;
     const roll = random() * 100;
-    recordEvent(state, "attack-shot", { actorId: preview.attackerId, subjectIds: [preview.targetId], random: { roll, accuracy: preview.accuracy } });
-    if (roll < preview.accuracy) { const result = applyDamagePacket(state, preview.targetId, { amount: preview.damage, sourceId: preview.attackerId, cause: "attack" }); hits += 1; damage += result.amount; if (result.destroyed) break; }
+    const blockerHit = Boolean(current.blockerId && roll < current.hitBlocker);
+    const mainHit = !blockerHit && roll < current.hitBlocker + current.hitMain;
+    const hitId = blockerHit ? current.blockerId : mainHit ? current.targetId : null;
+    recordEvent(state, "attack-shot", { actorId: current.attackerId, subjectIds: [current.targetId], random: { roll, hitBlocker: current.hitBlocker, hitMain: current.hitMain, miss: current.miss }, after: { hitId } });
+    if (!hitId) continue;
+    const unit = state.units.find(candidate => candidate.id === hitId);
+    const object = state.contents.find(candidate => candidate.id === hitId);
+    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, cause: blockerHit && current.friendlyFire ? "friendly-fire" : "attack" }) : applyObjectDamage(state, object, current.damage, current.attackerId, blockerHit && current.friendlyFire ? "friendly-fire" : "attack");
+    hits += 1;
+    damage += result.amount;
+    if (mainHit && result.destroyed) break;
   }
   return { ...preview, hits, damage, destroyed: !state.units.some(unit => unit.id === preview.targetId) };
 }
