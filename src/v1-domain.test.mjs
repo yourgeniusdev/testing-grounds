@@ -181,7 +181,7 @@ test("explicit ramming can enter an enemy capital hex", () => {
 
 test("movement refreshes interception and stops after lethal overwatch", () => {
   const state = createBattle({ id: "movement-reaction", round: 1, units: [
-    { id: "cap", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 1, maxRange: 3, damage: 5, accuracy: 100 }] },
+    { id: "cap", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 1, maxRange: 3, damage: 5, accuracy: 100, overwatchEligible: true }] },
     { id: "squad", side: "right", kind: "squadron", position: { q: 3, r: 0 }, integrity: 5, interceptRange: 1, speed: 3 }
   ] });
   state.lifecycle = "Maneuver";
@@ -198,7 +198,7 @@ test("movement refreshes interception and stops after lethal overwatch", () => {
 
 test("overwatch arms, fires once per slot and target, and records deterministic damage", () => {
   const state = createBattle({ id: "aa", round: 1, units: [
-    { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 100 }] },
+    { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 100, overwatchEligible: true }] },
     { id: "squad", side: "right", kind: "squadron", position: { q: 2, r: 0 }, integrity: 5 }
   ] });
   state.lifecycle = "EndActivation"; state.activeUnitId = "cap"; progress(state);

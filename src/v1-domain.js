@@ -47,6 +47,11 @@ export function disengage(state, unitId, { random = Math.random } = {}) {
   const success = random() * 100 < chance;
   if (success) { unit.engagedWith = []; unit.disengagedUntilRound = state.round; enemies.forEach(enemy => { enemy.engagedWith = (enemy.engagedWith ?? []).filter(id => id !== unit.id); }); }
   recordEvent(state, "disengage", { actorId: unitId, chance, success });
+  if (!success && state.lifecycle === "Maneuver" && state.activeUnitId === unitId) {
+    state.lifecycle = "Attack";
+    state.activationStage = "Attack";
+    recordEvent(state, "activation-stage", { actorId: unitId, after: "Attack" });
+  }
   return { success, chance, cost: enemies.length };
 }
 
@@ -85,7 +90,7 @@ function weaponSlots(unit) {
 function slotCanOverwatch(state, owner, slot, target) {
   const weapon = slot.weapon ?? slot;
   return owner && target && owner.side !== target.side && target.kind === "squadron" &&
-    (slot.destroyed !== true) && (slot.ready !== false) && (slot.overwatch !== false) &&
+    (slot.destroyed !== true) && (slot.ready !== false) && slot.overwatch === true &&
     (slot.ammo ?? weapon.ammo ?? 1) > 0 && arcAllows(owner, target, weapon) &&
     previewAttack(state, owner, target, weapon).canAttack;
 }
@@ -96,7 +101,7 @@ export function armOverwatch(state, unitId = state.activeUnitId) {
   const armed = [];
   weaponSlots(owner).forEach((slot, index) => {
     const weapon = slot.weapon ?? slot;
-    if ((slot.ready !== false) && (slot.overwatch !== false) && (slot.ammo ?? weapon.ammo ?? 1) > 0) {
+    if ((slot.ready !== false) && slot.overwatchEligible === true && (slot.ammo ?? weapon.ammo ?? 1) > 0) {
       slot.overwatch = true;
       slot.overwatchRound = state.round;
       slot.overwatchTargets = slot.overwatchTargets ?? [];
