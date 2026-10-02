@@ -7,11 +7,17 @@ const sides = ["left", "right"];
 
 export function createBattle({ id = "battle-1", units = [], bounds = null, contents = [] } = {}) {
   const normalized = units.map(unit => ({ ...unit, side: unit.side ?? unit.sideId, position: unit.position ? { ...unit.position } : null, hasActivated: false, hasWaited: false }));
-  return {
+  const state = {
     id, units: normalized, contents: contents.map(item => ({ ...item, position: { ...item.position } })), bounds,
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
     activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0
   };
+  if (bounds) for (const side of sides) {
+    const required = normalized.filter(unit => unit.side === side).length;
+    const available = deploymentZone(state, side).filter(position => !state.contents.some(item => samePosition(item.position, position))).length;
+    if (available < required) throw new RangeError(`Insufficient ${side} deployment capacity`);
+  }
+  return state;
 }
 
 export function recordEvent(state, action, data = {}) {
@@ -63,22 +69,29 @@ export function deploymentZone(state, side) {
   if (!state.bounds) return [];
   const edge = side === "left" ? state.bounds.minCol : state.bounds.maxCol;
   const columns = side === "left" ? [edge, edge + 1] : [edge, edge - 1];
-  return columns.flatMap(col => Array.from({ length: state.bounds.maxRow - state.bounds.minRow + 1 }, (_, i) => ({ q: col, r: state.bounds.minRow + i })));
+  return columns.flatMap(col => Array.from({ length: state.bounds.maxRow - state.bounds.minRow + 1 }, (_, i) => ({ q: col, r: state.bounds.minRow + i })))
+    .filter(position => withinBounds(state.bounds, position));
+}
+
+function validDeployment(state, unit, position, heading) {
+  return deploymentZone(state, unit.side).some(cell => samePosition(cell, position)) &&
+    !unitAt(state, position, unit.id) && !state.contents.some(item => samePosition(item.position, position)) &&
+    (unit.kind === "capital" ? Number.isInteger(heading) && heading >= 0 && heading <= 5 : heading === null || heading === undefined);
 }
 
 export function deployUnit(state, unitId, position, heading = null) {
   const side = sideForLifecycle(state.lifecycle), unit = state.units.find(candidate => candidate.id === unitId);
-  if (!side || !unit || unit.side !== side || state.deployment[side] || unitAt(state, position, unitId) || state.contents.some(item => samePosition(item.position, position)) || !deploymentZone(state, side).some(cell => samePosition(cell, position))) return false;
+  if (!side || !unit || unit.side !== side || state.deployment[side] || !validDeployment(state, unit, position, heading)) return false;
   unit.position = { ...position };
-  if (heading !== null && unit.kind === "capital") unit.heading = heading;
-  recordEvent(state, "deployment-place", { actorId: unitId, subjectIds: [unitId], position: { ...position } });
+  if (unit.kind === "capital") unit.heading = heading;
+  recordEvent(state, "deployment-place", { actorId: unitId, subjectIds: [unitId], position: { ...position }, heading: unit.heading ?? null });
   return true;
 }
 
 export function confirmDeployment(state, side) {
   if (side !== sideForLifecycle(state.lifecycle) || state.deployment[side]) return false;
   const fleet = state.units.filter(unit => unit.side === side);
-  if (fleet.some(unit => !unit.position || !deploymentZone(state, side).some(cell => samePosition(cell, unit.position)))) return false;
+  if (fleet.some(unit => !unit.position || !validDeployment(state, unit, unit.position, unit.heading))) return false;
   state.deployment[side] = true;
   recordEvent(state, "deployment-confirm", { actorId: side, subjectIds: fleet.map(unit => unit.id) });
   state.lifecycle = side === "left" ? "DeploymentRight" : "RoundStart";
@@ -224,19 +237,18 @@ export function changeHeading(state, unitId, heading) {
 export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");
-   if (object || (occupant && occupant.side !== unit.side && !(ramming && unit.kind === "capital" && occupant.kind === "capital")) || (occupant && final && !ramming)) return false;
-    if (occupant && unit.kind === "capital" && !ramming) return false;
-   if (occupant && unit.kind === "squadron" && occupant.kind === "capital") return false;
+  if (occupant) return ramming && unit.kind === "capital" && occupant.kind === "capital" && occupant.side !== unit.side;
+  if (object) return unit.kind === "squadron" && !final;
   return true;
 }
 
 export function moveAtomic(state, unitId, steps, { ramming = false, heading = null } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
+  if (!unit?.position || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   let moved = 0;
   for (const position of steps) {
-    if (!canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break;
+    if (distance(unit.position, position) !== 1 || !canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break;
     unit.position = { ...position };
     moved += 1;
     const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } });

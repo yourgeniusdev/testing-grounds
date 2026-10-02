@@ -55,6 +55,29 @@ test("deployment rejects occupied objects and duplicate hexes", () => {
   assert.equal(deployUnit(state, "r-cap", { q: 0, r: 1 }, 0), false);
 });
 
+test("deployment enforces zone, heading, phase, and complete-fleet boundaries", () => {
+  const fleet = [...units, { id: "l-squad", side: "left", kind: "squadron", integrity: 3 }];
+  const state = createBattle({ bounds, units: fleet });
+  assert.equal(deployUnit(state, "r-cap", { q: 3, r: 1 }, 5), false);
+  assert.equal(deployUnit(state, "l-cap", { q: 2, r: 0 }, 0), false);
+  for (const heading of [-1, 1.5, 6]) assert.equal(deployUnit(state, "l-cap", { q: 0, r: 0 }, heading), false);
+  assert.equal(deployUnit(state, "l-cap", { q: 0, r: 0 }, 0), true);
+  assert.equal(deployUnit(state, "l-squad", { q: 1, r: 0 }, 2), false);
+  assert.equal(confirmDeployment(state, "left"), false);
+  assert.equal(deployUnit(state, "l-squad", { q: 1, r: 0 }), true);
+  assert.equal(confirmDeployment(state, "left"), true);
+  const snapshot = structuredClone(state.units.find(unit => unit.id === "l-cap"));
+  const eventCount = state.events.length;
+  assert.equal(deployUnit(state, "l-cap", { q: 0, r: 1 }, 3), false);
+  assert.deepEqual(state.units.find(unit => unit.id === "l-cap"), snapshot);
+  assert.equal(state.events.length, eventCount);
+});
+
+test("battle creation rejects insufficient free deployment capacity", () => {
+  const crowded = [0, 1, 2, 3].map((r, index) => ({ id: `block-${index}`, kind: "terrain", position: { q: index < 2 ? 0 : 1, r: index % 2 } }));
+  assert.throws(() => createBattle({ bounds, units, contents: crowded }), /deployment capacity/);
+});
+
 test("wait moves unit once, then activation progresses through stages", () => {
   const state = deployedBattle();
   assert.equal(decide(state, "wait"), true);
@@ -78,6 +101,29 @@ test("atomic movement enforces active maneuver ownership", () => {
   assert.equal(result.status, "blocked");
   assert.equal(result.moved, 2);
   assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 2, r: 0 });
+});
+
+test("movement collision boundaries reject occupied cells and teleports", () => {
+  const state = deployedBattle();
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "l-cap";
+  const events = state.events.length;
+  assert.deepEqual(moveAtomic(state, "l-cap", [{ q: 2, r: 0 }]), { status: "blocked", moved: 0 });
+  assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 0, r: 0 });
+  assert.equal(state.events.length, events);
+  state.units.push({ id: "friendly", side: "left", kind: "squadron", position: { q: 1, r: 0 }, integrity: 1 });
+  assert.deepEqual(moveAtomic(state, "l-cap", [{ q: 1, r: 0 }]), { status: "blocked", moved: 0 });
+});
+
+test("squadrons may pass through objects but may not stop on them", () => {
+  const state = deployedBattle();
+  state.units.push({ id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 1 }, integrity: 2 });
+  state.contents.push({ id: "rock", kind: "object", position: { q: 1, r: 1 } });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 1, r: 1 }]), { status: "blocked", moved: 0 });
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 1, r: 1 }, { q: 2, r: 1 }]), { status: "moved", moved: 2 });
+  assert.deepEqual(state.units.find(unit => unit.id === "fighter").position, { q: 2, r: 1 });
 });
 
 test("movement planning reports blocked route reasons", () => {
