@@ -13,6 +13,7 @@ import {
   previewAttack,
   ram,
   progress,
+  resolveAttack,
   resolveOverwatch,
   planMovement,
   changeHeading
@@ -149,6 +150,30 @@ test("interception graph blocks engaged squadron movement and disengage clears l
   assert.deepEqual(state.units[0].engagedWith, []);
 });
 
+test("failed disengagement spends speed, preserves links, ends maneuver, and preserves attack", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "squadron", position: { q: 1, r: 0 }, stack: 2, speed: 3 },
+    { id: "b", side: "right", kind: "squadron", position: { q: 2, r: 0 }, stack: 1 },
+    { id: "target", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 5 }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activationStage = "Maneuver";
+  state.activeUnitId = "a";
+  refreshInterception(state);
+  const eventCount = state.events.length;
+  const result = disengage(state, "a", { random: () => 0.6 });
+  assert.deepEqual(result, { success: false, chance: 60, cost: 1 });
+  assert.equal(state.units[0].speed, 2);
+  assert.equal(state.units[0].evasionPenalty, -10);
+  assert.deepEqual(state.units[0].engagedWith, ["b"]);
+  assert.deepEqual(state.units[1].engagedWith, ["a"]);
+  assert.equal(state.lifecycle, "Attack");
+  assert.deepEqual(state.events.at(-2).random, { roll: 60, chance: 60 });
+  assert.equal(moveAtomic(state, "a", [{ q: 0, r: 0 }]).moved, 0);
+  assert.equal(resolveAttack(state, "a", "target", { arc: "360", maxRange: 3, accuracy: 100, damage: 2 }, { random: () => 0 }).damage, 2);
+  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengage", "activation-stage", "attack-shot", "damage-packet"]);
+});
+
 test("attack preview applies endpoint cover and weapon range", () => {
   const state = createBattle({ units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
@@ -157,6 +182,21 @@ test("attack preview applies endpoint cover and weapon range", () => {
   const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
   assert.equal(result.canAttack, true);
   assert.equal(result.accuracy, 65);
+});
+
+test("an attack outside the weapon line of fire is rejected without rolling or damage", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
+    { id: "b", side: "right", kind: "capital", position: { q: 0, r: 3 }, integrity: 5 }
+  ] });
+  let rolls = 0;
+  const eventCount = state.events.length;
+  const weapon = { accuracy: 100, damage: 3, arc: "linear", minRange: 3, maxRange: 5 };
+  assert.equal(previewAttack(state, "a", "b", weapon).canAttack, false);
+  assert.equal(resolveAttack(state, "a", "b", weapon, { random: () => { rolls += 1; return 0; } }).damage, 0);
+  assert.equal(rolls, 0);
+  assert.equal(state.units[1].integrity, 5);
+  assert.equal(state.events.length, eventCount);
 });
 
 test("ramming applies mass damage and resets attacker evasion", () => {
@@ -179,6 +219,45 @@ test("explicit ramming can enter an enemy capital hex", () => {
   assert.equal(ram(state, "a", "b", [{ q: 1, r: 0 }]).success, true);
 });
 
+test("ramming destroys a large object through the damage lifecycle", () => {
+  const state = createBattle({
+    units: [{ id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 3, integrity: 10 }],
+    contents: [{ id: "station", side: "neutral", kind: "object", size: "large", position: { q: 2, r: 0 }, mass: 2, integrity: 5 }]
+  });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
+  const result = ram(state, "a", "station", [{ q: 1, r: 0 }]);
+  assert.deepEqual(result, { success: true, damage: 5, targetDestroyed: true });
+  assert.equal(state.contents.some(item => item.id === "station"), false);
+  assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 2));
+  assert.deepEqual(state.events.slice(-4).map(event => event.action), ["damage-packet", "object-destroyed", "damage-packet", "ramming"]);
+});
+
+test("ramming rejects ineligible actors and targets without side effects", () => {
+  const cases = [
+    [
+      { id: "a", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 5 },
+      { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, integrity: 5 }
+    ],
+    [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 5 },
+      { id: "b", side: "left", kind: "capital", position: { q: 2, r: 0 }, integrity: 5 }
+    ],
+    [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 5 },
+      { id: "b", side: "right", kind: "object", size: "small", position: { q: 2, r: 0 }, integrity: 5 }
+    ]
+  ];
+  for (const units of cases) {
+    const state = createBattle({ units });
+    state.lifecycle = "Maneuver";
+    state.activeUnitId = "a";
+    const snapshot = structuredClone(state);
+    assert.deepEqual(ram(state, "a", "b", [{ q: 1, r: 0 }]), { success: false, damage: 0 });
+    assert.deepEqual(state, snapshot);
+  }
+});
+
 test("movement refreshes interception and stops after lethal overwatch", () => {
   const state = createBattle({ id: "movement-reaction", round: 1, units: [
     { id: "cap", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 1, maxRange: 3, damage: 5, accuracy: 100, overwatchEligible: true }] },
@@ -196,18 +275,26 @@ test("movement refreshes interception and stops after lethal overwatch", () => {
   assert.equal(state.events.filter(event => event.action === "movement-step").length, 1);
 });
 
-test("overwatch arms, fires once per slot and target, and records deterministic damage", () => {
+test("an AA slot cannot trigger again against the same squadron in one round", () => {
   const state = createBattle({ id: "aa", round: 1, units: [
-    { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 100, overwatchEligible: true }] },
+    { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, maxRange: 3, damage: 3, accuracy: 0, overwatchEligible: true }] },
     { id: "squad", side: "right", kind: "squadron", position: { q: 2, r: 0 }, integrity: 5 }
   ] });
   state.lifecycle = "EndActivation"; state.activeUnitId = "cap"; progress(state);
   assert.equal(state.units[0].weapons[0].overwatch, true);
   const first = resolveOverwatch(state, "squad", { random: () => 0.1 });
-  assert.equal(first[0].damage, 3);
-  assert.equal(state.units[0].weapons[0].ready, false);
+  assert.equal(first[0].damage, 0);
+  const slot = state.units[0].weapons[0];
+  assert.equal(slot.ready, false);
+  assert.equal(slot.overwatch, false);
+  assert.deepEqual(slot.overwatchTargets, ["squad"]);
+  assert.deepEqual(state.events.slice(-2).map(event => event.action), ["overwatch-declared", "overwatch-shot"]);
+  assert.deepEqual(state.events.at(-1).random, { roll: 10, accuracy: 0 });
+  const counts = Object.fromEntries(["overwatch-declared", "overwatch-shot", "attack-shot", "damage-packet"].map(action => [action, state.events.filter(event => event.action === action).length]));
+  slot.ready = true;
+  slot.overwatch = true;
   assert.deepEqual(resolveOverwatch(state, "squad", { random: () => 0 }), []);
-  assert.ok(state.events.some(event => event.action === "overwatch-shot" && event.random));
+  for (const [action, count] of Object.entries(counts)) assert.equal(state.events.filter(event => event.action === action).length, count);
 });
 
 test("memory store persists and notifies domain snapshots", async () => {

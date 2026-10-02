@@ -44,9 +44,10 @@ export function disengage(state, unitId, { random = Math.random } = {}) {
   const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (closest?.stack ?? 1) - 1) * 10 - Math.max(0, enemies.length - 1) * 10 + (unit.friendlyLinked ?? 0) * 10));
   unit.speed = Math.max(0, (unit.speed ?? 0) - enemies.length);
   unit.evasionPenalty = (unit.evasionPenalty ?? 0) - 10;
-  const success = random() * 100 < chance;
+  const roll = random() * 100;
+  const success = roll < chance;
   if (success) { unit.engagedWith = []; unit.disengagedUntilRound = state.round; enemies.forEach(enemy => { enemy.engagedWith = (enemy.engagedWith ?? []).filter(id => id !== unit.id); }); }
-  recordEvent(state, "disengage", { actorId: unitId, chance, success });
+  recordEvent(state, "disengage", { actorId: unitId, chance, success, random: { roll, chance } });
   if (!success && state.lifecycle === "Maneuver" && state.activeUnitId === unitId) {
     state.lifecycle = "Attack";
     state.activationStage = "Attack";
@@ -314,17 +315,30 @@ export function previewAttack(state, attacker, target, weapon = {}) {
   return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && arcAllows(source, victim, weapon)) };
 }
 
+function applyObjectDamage(state, object, amount, sourceId) {
+  const before = object.integrity ?? 0;
+  object.integrity = Math.max(0, before - amount);
+  const destroyed = object.integrity === 0;
+  recordEvent(state, "damage-packet", { actorId: sourceId, subjectIds: [object.id], cause: "ramming", before: { integrity: before }, after: { integrity: object.integrity }, layers: [{ layer: "integrity", amount: before - object.integrity, remaining: Math.max(0, amount - before) }] });
+  if (destroyed) {
+    state.contents = state.contents.filter(item => item !== object);
+    state.contents.push({ id: `debris-${object.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", position: { ...object.position } });
+    recordEvent(state, "object-destroyed", { subjectIds: [object.id], position: { ...object.position }, after: { debris: true } });
+  }
+  return { amount: before - object.integrity, destroyed };
+}
+
 export function ram(state, attacker, target, steps, { random = Math.random } = {}) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
-  const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
-  if (!source || !victim || source.kind !== "capital" || !["capital", "object"].includes(victim.kind) || source.side === victim.side) return { success: false, damage: 0 };
+  const victim = typeof target === "string" ? [...state.units, ...state.contents].find(item => item.id === target) : target;
+  if (!source || !victim || source.kind !== "capital" || !["capital", "object"].includes(victim.kind) || (victim.kind === "object" && victim.size !== "large") || source.side === victim.side) return { success: false, damage: 0 };
   const route = moveAtomic(state, source.id, steps, { ramming: true });
   if (route.moved !== steps.length || distance(source.position, victim.position) !== 1) return { success: false, damage: 0, moved: route.moved };
   const directSteps = steps.length;
   if (victim.position && samePosition(source.position, victim.position)) return { success: false, damage: 0, moved: route.moved };
   const targetDamage = (source.mass ?? 0) * (1 + directSteps);
   const attackerDamage = victim.mass ?? 0;
-  const targetResult = victim.kind === "capital" ? applyDamagePacket(state, victim, { amount: targetDamage, sourceId: source.id, cause: "ramming" }) : { amount: targetDamage, destroyed: true };
+  const targetResult = victim.kind === "capital" ? applyDamagePacket(state, victim, { amount: targetDamage, sourceId: source.id, cause: "ramming" }) : applyObjectDamage(state, victim, targetDamage, source.id);
   if (state.units.includes(source)) { source.evasion = 0; applyDamagePacket(state, source, { amount: attackerDamage, sourceId: victim.id, cause: "ramming" }); }
   recordEvent(state, "ramming", { actorId: source.id, subjectIds: [victim.id], targetDamage, attackerDamage });
   return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed };
