@@ -171,6 +171,48 @@ test("movement planning rejects blocked route without mutating state", () => {
   assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 0, r: 0 });
 });
 
+test("squadron degradation follows integrity boundaries and records craft losses", () => {
+  for (const [damage, integrity, stack, lost] of [[1, 29, 3, 0], [10, 20, 2, 1], [19, 11, 2, 1], [20, 10, 1, 2], [29, 1, 1, 2]]) {
+    const state = createBattle({ units: [
+      { id: "s", side: "left", kind: "squadron", integrity: 30, unitHealth: 10, stack: 3 },
+      { id: "enemy", side: "right", kind: "capital", integrity: 10 }
+    ] });
+    applyDamagePacket(state, "s", { amount: damage, sourceId: "enemy" });
+    assert.equal(state.units[0].integrity, integrity);
+    assert.equal(state.units[0].stack, stack);
+    const loss = state.events.find(event => event.action === "squadron-craft-lost");
+    assert.equal(loss?.lost ?? 0, lost);
+    assert.deepEqual(state.events[0].after, { shield: 0, armor: 0, integrity, stack });
+  }
+});
+
+test("squadron degradation immediately reduces shots and interception strength without changing evasion", () => {
+  const state = createBattle({ units: [
+    { id: "s", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 30, unitHealth: 10, stack: 3, speed: 3, evasion: 25 },
+    { id: "enemy", side: "right", kind: "squadron", position: { q: 1, r: 0 }, integrity: 30, unitHealth: 10, stack: 3 }
+  ] });
+  const weapon = { accuracy: 100, damage: 1, shots: 1, arc: "360", maxRange: 3 };
+  assert.equal(previewAttack(state, "s", "enemy", weapon).shots, 3);
+  refreshInterception(state);
+  assert.equal(disengage(structuredClone(state), "s", { random: () => 0 }).chance, 40);
+  applyDamagePacket(state, "enemy", { amount: 10, sourceId: "s" });
+  assert.equal(previewAttack(state, "enemy", "s", weapon).shots, 2);
+  assert.equal(disengage(state, "s", { random: () => 0 }).chance, 50);
+  assert.equal(state.units.find(unit => unit.id === "s").evasion, 25);
+});
+
+test("lethal squadron degradation orders loss before destruction and cleans interception", () => {
+  const state = createBattle({ units: [
+    { id: "s", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 10, unitHealth: 10, stack: 1 },
+    { id: "enemy", side: "right", kind: "squadron", position: { q: 1, r: 0 }, integrity: 10, unitHealth: 10, stack: 1 }
+  ] });
+  refreshInterception(state);
+  applyDamagePacket(state, "s", { amount: 20, sourceId: "enemy" });
+  assert.deepEqual(state.events.map(event => event.action), ["damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "victory"]);
+  assert.deepEqual(state.units[0].engagedWith, []);
+  assert.equal(state.contents[0].cover, "debris");
+});
+
 test("damage crosses layers and destruction creates debris and victory", () => {
   const state = deployedBattle();
   const target = state.units.find(unit => unit.id === "r-cap");
@@ -217,8 +259,8 @@ test("failed disengagement spends speed, preserves links, ends maneuver, and pre
   assert.equal(state.lifecycle, "Attack");
   assert.deepEqual(state.events.at(-2).random, { roll: 60, chance: 60 });
   assert.equal(moveAtomic(state, "a", [{ q: 0, r: 0 }]).moved, 0);
-  assert.equal(resolveAttack(state, "a", "target", { arc: "360", maxRange: 3, accuracy: 100, damage: 2 }, { random: () => 0 }).damage, 2);
-  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengage", "activation-stage", "attack-shot", "damage-packet"]);
+  assert.equal(resolveAttack(state, "a", "target", { arc: "360", maxRange: 3, accuracy: 100, damage: 2 }, { random: () => 0 }).damage, 4);
+  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengage", "activation-stage", "attack-shot", "damage-packet", "attack-shot", "damage-packet"]);
 });
 
 test("disengagement is unavailable without full Speed payment", () => {
@@ -237,14 +279,55 @@ test("disengagement is unavailable without full Speed payment", () => {
   assert.deepEqual(state, snapshot);
 });
 
-test("attack preview applies endpoint cover and weapon range", () => {
+test("attack preview applies every endpoint cover modifier and ignores intermediate terrain", () => {
+  for (const [cover, penalty] of [[null, 0], ["nebula", 15], ["debris", 10], ["asteroid", 20]]) {
+    const contents = [{ kind: "terrain", cover: "asteroid", position: { q: 1, r: 0 } }];
+    if (cover) contents.push({ kind: "terrain", cover, position: { q: 3, r: 0 } });
+    const state = createBattle({ units: [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
+      { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
+    ], contents });
+    const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
+    assert.equal(result.canAttack, true);
+    assert.equal(result.cover, penalty);
+    assert.equal(result.accuracy, 80 - penalty);
+  }
+});
+
+test("endpoint cover clamps accuracy and is shared by attacks and overwatch", () => {
   const state = createBattle({ units: [
-    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
-    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", accuracy: 10, damage: 2, arc: "360", maxRange: 3, overwatchEligible: true, overwatch: true, overwatchRound: 1 }] },
+    { id: "b", side: "right", kind: "squadron", position: { q: 1, r: 0 }, integrity: 5, unitHealth: 5, stack: 1 }
+  ], contents: [{ kind: "terrain", cover: "asteroid", position: { q: 1, r: 0 } }] });
+  state.round = 1;
+  assert.equal(previewAttack(state, "a", "b", state.units[0].weapons[0]).accuracy, 0);
+  assert.equal(resolveAttack(state, "a", "b", state.units[0].weapons[0], { random: () => 0 }).damage, 0);
+  state.units[0].weapons[0].ready = true;
+  assert.equal(resolveOverwatch(state, "b", { random: () => 0 })[0].damage, 0);
+  assert.equal(state.units[1].integrity, 5);
+});
+
+test("generated debris provides endpoint cover", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10 },
+    { id: "wreck", side: "right", kind: "capital", position: { q: 2, r: 0 }, integrity: 1 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ] });
+  applyDamagePacket(state, "wreck", { amount: 1, sourceId: "a" });
+  state.units.find(unit => unit.id === "b").position = { q: 2, r: 0 };
+  assert.equal(previewAttack(state, "a", "b", { accuracy: 80, arc: "360", maxRange: 3 }).cover, 10);
+});
+
+test("endpoint cover preserves blocker selection and friendly-fire classification", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } },
+    { id: "blocker", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 5 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 5 }
   ], contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }] });
-  const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
-  assert.equal(result.canAttack, true);
-  assert.equal(result.accuracy, 65);
+  const preview = previewAttack(state, "a", "b", { accuracy: 80, arc: "360", maxRange: 3 });
+  assert.equal(preview.blockerId, "blocker");
+  assert.equal(preview.friendlyFire, true);
+  assert.deepEqual({ hitBlocker: preview.hitBlocker, hitMain: preview.hitMain, miss: preview.miss }, { hitBlocker: 50, hitMain: 15, miss: 35 });
 });
 
 test("supercover includes both hexes touched along a shared boundary", () => {
@@ -324,7 +407,7 @@ test("a destroyed blocker is removed before the next salvo shot", () => {
   resolveAttack(state, "a", "b", { accuracy: 80, shots: 2, damage: 2, arc: "360", maxRange: 3 }, { random: () => rolls.shift() });
   assert.equal(state.units.some(unit => unit.id === "blocker"), false);
   assert.equal(state.units.find(unit => unit.id === "b").integrity, 8);
-  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["attack-shot", "damage-packet", "unit-destroyed", "attack-shot", "damage-packet"]);
+  assert.deepEqual(state.events.slice(-6).map(event => event.action), ["attack-shot", "damage-packet", "unit-destroyed", "debris-created", "attack-shot", "damage-packet"]);
 });
 
 test("a large battlefield object fully obscures the target but remains hittable", () => {
@@ -439,7 +522,7 @@ test("ramming destroys a large object through the damage lifecycle", () => {
   assert.deepEqual(result, { success: true, damage: 5, targetDestroyed: true });
   assert.equal(state.contents.some(item => item.id === "station"), false);
   assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 2));
-  assert.deepEqual(state.events.slice(-4).map(event => event.action), ["damage-packet", "object-destroyed", "damage-packet", "ramming"]);
+  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["damage-packet", "object-destroyed", "debris-created", "damage-packet", "ramming"]);
 });
 
 test("ramming rejects ineligible actors and targets without side effects", () => {

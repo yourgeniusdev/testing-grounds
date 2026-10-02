@@ -135,7 +135,7 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
     return {
       units: state.units.map(unit => unit.id),
       debris: state.contents.some(item => item.kind === "debris" && item.position.q === 6 && item.position.r === 1),
-      events: state.events.slice(-4).map(event => ({ action: event.action, after: event.after }))
+      events: state.events.slice(-5).map(event => ({ action: event.action, after: event.after }))
     };
   });
   expect(result).toEqual({
@@ -145,6 +145,7 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
       { action: "attack-shot", after: { hitId: "right-cap" } },
       { action: "damage-packet", after: { shield: 0, armor: 0, integrity: 0 } },
       { action: "unit-destroyed", after: { debris: true } },
+      { action: "debris-created", after: undefined },
       { action: "victory", after: { winner: "left" } }
     ]
   });

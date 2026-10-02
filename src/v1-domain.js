@@ -264,7 +264,7 @@ export function applyDamagePacket(state, target, packet = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
   if (!unit || !state.units.includes(unit) || (packet.amount ?? 0) <= 0) return { amount: 0, destroyed: false, layers: [] };
   let remaining = packet.amount;
-  const before = { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0 };
+  const before = { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0, ...(unit.kind === "squadron" ? { stack: unit.stack ?? 0 } : {}) };
   const layers = [];
   for (const layer of ["shield", "armor", "integrity"]) {
     if (!remaining) break;
@@ -274,10 +274,13 @@ export function applyDamagePacket(state, target, packet = {}) {
     remaining -= absorbed;
     layers.push({ layer, amount: absorbed, remaining });
   }
-  if (unit.kind === "squadron" && unit.unitHealth) unit.stack = Math.max(0, Math.ceil((unit.integrity ?? 0) / unit.unitHealth));
+  if (unit.kind === "squadron" && unit.unitHealth) unit.stack = Math.min(before.stack, Math.max(0, Math.ceil((unit.integrity ?? 0) / unit.unitHealth)));
+  const after = { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0, ...(unit.kind === "squadron" ? { stack: unit.stack ?? 0 } : {}) };
   const destroyed = (unit.integrity ?? 0) <= 0;
-  recordEvent(state, "damage-packet", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], cause: packet.cause ?? "damage", before, after: { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0 }, layers });
-  if (destroyed) destroyUnit(state, unit, { causeEventId: state.events.at(-1).eventId });
+  const damageEvent = recordEvent(state, "damage-packet", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], cause: packet.cause ?? "damage", before, after, layers });
+  let causeEventId = damageEvent.eventId;
+  if (unit.kind === "squadron" && after.stack < before.stack) causeEventId = recordEvent(state, "squadron-craft-lost", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, before: { stack: before.stack }, after: { stack: after.stack }, lost: before.stack - after.stack }).eventId;
+  if (destroyed) destroyUnit(state, unit, { causeEventId });
   return { amount: packet.amount - remaining, destroyed, layers };
 }
 
@@ -289,9 +292,13 @@ export function destroyUnit(state, target, { causeEventId = null } = {}) {
   state.units = state.units.filter(candidate => candidate !== unit);
   state.queue = state.queue.filter(id => id !== unit.id);
   state.contents = state.contents.filter(item => item.kind !== "debris" || !samePosition(item.position, position));
-  if (position) state.contents.push({ id: `debris-${unit.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", position });
+  const destroyedEvent = recordEvent(state, "unit-destroyed", { actorId: null, subjectIds: [unit.id], causeEventId, position, after: { debris: Boolean(position) } });
+  if (position) {
+    const debris = { id: `debris-${unit.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", cover: "debris", position };
+    state.contents.push(debris);
+    recordEvent(state, "debris-created", { subjectIds: [debris.id], causeEventId: destroyedEvent.eventId, position });
+  }
   state.units.forEach(candidate => { if (Array.isArray(candidate.engagedWith)) candidate.engagedWith = candidate.engagedWith.filter(id => id !== unit.id); });
-  recordEvent(state, "unit-destroyed", { actorId: null, subjectIds: [unit.id], causeEventId, position, after: { debris: Boolean(position) } });
   const remainingSides = new Set(state.units.map(candidate => candidate.side));
   if (remainingSides.size === 1 && state.units.length) {
     state.winner = [...remainingSides][0]; state.lifecycle = "Finished";
@@ -367,14 +374,14 @@ export function previewAttack(state, attacker, target, weapon = {}) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
   const accuracy = Math.max(0, Math.min(100, weapon.accuracy ?? 100));
-  const shots = weapon.shots ?? 1;
+  const shots = (weapon.shots ?? 1) * (source?.kind === "squadron" ? (source.stack ?? 1) : 1);
   const damage = weapon.damage ?? 0;
   const terrain = victim?.position && state.contents.find(item => samePosition(item.position, victim.position) && item.cover);
   const coverPenalty = terrain?.cover === "nebula" ? 15 : terrain?.cover === "debris" ? 10 : terrain?.cover === "asteroid" ? 20 : 0;
   const blocker = attackBlocker(state, source, victim);
   const blockerCover = blocker ? ({ small: 25, medium: 50, large: 100 }[blocker.size] ?? 0) : 0;
   const effectiveAccuracy = Math.max(0, accuracy - coverPenalty);
-  const hitBlocker = Math.min(blockerCover, 100);
+  const hitBlocker = Math.min(blockerCover, effectiveAccuracy);
   const hitMain = Math.max(0, effectiveAccuracy - blockerCover);
   const miss = Math.max(0, 100 - effectiveAccuracy);
   return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, effectiveAccuracy, hitBlocker, hitMain, miss, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, friendlyFire: Boolean(blocker && blocker.side === source?.side), canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && state.attackSpentBy !== source.id && arcAllows(source, victim, weapon)) };
@@ -387,8 +394,10 @@ function applyObjectDamage(state, object, amount, sourceId, cause = "ramming") {
   recordEvent(state, "damage-packet", { actorId: sourceId, subjectIds: [object.id], cause, before: { integrity: before }, after: { integrity: object.integrity }, layers: [{ layer: "integrity", amount: before - object.integrity, remaining: Math.max(0, amount - before) }] });
   if (destroyed) {
     state.contents = state.contents.filter(item => item !== object);
-    state.contents.push({ id: `debris-${object.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", position: { ...object.position } });
-    recordEvent(state, "object-destroyed", { subjectIds: [object.id], position: { ...object.position }, after: { debris: true } });
+    const destroyedEvent = recordEvent(state, "object-destroyed", { subjectIds: [object.id], position: { ...object.position }, after: { debris: true } });
+    const debris = { id: `debris-${object.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", cover: "debris", position: { ...object.position } };
+    state.contents.push(debris);
+    recordEvent(state, "debris-created", { subjectIds: [debris.id], causeEventId: destroyedEvent.eventId, position: { ...object.position } });
   }
   return { amount: before - object.integrity, destroyed };
 }
