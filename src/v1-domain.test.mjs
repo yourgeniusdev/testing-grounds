@@ -140,7 +140,7 @@ test("damage crosses layers and destruction creates debris and victory", () => {
 
 test("interception graph blocks engaged squadron movement and disengage clears links", () => {
   const state = createBattle({ units: [
-    { id: "a", side: "left", kind: "squadron", position: { q: 1, r: 0 }, stack: 2 },
+    { id: "a", side: "left", kind: "squadron", position: { q: 1, r: 0 }, stack: 2, speed: 1 },
     { id: "b", side: "right", kind: "squadron", position: { q: 2, r: 0 }, stack: 1 }
   ] });
   refreshInterception(state);
@@ -174,6 +174,22 @@ test("failed disengagement spends speed, preserves links, ends maneuver, and pre
   assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengage", "activation-stage", "attack-shot", "damage-packet"]);
 });
 
+test("disengagement is unavailable without full Speed payment", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "squadron", position: { q: 1, r: 0 }, stack: 2, speed: 1 },
+    { id: "b", side: "right", kind: "squadron", position: { q: 2, r: 0 }, stack: 1 },
+    { id: "c", side: "right", kind: "squadron", position: { q: 1, r: 1 }, stack: 1 }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
+  refreshInterception(state);
+  const snapshot = structuredClone(state);
+  let rolls = 0;
+  assert.deepEqual(disengage(state, "a", { random: () => { rolls += 1; return 0; } }), { success: false, chance: 0, cost: 2 });
+  assert.equal(rolls, 0);
+  assert.deepEqual(state, snapshot);
+});
+
 test("attack preview applies endpoint cover and weapon range", () => {
   const state = createBattle({ units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
@@ -199,6 +215,37 @@ test("an attack outside the weapon line of fire is rejected without rolling or d
   assert.equal(state.events.length, eventCount);
 });
 
+test("weapon arcs cover their complete heading-relative geometry", () => {
+  const source = { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } };
+  const cases = [
+    { heading: 2, arc: "turret", target: { q: -2, r: 0 }, expected: true },
+    { heading: 2, arc: "battery-left", target: { q: 1, r: -2 }, expected: true },
+    { heading: 2, arc: "battery-left", target: { q: 1, r: 1 }, expected: false },
+    { heading: 2, arc: "battery-right", target: { q: 1, r: 1 }, expected: true },
+    { heading: 2, arc: "battery-right", target: { q: 1, r: -2 }, expected: false },
+    { heading: 2, arc: "linear", target: { q: 3, r: 0 }, expected: true },
+    { heading: 2, arc: "linear", target: { q: 2, r: 0 }, expected: false },
+    { heading: 2, arc: "linear", target: { q: 6, r: 0 }, expected: false },
+    { heading: 4, arc: "linear", target: { q: 0, r: -4 }, expected: true },
+    { heading: 2, arc: "forward", target: { q: 2, r: -1 }, expected: true },
+    { heading: 2, arc: "forward", target: { q: -2, r: 0 }, expected: false },
+    { heading: 5, arc: "forward", target: { q: -2, r: 1 }, expected: true },
+    { heading: 5, arc: "forward", target: { q: -4, r: 2 }, expected: false }
+  ];
+  for (const entry of cases) {
+    const state = createBattle({ units: [{ ...source, heading: entry.heading }, { id: "b", side: "right", kind: "capital", position: entry.target }] });
+    assert.equal(previewAttack(state, "a", "b", { arc: entry.arc }).canAttack, entry.expected, JSON.stringify(entry));
+  }
+  for (let heading = 0; heading < 6; heading += 1) {
+    const direction = [{ q: -1, r: 1 }, { q: 0, r: 1 }, { q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }][heading];
+    for (const range of [3, 4, 5]) {
+      const target = { q: direction.q * range, r: direction.r * range };
+      const state = createBattle({ units: [{ ...source, heading }, { id: "b", side: "right", kind: "capital", position: target }] });
+      assert.equal(previewAttack(state, "a", "b", { arc: "linear" }).canAttack, true, `heading ${heading}, range ${range}`);
+    }
+  }
+});
+
 test("ramming applies mass damage and resets attacker evasion", () => {
   const state = createBattle({ units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 3, evasion: 12, integrity: 10 },
@@ -209,6 +256,28 @@ test("ramming applies mass damage and resets attacker evasion", () => {
   assert.equal(state.units.find(unit => unit.id === "a").evasion, 0);
   assert.equal(state.units.find(unit => unit.id === "b").integrity, 4);
   assert.ok(state.events.some(event => event.action === "ramming"));
+});
+
+test("successful ramming consumes attack only for the current round", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 2, integrity: 20 },
+    { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 1, integrity: 20 }
+  ] });
+  state.round = 1;
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
+  assert.equal(ram(state, "a", "b", [{ q: 1, r: 0 }]).success, true);
+  state.lifecycle = "Attack";
+  let rolls = 0;
+  const eventCount = state.events.length;
+  assert.equal(previewAttack(state, "a", "b", { arc: "360" }).canAttack, false);
+  assert.equal(resolveAttack(state, "a", "b", { arc: "360", accuracy: 100, damage: 2 }, { random: () => { rolls += 1; return 0; } }).damage, 0);
+  assert.equal(rolls, 0);
+  assert.equal(state.events.length, eventCount);
+  state.lifecycle = "RoundEnd";
+  progress(state);
+  progress(state);
+  assert.equal(resolveAttack(state, "a", "b", { arc: "360", accuracy: 100, damage: 2 }, { random: () => 0 }).damage, 2);
 });
 
 test("explicit ramming can enter an enemy capital hex", () => {

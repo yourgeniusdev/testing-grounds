@@ -10,7 +10,7 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
   return {
     id, units: normalized, contents: contents.map(item => ({ ...item, position: { ...item.position } })), bounds,
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
-    activationStage: null, winner: null, events: [], sequence: 0
+    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0
   };
 }
 
@@ -40,9 +40,11 @@ export function disengage(state, unitId, { random = Math.random } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit || unit.kind !== "squadron" || !(unit.engagedWith?.length)) return { success: false, chance: 0, cost: 0 };
   const enemies = unit.engagedWith.map(id => state.units.find(candidate => candidate.id === id)).filter(Boolean);
+  const cost = enemies.length;
+  if ((unit.speed ?? 0) < cost) return { success: false, chance: 0, cost };
   const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1))[0];
   const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (closest?.stack ?? 1) - 1) * 10 - Math.max(0, enemies.length - 1) * 10 + (unit.friendlyLinked ?? 0) * 10));
-  unit.speed = Math.max(0, (unit.speed ?? 0) - enemies.length);
+  unit.speed -= cost;
   unit.evasionPenalty = (unit.evasionPenalty ?? 0) - 10;
   const roll = random() * 100;
   const success = roll < chance;
@@ -53,7 +55,7 @@ export function disengage(state, unitId, { random = Math.random } = {}) {
     state.activationStage = "Attack";
     recordEvent(state, "activation-stage", { actorId: unitId, after: "Attack" });
   }
-  return { success, chance, cost: enemies.length };
+  return { success, chance, cost };
 }
 
 
@@ -144,13 +146,14 @@ function clearOverwatch(state) {
 export function progress(state) {
   if (state.lifecycle === "Finished") return state.lifecycle;
   if (state.lifecycle === "RoundStart") {
-    state.round += 1; clearOverwatch(state); state.units.forEach(unit => { unit.hasActivated = false; unit.hasWaited = false; });
+    state.round += 1; state.attackSpentBy = null; clearOverwatch(state); state.units.forEach(unit => { unit.hasActivated = false; unit.hasWaited = false; });
     state.queue = state.units.filter(unit => unit.position).slice().sort((a, b) => (b.initiative ?? 0) - (a.initiative ?? 0)).map(unit => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
   } else if (state.lifecycle === "ActivationStart") {
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
   } else if (state.lifecycle === "EndActivation") {
     const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; armOverwatch(state, unit.id); }
+    state.attackSpentBy = null;
     const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
     if (next) { state.activeUnitId = next; state.lifecycle = "WaitDecision"; }
     else state.lifecycle = "RoundEnd";
@@ -291,12 +294,29 @@ function lineCells(a, b) {
   return cells.filter((cell, index) => index === 0 || !samePosition(cell, cells[index - 1]));
 }
 
+const hexDirections = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
+
+function scaledDirection(direction, amount) { return { q: direction.q * amount, r: direction.r * amount }; }
+function sameDelta(delta, candidate) { return delta.q === candidate.q && delta.r === candidate.r; }
+function relativeToHeading(delta, heading) {
+  let relative = { ...delta };
+  for (let turn = 0; turn < heading; turn += 1) relative = { q: -relative.r, r: relative.q + relative.r };
+  return relative;
+}
+
 function arcAllows(source, victim, weapon) {
-  const range = distance(source.position, victim.position), min = weapon.minRange ?? (weapon.profile === "linear" ? 3 : 1), max = weapon.maxRange ?? 3;
+  const range = distance(source.position, victim.position), arc = weapon.arc ?? weapon.profile ?? "360";
+  const min = weapon.minRange ?? (arc === "linear" || arc === "line" ? 3 : 1), max = weapon.maxRange ?? (arc === "linear" || arc === "line" ? 5 : 3);
   if (range < min || range > max) return false;
-  if (weapon.arc === "360" || weapon.arc === "turret") return true;
-  if (weapon.arc === "linear") return source.heading === undefined || Math.sign(victim.position.q - source.position.q) === (source.heading === 2 ? 1 : source.heading === 5 ? -1 : 0);
-  return true;
+  if (["360", "turret", "aa-turret"].includes(arc) || source.heading === undefined) return true;
+  const heading = ((source.heading + 4) % 6 + 6) % 6;
+  const delta = { q: victim.position.q - source.position.q, r: victim.position.r - source.position.r };
+  if (arc === "linear" || arc === "line") return sameDelta(delta, scaledDirection(hexDirections[heading], range));
+  const relative = relativeToHeading(delta, heading);
+  if (arc === "battery-left" || arc === "left") return relative.r < 0 && relative.q >= 0;
+  if (arc === "battery-right" || arc === "right") return relative.r > 0 && relative.q + relative.r >= 0;
+  if (arc === "forward" || arc === "front") return relative.q >= 0 && relative.q + relative.r >= 0;
+  return false;
 }
 
 export function previewAttack(state, attacker, target, weapon = {}) {
@@ -312,7 +332,7 @@ export function previewAttack(state, attacker, target, weapon = {}) {
   const blockerCover = blocker ? ({ small: 25, medium: 50, large: 100 }[blocker.size] ?? 0) : 0;
   const effectiveAccuracy = Math.max(0, accuracy - coverPenalty);
   const hitMain = Math.max(0, effectiveAccuracy - blockerCover);
-  return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && arcAllows(source, victim, weapon)) };
+  return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && state.attackSpentBy !== source.id && arcAllows(source, victim, weapon)) };
 }
 
 function applyObjectDamage(state, object, amount, sourceId) {
@@ -340,13 +360,14 @@ export function ram(state, attacker, target, steps, { random = Math.random } = {
   const attackerDamage = victim.mass ?? 0;
   const targetResult = victim.kind === "capital" ? applyDamagePacket(state, victim, { amount: targetDamage, sourceId: source.id, cause: "ramming" }) : applyObjectDamage(state, victim, targetDamage, source.id);
   if (state.units.includes(source)) { source.evasion = 0; applyDamagePacket(state, source, { amount: attackerDamage, sourceId: victim.id, cause: "ramming" }); }
+  state.attackSpentBy = source.id;
   recordEvent(state, "ramming", { actorId: source.id, subjectIds: [victim.id], targetDamage, attackerDamage });
   return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed };
 }
 
 export function resolveAttack(state, attacker, target, weapon = {}, { random = Math.random } = {}) {
   const preview = previewAttack(state, attacker, target, weapon);
-  if (!preview.canAttack || state.lifecycle === "Finished") return { ...preview, hits: 0, damage: 0 };
+  if (!preview.canAttack || state.lifecycle === "Finished" || state.attackSpentBy === preview.attackerId) return { ...preview, hits: 0, damage: 0 };
   let hits = 0, damage = 0;
   for (let shot = 0; shot < preview.shots; shot += 1) {
     const roll = random() * 100;
