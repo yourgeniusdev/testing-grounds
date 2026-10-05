@@ -67,6 +67,7 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   ]), { status: "moved", moved: 5 });
   const rightFighter = state.units.find(unit => unit.id === "right-fighter");
   assert.equal(rightFighter.integrity, 14);
+  assert.equal(state.units.find(unit => unit.id === "left-cap").weapons[0].ammo, 0);
   assert.equal(rightFighter.stack, 2);
   assert.deepEqual(rightFighter.engagedWith, ["left-fighter"]);
   assert.deepEqual(state.events.slice(reactionStart).map(event => event.action), [
@@ -101,6 +102,8 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   const leftCap = state.units.find(unit => unit.id === "left-cap");
   const capitalAttack = resolveAttack(state, leftCap, "right-cap", leftCap.weapons[1], { random: () => 0 });
   assert.equal(capitalAttack.destroyed, true);
+  assert.equal(state.attackSpentBy, "left-cap");
+  assert.equal(leftCap.weapons[1].ammo, 0);
   assert.equal(state.lifecycle, "Attack");
   assert.equal(state.winner, null);
   assert.equal(advanceActivation(state, "EndActivation"), true);

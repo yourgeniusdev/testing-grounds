@@ -45,7 +45,7 @@ export function createBattleController({ document, store, renderer }) {
     else if (current.lifecycle === "Maneuver") advanceActivation(current, "Attack");
     else if (current.lifecycle === "Attack") {
       const attacker = current.units.find(unit => unit.id === current.activeUnitId); const target = current.units.find(unit => unit.id === view.selectedTargetId); const { weapon, available } = getWeaponSelection(attacker, view.selectedWeaponIndex);
-      if (attacker && target && available && getAttackPreview(current, attacker.id, target.id, view.selectedWeaponIndex)?.canAttack) resolveAttack(current, attacker, target, weapon, { random: () => 0 });
+      if (attacker && target && available && getAttackPreview(current, attacker.id, target.id, view.selectedWeaponIndex)?.canAttack) resolveAttack(current, attacker, target, getWeaponSelection(attacker, view.selectedWeaponIndex).slot, { random: () => 0 });
       if (current.lifecycle !== "Finished") advanceActivation(current, "EndActivation");
       view.selectedTargetId = null; view.selectedWeaponIndex = 0;
     } else if (current.lifecycle === "WaitDecision") decide(current, "continue");

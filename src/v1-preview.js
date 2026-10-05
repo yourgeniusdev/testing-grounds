@@ -3,7 +3,7 @@ import { previewAttack } from "./v1-domain.js";
 export function getWeaponSelection(attacker, weaponIndex = 0) {
   const slot = (attacker?.weapons ?? attacker?.weaponSlots)?.[weaponIndex];
   const weapon = slot?.weapon ?? slot;
-  const available = Boolean(weapon && slot?.destroyed !== true && slot?.ready !== false && (slot?.ammo ?? weapon?.ammo ?? 1) > 0);
+  const available = Boolean(weapon && slot?.destroyed !== true && slot?.ready !== false && slot?.overwatch !== true && (slot?.ammo ?? weapon?.ammo ?? 1) > 0);
   return { slot, weapon, available };
 }
 

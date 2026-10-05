@@ -65,7 +65,7 @@ test("attack preview uses a selected weapon slot and explains unavailable target
 test("maneuver preview reports costs, turns, deterministic effects, AA risks, and remains pure", () => {
   const state = createBattle({ units: [
     { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, currentSpeed: 4, evasion: 10, integrity: 5 },
-    { id: "aa", side: "right", kind: "capital", position: { q: 3, r: 0 }, weapons: [{ id: "flak", ready: true, overwatch: true, overwatchRound: 1, accuracy: 70, damage: 2, shots: 1, maxRange: 3 }] }
+    { id: "aa", side: "right", kind: "capital", position: { q: 3, r: 0 }, weapons: [{ id: "flak", ready: true, overwatchEligible: true, overwatch: true, overwatchRound: 1, accuracy: 70, damage: 2, shots: 1, maxRange: 3 }] }
   ], contents: [{ id: "cloud", kind: "terrain", position: { q: 1, r: 0 }, movementCost: 2, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: 5 }, { type: "damage", amount: 1 }] }] });
   state.round = 1;
   const before = structuredClone(state);
@@ -109,10 +109,18 @@ test("maneuver preview identifies an enemy destination as requiring explicit ram
   assert.equal(previewManeuverRoute(state, "a", [{ q: 1, r: 0 }], { heading: 3 }).valid, false);
 });
 
-test("attack preview rejects an unavailable weapon slot", () => {
-  const state = createBattle({ units: [
-    { id: "a", side: "left", position: { q: 0, r: 0 }, weaponSlots: [{ ready: false, weapon: { id: "spent", damage: 5, maxRange: 5 } }] },
-    { id: "b", side: "right", position: { q: 1, r: 0 } }
-  ] });
-  assert.equal(getAttackPreview(state, "a", "b"), null);
+test("attack preview rejects unavailable and overwatch weapon slots without mutation", () => {
+  for (const slot of [
+    { ready: false, weapon: { id: "spent", damage: 5, maxRange: 5 } },
+    { ready: true, ammo: 0, weapon: { id: "empty", damage: 5, maxRange: 5 } },
+    { ready: true, ammo: 1, overwatch: true, weapon: { id: "armed", damage: 5, maxRange: 5 } }
+  ]) {
+    const state = createBattle({ units: [
+      { id: "a", side: "left", position: { q: 0, r: 0 }, weaponSlots: [slot] },
+      { id: "b", side: "right", position: { q: 1, r: 0 } }
+    ] });
+    const before = structuredClone(state);
+    assert.equal(getAttackPreview(state, "a", "b"), null);
+    assert.deepEqual(state, before);
+  }
 });

@@ -51,7 +51,8 @@ function resolveOnEnterEffect(state, unit, content, effect, movement, position) 
 }
 
 const interceptionKey = (a, b) => [a, b].sort().join(":");
-const initiativeOrder = (a, b) => (b.initiative ?? 0) - (a.initiative ?? 0) || String(a.id).localeCompare(String(b.id));
+const compareIds = (a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+const initiativeOrder = (a, b) => (b.initiative ?? 0) - (a.initiative ?? 0) || compareIds(a.id, b.id);
 
 export function refreshInterception(state, { causeEventId = null } = {}) {
   const previous = new Map((state.interceptionLinks ?? []).map(link => [link.key, link]));
@@ -158,21 +159,34 @@ function weaponSlots(unit) {
   return unit?.weapons ?? unit?.weaponSlots ?? [];
 }
 
+function slotAmmo(slot) {
+  const weapon = slot?.weapon ?? slot;
+  return slot?.ammo ?? weapon?.ammo ?? 1;
+}
+
+function spendSlot(slot) {
+  const weapon = slot?.weapon ?? slot;
+  slot.ready = false;
+  slot.overwatch = false;
+  if (Object.hasOwn(slot, "ammo")) slot.ammo -= 1;
+  else if (weapon && Object.hasOwn(weapon, "ammo")) weapon.ammo -= 1;
+}
+
 function slotCanOverwatch(state, owner, slot, target) {
   const weapon = slot.weapon ?? slot;
   return owner && target && owner.side !== target.side && target.kind === "squadron" &&
-    (slot.destroyed !== true) && (slot.ready !== false) && slot.overwatch === true &&
-    (slot.ammo ?? weapon.ammo ?? 1) > 0 && arcAllows(owner, target, weapon) &&
+    (slot.destroyed !== true) && (slot.ready !== false) && slot.overwatchEligible === true && slot.overwatch === true &&
+    slotAmmo(slot) > 0 && arcAllows(owner, target, weapon) &&
     previewAttack(state, owner, target, weapon).canAttack;
 }
 
 export function armOverwatch(state, unitId = state.activeUnitId) {
   const owner = state.units.find(unit => unit.id === unitId);
-  if (!owner) return [];
+  if (state.lifecycle !== "EndActivation" || unitId !== state.activeUnitId || !owner) return [];
   const armed = [];
   weaponSlots(owner).forEach((slot, index) => {
     const weapon = slot.weapon ?? slot;
-    if ((slot.ready !== false) && slot.overwatchEligible === true && (slot.ammo ?? weapon.ammo ?? 1) > 0) {
+    if (slot.destroyed !== true && slot.ready !== false && slot.overwatchEligible === true && slotAmmo(slot) > 0) {
       slot.overwatch = true;
       slot.overwatchRound = state.round;
       slot.overwatchTargets = slot.overwatchTargets ?? [];
@@ -193,25 +207,26 @@ function overwatchCandidates(state, target) {
   return candidates.sort((a, b) => {
     const initiativeOrder = (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0);
     if (initiativeOrder) return initiativeOrder;
-    if (a.owner === b.owner) return a.index - b.index;
-    return 0;
+    const ownerOrder = compareIds(a.owner.id, b.owner.id);
+    if (ownerOrder) return ownerOrder;
+    return a.index - b.index;
   });
 }
 
 export function resolveOverwatch(state, targetId, { random = Math.random, causeEventId = null } = {}) {
   const target = state.units.find(unit => unit.id === targetId);
+  if (state.lifecycle !== "Maneuver" || !target || target.kind !== "squadron") return [];
   const candidates = overwatchCandidates(state, target);
-  if (!target || target.kind !== "squadron") return [];
   const results = [];
   for (const candidate of candidates) {
     if (!state.units.includes(target) || target.kind !== "squadron") break;
     if (!state.units.includes(candidate.owner) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) continue;
     const { owner, slot, index } = candidate, weapon = slot.weapon ?? slot;
     const slotId = `${owner.id}:${slot.id ?? index}`;
-    slot.ready = false; slot.overwatch = false; slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
+    spendSlot(slot); slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
     const declared = recordEvent(state, "overwatch-declared", { actorId: owner.id, subjectIds: [target.id], causeEventId, slotId });
     const launched = recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, slotId });
-    const result = resolveAttack(state, owner, target, weapon, { random, causeEventId: launched.eventId, cause: "overwatch" });
+    const result = resolveAttackInternal(state, owner, target, slot, { random, causeEventId: launched.eventId, cause: "overwatch", reaction: true });
     results.push({ ownerId: owner.id, targetId: target.id, slotId, ...result });
   }
   return results;
@@ -228,7 +243,7 @@ export function progress(state) {
       unit.hasActivated = false; unit.hasWaited = false;
       weaponSlots(unit).forEach(slot => { if (slot.destroyed !== true) slot.ready = true; });
     });
-    state.queue = state.units.filter(unit => unit.position).slice().sort((a, b) => (b.initiative ?? 0) - (a.initiative ?? 0)).map(unit => unit.id);
+    state.queue = state.units.filter(unit => unit.position).slice().sort(initiativeOrder).map(unit => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
   } else if (state.lifecycle === "ActivationStart") {
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
@@ -632,9 +647,19 @@ export function ram(state, attacker, target, steps) {
   return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed };
 }
 
-export function resolveAttack(state, attacker, target, weapon = {}, { random = Math.random, causeEventId = null, cause = "attack" } = {}) {
-  const preview = previewAttack(state, attacker, target, weapon);
-  if (!preview.canAttack || state.lifecycle === "Finished" || state.attackSpentBy === preview.attackerId) return { ...preview, hits: 0, damage: 0 };
+export function resolveAttack(state, attacker, target, slot = null, { random = Math.random, causeEventId = null } = {}) {
+  return resolveAttackInternal(state, attacker, target, slot, { random, causeEventId, cause: "attack", reaction: false });
+}
+
+function resolveAttackInternal(state, attacker, target, slot, { random, causeEventId, cause, reaction }) {
+  const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
+  const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
+  const ownedSlot = weaponSlots(source).find(candidate => candidate === slot);
+  const weapon = ownedSlot?.weapon ?? ownedSlot ?? {};
+  const preview = previewAttack(state, source, victim, weapon);
+  const manual = !reaction;
+  if (!source || !victim || !state.units.includes(source) || !state.units.includes(victim) || !ownedSlot || !preview.canAttack || state.lifecycle === "Finished" || (reaction && state.lifecycle !== "Maneuver") || (manual && state.attackSpentBy === source.id) || (manual && (state.lifecycle !== "Attack" || state.activeUnitId !== source.id || ownedSlot.destroyed === true || ownedSlot.ready === false || ownedSlot.overwatch === true || slotAmmo(ownedSlot) <= 0))) return { ...preview, hits: 0, damage: 0 };
+  if (manual) spendSlot(ownedSlot);
   let hits = 0, damage = 0;
   for (let shot = 0; shot < preview.shots; shot += 1) {
     const current = previewAttack(state, preview.attackerId, preview.targetId, weapon);
@@ -653,5 +678,6 @@ export function resolveAttack(state, attacker, target, weapon = {}, { random = M
     damage += result.amount;
     if (mainHit && result.destroyed) break;
   }
+  if (manual) state.attackSpentBy = source.id;
   return { ...preview, hits, damage, destroyed: !state.units.some(unit => unit.id === preview.targetId) };
 }
