@@ -1,4 +1,4 @@
-import { advanceActivation, confirmDeployment, decide, deployUnit, disengage, moveAtomic, planMovement, previewManeuverRoute, progress, ram, resolveAttack } from "./v1-domain.js";
+import { advanceActivation, confirmDeployment, decide, deployUnit, disengage, moveAtomic, planMovement, planRam, previewManeuverRoute, progress, ram, resolveAttack } from "./v1-domain.js";
 import { getAttackPreview, getWeaponSelection } from "./v1-preview.js";
 
 const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
@@ -10,16 +10,15 @@ export function createBattleController({ document, store, renderer }) {
   const render = () => { const state = store.getState(); if (state.lifecycle !== "Maneuver") { clearRoute(); view.plannedHeading = null; } view.maneuverPreview = state.lifecycle === "Maneuver" && view.selectedUnitId ? previewManeuverRoute(state, view.selectedUnitId, view.plannedRoute, { heading: view.plannedHeading, ramTargetId: view.selectedTargetId }) : null; renderer.render(state, view); };
   const transact = command => store.transact(command);
   renderer.canvas.addEventListener("click", event => {
-    const state = store.getState(); const rect = renderer.canvas.getBoundingClientRect(); const position = renderer.hexForPoint(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position));
-    if (unit) {
-      const active = state.units.find(candidate => candidate.id === state.activeUnitId);
-      if (state.lifecycle === "Attack" && unit.side !== active?.side) view.selectedTargetId = unit.id;
-      else if (state.lifecycle === "Maneuver" && active?.kind === "capital" && unit.kind === "capital" && unit.side !== active.side && view.selectedUnitId === active.id) {
-        const approaches = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }].map(direction => ({ q: unit.position.q + direction.q, r: unit.position.r + direction.r }));
-        const plan = approaches.map(destination => planMovement(state, active.id, destination)).find(candidate => candidate.valid);
-        view.selectedTargetId = unit.id; view.plannedPosition = plan?.steps.at(-1) ?? null; view.plannedRoute = plan?.steps ?? []; view.routeReason = plan ? null : "Нет допустимого маршрута для тарана";
-        if (!view.headingSelected && plan) view.plannedHeading = plan.finalHeading;
-      } else { view.selectedUnitId = unit.id; view.selectedTargetId = null; clearRoute(); view.plannedHeading = unit.kind === "capital" ? unit.heading : null; view.headingSelected = false; }
+    const state = store.getState(); const rect = renderer.canvas.getBoundingClientRect(); const position = renderer.hexForPoint(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position)); const object = state.contents.find(candidate => candidate.kind === "object" && candidate.size === "large" && same(candidate.position, position));
+    if (unit || object) {
+      const active = state.units.find(candidate => candidate.id === state.activeUnitId); const ramTarget = unit ?? object;
+      if (unit && state.lifecycle === "Attack" && unit.side !== active?.side) view.selectedTargetId = unit.id;
+      else if (state.lifecycle === "Maneuver" && active?.kind === "capital" && ((unit?.kind === "capital" && unit.side !== active.side) || object) && view.selectedUnitId === active.id) {
+        const plan = planRam(state, active, ramTarget);
+        view.selectedTargetId = ramTarget.id; view.plannedPosition = plan.valid ? plan.steps.at(-1) : null; view.plannedRoute = plan.valid ? plan.steps : []; view.routeReason = plan.valid ? null : "Нет допустимого маршрута для тарана";
+        if (!view.headingSelected && plan.valid) view.plannedHeading = plan.finalHeading;
+      } else if (unit) { view.selectedUnitId = unit.id; view.selectedTargetId = null; clearRoute(); view.plannedHeading = unit.kind === "capital" ? unit.heading : null; view.headingSelected = false; }
       return render();
     }
     if (view.selectedUnitId && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, view.selectedUnitId, position, 2));
@@ -30,7 +29,7 @@ export function createBattleController({ document, store, renderer }) {
   renderer.els.disengage.addEventListener("click", () => transact(current => disengage(current, view.selectedUnitId, { random: () => 0 })));
   renderer.els.ram.addEventListener("click", () => transact(current => {
     const attacker = current.units.find(unit => unit.id === current.activeUnitId);
-    const target = current.units.find(unit => unit.id === view.selectedTargetId);
+    const target = [...current.units, ...current.contents].find(item => item.id === view.selectedTargetId);
     if (!attacker || !target || !view.plannedRoute.length) return false;
     const result = ram(current, attacker, target, view.plannedRoute, { random: () => 0 });
     view.selectedTargetId = null; clearRoute();

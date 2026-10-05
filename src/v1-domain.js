@@ -376,9 +376,9 @@ export function canEnter(state, unit, position, { final = false, ramming = false
   return true;
 }
 
-export function moveAtomic(state, unitId, steps, { ramming = false, heading = null } = {}) {
+export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId = null, heading = null, causeEventId = null } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit?.position || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
+  if (!unit?.position || state.lifecycle !== "Maneuver" || (state.activeUnitId && state.activeUnitId !== unitId) || unit.hasActivated) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   if (heading !== null && unit.kind === "capital") {
     if (!Number.isInteger(heading) || heading < 0 || heading > 5) return { status: "blocked", moved: 0 };
@@ -395,16 +395,18 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
   for (const position of steps) {
     const contents = state.contents.filter(item => samePosition(item.position, position));
     const cost = contents.find(item => item.movementCost !== undefined)?.movementCost ?? 1;
-    const entry = recordEvent(state, "entry-attempt", { actorId: unitId, subjectIds: [unitId], position: { ...position }, cost });
+    const entry = recordEvent(state, "entry-attempt", { actorId: unitId, subjectIds: [unitId], causeEventId, position: { ...position }, cost });
     const stepHeading = unit.kind === "capital" ? headingForStep(unit.position, position) : null;
     const stepTurn = unit.kind === "capital" ? turnDistance(unit.heading, stepHeading) : 0;
-    if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming }) || (unit.kind === "capital" && (stepHeading < 0 || stepTurn > 1 || (unit.turnsSpent ?? 0) + stepTurn > (unit.maneuver ?? 0)))) break;
+    const occupant = unitAt(state, position, unit.id);
+    const targetEntry = Boolean(ramming && occupant?.id === ramTargetId && samePosition(position, steps.at(-1)));
+    if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming: targetEntry }) || (unit.kind === "capital" && (stepHeading < 0 || stepTurn > 1 || (unit.turnsSpent ?? 0) + stepTurn > (unit.maneuver ?? 0)))) break;
     unit.currentSpeed -= cost;
-    let causeEventId = entry.eventId;
-    if (unit.kind === "capital" && stepTurn) { changeHeading(state, unitId, stepHeading, { causeEventId: entry.eventId }); causeEventId = state.events.at(-1).eventId; }
+    let stepCauseEventId = entry.eventId;
+    if (unit.kind === "capital" && stepTurn) { changeHeading(state, unitId, stepHeading, { causeEventId: entry.eventId }); stepCauseEventId = state.events.at(-1).eventId; }
     unit.position = { ...position };
     moved += 1;
-    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed, heading: unit.heading ?? null });
+    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId: stepCauseEventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed, heading: unit.heading ?? null });
     lastMovementEventId = movement.eventId;
     for (const content of contents) {
       const effects = [...(content.onEnterEffects ?? []), ...((content.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: content.onEnterDamage }] : [])];
@@ -448,11 +450,19 @@ export function applyDamagePacket(state, target, packet = {}) {
   const damageEvent = recordEvent(state, "damage-packet", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId: packet.causeEventId ?? null, cause: packet.cause ?? "damage", before, after, layers });
   let causeEventId = damageEvent.eventId;
   if (unit.kind === "squadron" && after.stack < before.stack) causeEventId = recordEvent(state, "squadron-craft-lost", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, before: { stack: before.stack }, after: { stack: after.stack }, lost: before.stack - after.stack }).eventId;
-  if (destroyed) destroyUnit(state, unit, { causeEventId });
+  if (destroyed) destroyUnit(state, unit, { causeEventId, deferVictory: packet.deferVictory === true });
   return { amount: packet.amount - remaining, destroyed, layers };
 }
 
-export function destroyUnit(state, target, { causeEventId = null } = {}) {
+function finishIfVictorious(state, causeEventId = null) {
+  const remainingSides = new Set(state.units.map(candidate => candidate.side));
+  if (remainingSides.size === 1 && state.units.length) {
+    state.winner = [...remainingSides][0]; state.lifecycle = "Finished";
+    recordEvent(state, "victory", { causeEventId, after: { winner: state.winner } });
+  }
+}
+
+export function destroyUnit(state, target, { causeEventId = null, deferVictory = false } = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
   if (!unit || !state.units.includes(unit)) return { destroyed: false };
   const position = unit.position ? { ...unit.position } : null;
@@ -470,12 +480,8 @@ export function destroyUnit(state, target, { causeEventId = null } = {}) {
   state.interceptionLinks = (state.interceptionLinks ?? []).filter(link => !link.unitIds.includes(unit.id));
   state.units.forEach(candidate => { if (Array.isArray(candidate.engagedWith)) candidate.engagedWith = candidate.engagedWith.filter(id => id !== unit.id); });
   removedLinks.forEach(link => recordEvent(state, "interception-link-removed", { subjectIds: link.unitIds, causeEventId: destroyedEvent.eventId, creators: link.creators }));
-  const remainingSides = new Set(state.units.map(candidate => candidate.side));
-  if (remainingSides.size === 1 && state.units.length) {
-    state.winner = [...remainingSides][0]; state.lifecycle = "Finished";
-    recordEvent(state, "victory", { after: { winner: state.winner } });
-  }
-  return { destroyed: true, unitId: unit.id, winner: state.winner };
+  if (!deferVictory) finishIfVictorious(state, destroyedEvent.eventId);
+  return { destroyed: true, unitId: unit.id, winner: state.winner, eventId: destroyedEvent.eventId };
 }
 
 function roundCube({ x, y, z }) {
@@ -558,14 +564,14 @@ export function previewAttack(state, attacker, target, weapon = {}) {
   return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, effectiveAccuracy, hitBlocker, hitMain, miss, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, friendlyFire: Boolean(blocker && blocker.side === source?.side), canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && state.attackSpentBy !== source.id && arcAllows(source, victim, weapon)) };
 }
 
-function applyObjectDamage(state, object, amount, sourceId, cause = "ramming") {
+function applyObjectDamage(state, object, amount, sourceId, cause = "ramming", causeEventId = null) {
   const before = object.integrity ?? 0;
   object.integrity = Math.max(0, before - amount);
   const destroyed = object.integrity === 0;
-  recordEvent(state, "damage-packet", { actorId: sourceId, subjectIds: [object.id], cause, before: { integrity: before }, after: { integrity: object.integrity }, layers: [{ layer: "integrity", amount: before - object.integrity, remaining: Math.max(0, amount - before) }] });
+  const damageEvent = recordEvent(state, "damage-packet", { actorId: sourceId, subjectIds: [object.id], causeEventId, cause, before: { integrity: before }, after: { integrity: object.integrity }, layers: [{ layer: "integrity", amount: before - object.integrity, remaining: Math.max(0, amount - before) }] });
   if (destroyed) {
     state.contents = state.contents.filter(item => item !== object);
-    const destroyedEvent = recordEvent(state, "object-destroyed", { subjectIds: [object.id], position: { ...object.position }, after: { debris: true } });
+    const destroyedEvent = recordEvent(state, "object-destroyed", { subjectIds: [object.id], causeEventId: damageEvent.eventId, position: { ...object.position }, after: { debris: true } });
     const debris = { id: `debris-${object.id}-${state.sequence + 1}`, kind: "debris", type: "debrisField", cover: "debris", position: { ...object.position } };
     state.contents.push(debris);
     recordEvent(state, "debris-created", { subjectIds: [debris.id], causeEventId: destroyedEvent.eventId, position: { ...object.position } });
@@ -573,21 +579,57 @@ function applyObjectDamage(state, object, amount, sourceId, cause = "ramming") {
   return { amount: before - object.integrity, destroyed };
 }
 
-export function ram(state, attacker, target, steps, { random = Math.random } = {}) {
+function straightRun(stepHeadings) {
+  if (!stepHeadings.length) return 0;
+  let length = 1;
+  for (let index = stepHeadings.length - 1; index > 0 && stepHeadings[index] === stepHeadings[index - 1]; index -= 1) length += 1;
+  return length;
+}
+
+export function planRam(state, attacker, target) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? [...state.units, ...state.contents].find(item => item.id === target) : target;
-  if (!source || !victim || source.kind !== "capital" || !["capital", "object"].includes(victim.kind) || (victim.kind === "object" && victim.size !== "large") || source.side === victim.side) return { success: false, damage: 0 };
-  const route = moveAtomic(state, source.id, steps, { ramming: true });
-  if (route.moved !== steps.length || distance(source.position, victim.position) !== 1) return { success: false, damage: 0, moved: route.moved };
-  const directSteps = steps.length;
-  if (victim.position && samePosition(source.position, victim.position)) return { success: false, damage: 0, moved: route.moved };
-  const targetDamage = (source.mass ?? 0) * (1 + directSteps);
-  const attackerDamage = victim.mass ?? 0;
-  const targetResult = victim.kind === "capital" ? applyDamagePacket(state, victim, { amount: targetDamage, sourceId: source.id, cause: "ramming" }) : applyObjectDamage(state, victim, targetDamage, source.id);
-  if (state.units.includes(source)) { source.evasion = 0; applyDamagePacket(state, source, { amount: attackerDamage, sourceId: victim.id, cause: "ramming" }); }
+  if (!source?.position || !victim?.position || source.kind !== "capital" || !["capital", "object"].includes(victim.kind) || (victim.kind === "object" && victim.size !== "large") || source.side === victim.side) return { valid: false, steps: [], directSteps: 0 };
+  const speed = Math.max(0, source.currentSpeed ?? source.speed ?? 0), routes = [], queue = [{ position: source.position, heading: source.heading, cost: 0, turns: 0, steps: [], headings: [] }];
+  while (queue.length) {
+    const route = queue.shift();
+    if (distance(route.position, victim.position) === 1 && route.steps.length) routes.push(route);
+    for (let heading = 0; heading < movementDirections.length; heading += 1) {
+      const turn = turnDistance(route.heading, heading), direction = movementDirections[heading];
+      if (turn > 1 || (source.turnsSpent ?? 0) + route.turns + turn > (source.maneuver ?? 0)) continue;
+      const position = { q: route.position.q + direction.q, r: route.position.r + direction.r };
+      const content = state.contents.find(item => samePosition(item.position, position));
+      const cost = route.cost + (content?.movementCost ?? 1);
+      if (cost > speed || !canEnter(state, source, position, { final: true }) || route.steps.some(step => samePosition(step, position)) || samePosition(source.position, position)) continue;
+      queue.push({ position, heading, cost, turns: route.turns + turn, steps: [...route.steps, position], headings: [...route.headings, heading] });
+    }
+  }
+  const routeRisk = route => route.steps.reduce((total, position) => total + state.contents.filter(item => samePosition(item.position, position)).flatMap(item => [...(item.onEnterEffects ?? []), ...((item.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: item.onEnterDamage }] : [])]).reduce((sum, effect) => sum + (effect.type === "damage" ? effect.amount : 0), 0), 0);
+  routes.sort((a, b) => straightRun(b.headings) - straightRun(a.headings) || routeRisk(a) - routeRisk(b) || b.steps.length - a.steps.length || a.cost - b.cost || JSON.stringify(a.steps).localeCompare(JSON.stringify(b.steps)));
+  const route = routes[0];
+  return route ? { valid: true, steps: route.steps, directSteps: straightRun(route.headings), movementCost: route.cost, finalHeading: route.heading } : { valid: false, steps: [], directSteps: 0 };
+}
+
+export function ram(state, attacker, target, steps) {
+  const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
+  const victim = typeof target === "string" ? [...state.units, ...state.contents].find(item => item.id === target) : target;
+  const plan = planRam(state, source, victim);
+  if (!source || !victim || state.lifecycle !== "Maneuver" || state.activeUnitId !== source.id || state.attackSpentBy === source.id || !plan.valid || JSON.stringify(steps) !== JSON.stringify(plan.steps)) return { success: false, damage: 0 };
+  const declared = recordEvent(state, "ramming-declared", { actorId: source.id, subjectIds: [victim.id], route: steps.map(position => ({ ...position })), directSteps: plan.directSteps });
+  const route = moveAtomic(state, source.id, steps, { ramming: true, ramTargetId: victim.id, causeEventId: declared.eventId });
+  if (route.moved !== steps.length || !state.units.includes(source) || distance(source.position, victim.position) !== 1) {
+    recordEvent(state, "ramming-cancelled", { actorId: source.id, subjectIds: [victim.id], causeEventId: state.events.at(-1)?.eventId ?? declared.eventId, moved: route.moved });
+    return { success: false, damage: 0, moved: route.moved };
+  }
+  const targetDamage = (source.mass ?? 0) * (1 + plan.directSteps), attackerDamage = victim.mass ?? 0;
+  const impact = recordEvent(state, "ramming-impact", { actorId: source.id, subjectIds: [victim.id], causeEventId: state.events.at(-1)?.eventId ?? declared.eventId, targetDamage, attackerDamage, directSteps: plan.directSteps });
+  const targetResult = victim.kind === "capital" ? applyDamagePacket(state, victim, { amount: targetDamage, sourceId: source.id, cause: "ramming", causeEventId: impact.eventId, deferVictory: true }) : applyObjectDamage(state, victim, targetDamage, source.id, "ramming", impact.eventId);
+  source.evasion = 0;
+  const attackerResult = applyDamagePacket(state, source, { amount: attackerDamage, sourceId: victim.id, cause: "ramming", causeEventId: impact.eventId, deferVictory: true });
   state.attackSpentBy = source.id;
-  recordEvent(state, "ramming", { actorId: source.id, subjectIds: [victim.id], targetDamage, attackerDamage });
-  return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed };
+  const resolved = recordEvent(state, "ramming-resolved", { actorId: source.id, subjectIds: [victim.id], causeEventId: impact.eventId, targetDamage: targetResult.amount, attackerDamage: attackerResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed });
+  finishIfVictorious(state, resolved.eventId);
+  return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed };
 }
 
 export function resolveAttack(state, attacker, target, weapon = {}, { random = Math.random, causeEventId = null, cause = "attack" } = {}) {

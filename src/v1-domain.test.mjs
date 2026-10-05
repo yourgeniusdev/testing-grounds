@@ -18,6 +18,7 @@ import {
   resolveAttack,
   resolveOverwatch,
   planMovement,
+  planRam,
   changeHeading,
   supercoverLine
 } from "./v1-domain.js";
@@ -786,11 +787,13 @@ test("ramming applies mass damage and resets attacker evasion", () => {
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 3, evasion: 12, integrity: 10 },
     { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 2, integrity: 10 }
   ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
   const result = ram(state, "a", "b", [{ q: 1, r: 0 }]);
   assert.equal(result.success, true);
   assert.equal(state.units.find(unit => unit.id === "a").evasion, 0);
   assert.equal(state.units.find(unit => unit.id === "b").integrity, 4);
-  assert.ok(state.events.some(event => event.action === "ramming"));
+  assert.ok(state.events.some(event => event.action === "ramming-resolved"));
 });
 
 test("successful ramming consumes attack only for the current round", () => {
@@ -820,6 +823,8 @@ test("explicit ramming can enter an enemy capital hex", () => {
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 3, integrity: 10 },
     { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 1, integrity: 10 }
   ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
   assert.equal(ram(state, "a", "b", [{ q: 1, r: 0 }]).success, true);
 });
 
@@ -831,10 +836,72 @@ test("ramming destroys a large object through the damage lifecycle", () => {
   state.lifecycle = "Maneuver";
   state.activeUnitId = "a";
   const result = ram(state, "a", "station", [{ q: 1, r: 0 }]);
-  assert.deepEqual(result, { success: true, damage: 5, targetDestroyed: true });
+  assert.deepEqual(result, { success: true, damage: 5, targetDestroyed: true, attackerDestroyed: false });
   assert.equal(state.contents.some(item => item.id === "station"), false);
   assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 2));
-  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["damage-packet", "object-destroyed", "debris-created", "damage-packet", "ramming"]);
+  assert.deepEqual(state.events.slice(-7).map(event => event.action), ["ramming-impact", "damage-packet", "object-destroyed", "debris-created", "damage-packet", "ramming-resolved", "victory"]);
+  assert.equal(state.events.at(-1).causeEventId, state.events.at(-2).eventId);
+});
+
+test("ramming uses the maximum continuous straight run and applies mutual layered damage", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 0, maneuver: 2, currentSpeed: 3, mass: 2, shield: 1, armor: 1, integrity: 10, evasion: 20 },
+    { id: "b", side: "right", kind: "capital", position: { q: 4, r: 0 }, mass: 3, shield: 1, armor: 2, integrity: 10 }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
+  const plan = planRam(state, "a", "b");
+  assert.equal(plan.directSteps, 3);
+  assert.deepEqual(plan.steps, [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }]);
+  const result = ram(state, "a", "b", plan.steps);
+  assert.equal(result.success, true);
+  assert.deepEqual({ shield: state.units[1].shield, armor: state.units[1].armor, integrity: state.units[1].integrity }, { shield: 0, armor: 0, integrity: 5 });
+  assert.deepEqual({ shield: state.units[0].shield, armor: state.units[0].armor, integrity: state.units[0].integrity, evasion: state.units[0].evasion }, { shield: 0, armor: 0, integrity: 9, evasion: 0 });
+  const impact = state.events.find(event => event.action === "ramming-impact");
+  assert.equal(state.events.filter(event => event.action === "damage-packet").every(event => event.causeEventId === impact.eventId), true);
+});
+
+test("ramming route tie-break prefers the safer equally straight approach", () => {
+  const state = createBattle({
+    units: [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 0, maneuver: 2, currentSpeed: 2, mass: 2, integrity: 10 },
+      { id: "b", side: "right", kind: "capital", position: { q: 2, r: -1 }, mass: 1, integrity: 10 }
+    ],
+    contents: [{ id: "hazard", kind: "terrain", position: { q: 1, r: 0 }, onEnterDamage: 3 }]
+  });
+  const plan = planRam(state, "a", "b");
+  assert.equal(plan.steps.some(position => position.q === 1 && position.r === 0), false);
+  assert.deepEqual(plan.steps[0], { q: 1, r: -1 });
+});
+
+test("lethal onEnter cancels ramming before impact", () => {
+  const state = createBattle({
+    units: [
+      { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 0, maneuver: 0, currentSpeed: 1, mass: 3, integrity: 2 },
+      { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 2, integrity: 10 }
+    ],
+    contents: [{ id: "hazard", kind: "terrain", position: { q: 1, r: 0 }, onEnterDamage: 2 }]
+  });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
+  const result = ram(state, "a", "b", [{ q: 1, r: 0 }]);
+  assert.equal(result.success, false);
+  assert.equal(state.units.find(unit => unit.id === "b").integrity, 10);
+  assert.equal(state.events.some(event => event.action === "ramming-impact"), false);
+  assert.equal(state.events.at(-1).action, "ramming-cancelled");
+});
+
+test("ramming rejects a noncanonical route and an occupied route without side effects", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 0, maneuver: 2, currentSpeed: 3, mass: 2, integrity: 10 },
+    { id: "c", side: "right", kind: "capital", position: { q: 1, r: 0 }, mass: 1, integrity: 10 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, mass: 1, integrity: 10 }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
+  const snapshot = structuredClone(state);
+  assert.deepEqual(ram(state, "a", "b", [{ q: 1, r: 0 }, { q: 2, r: 0 }]), { success: false, damage: 0 });
+  assert.deepEqual(state, snapshot);
 });
 
 test("ramming rejects ineligible actors and targets without side effects", () => {
