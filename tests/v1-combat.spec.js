@@ -175,6 +175,30 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
   expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.length)).toBe(eventCount);
 });
 
+test("browser preview shows friendly-fire distribution without resolving a shot", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  const before = await page.evaluate(async () => {
+    const { store, controller } = await import("/src/v1-ui.js");
+    const state = store.getState();
+    store.replace({ ...state, lifecycle: "Attack", activeUnitId: "left-cap", contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, weapons: [{ id: "test-gun", accuracy: 80, damage: 2, shots: 2, maxRange: 5 }] } : unit.id === "left-squad" ? { ...unit, kind: "capital", size: "medium", position: { q: 1, r: 0 } } : unit.id === "right-cap" ? { ...unit, position: { q: 3, r: 0 } } : { ...unit, position: null }) });
+    controller.render();
+    return structuredClone(store.getState());
+  });
+  const canvas = page.locator("#battlefield");
+  const box = await canvas.boundingBox();
+  const targetPoint = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 3, r: 0 }));
+  await page.mouse.click(box.x + targetPoint.x, box.y + targetPoint.y);
+  await page.getByRole("button", { name: "test-gun" }).click();
+  await expect(page.locator("#weaponSummary")).toContainText("15% в цель");
+  await expect(page.locator("#weaponSummary")).toContainText("50% в left-squad");
+  await expect(page.locator("#weaponSummary")).toContainText("35% промах");
+  await expect(page.locator("#weaponSummary")).toContainText("friendly fire: left-squad");
+  expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.js")).store.getState()))).toEqual(before);
+});
+
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -190,7 +214,8 @@ test("browser renders selectable weapons and a complete salvo preview", async ({
   await page.mouse.click(box.x + targetPoint.x, box.y + targetPoint.y);
   await page.getByRole("button", { name: "lance" }).click();
   await expect(page.locator("#weaponSummary")).toContainText("1 выстр.");
-  await expect(page.locator("#weaponSummary")).toContainText("80% точность");
+  await expect(page.locator("#weaponSummary")).toContainText("80% в цель");
+  await expect(page.locator("#weaponSummary")).toContainText("20% промах");
   await expect(page.locator("#weaponSummary")).toContainText("3 урон/попадание");
   await expect(page.locator("#weaponSummary")).toContainText("3 макс. урон");
   await page.getByRole("button", { name: "Подтвердить залп" }).click();

@@ -18,8 +18,10 @@ export function getAttackPreview(state, attackerId, targetId, weaponIndex = 0) {
 export function formatAttackPreview(preview) {
   if (!preview) return "Выберите доступную цель";
   if (!preview.canAttack) return "Цель недоступна для этого оружия";
-  const parts = [`${preview.shots} выстр.`, `${preview.accuracy}% точность`, `${preview.damage} урон/попадание`, `${preview.totalDamage} макс. урон`];
+  const parts = [`${preview.shots} выстр.`, `${preview.hitMain}% в цель`];
+  if (preview.blockerId) parts.push(`${preview.hitBlocker}% в ${preview.blockerId}`, `${preview.miss}% промах`, `${preview.friendlyFire ? "friendly fire" : "перекрытие"}: ${preview.blockerId}`, "распределение первого выстрела");
+  else parts.push(`${preview.miss}% промах`);
+  parts.push(`${preview.damage} урон/попадание`, `${preview.totalDamage} макс. урон`);
   if (preview.cover) parts.push(`укрытие −${preview.cover}%`);
-  if (preview.blockerId) parts.push(`${preview.friendlyFire ? "friendly fire" : "перекрытие"} −${preview.blockerCover}%`);
   return parts.join(" · ");
 }
