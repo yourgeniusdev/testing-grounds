@@ -181,6 +181,7 @@ export function decide(state, decision = "continue") {
   if (decision === "wait" && !unit.hasWaited) { unit.hasWaited = true; state.queue = [...state.queue.filter(id => id !== unit.id), unit.id]; state.activeUnitId = state.queue.find(id => !state.units.find(candidate => candidate.id === id).hasActivated); recordEvent(state, "wait", { actorId: unit.id }); return true; }
   unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
   unit.turnsSpent = 0;
+  if (Object.hasOwn(unit, "stationaryTurnEvasion")) { unit.evasion = unit.stationaryTurnEvasion; delete unit.stationaryTurnEvasion; }
   state.lifecycle = "ActivationStart"; recordEvent(state, "activation-start", { actorId: unit.id }); progress(state); return true;
 }
 
@@ -197,48 +198,52 @@ export function movementDestinations(state, unitId) {
   const cells = [];
   for (let q = -range; q <= range; q += 1) for (let r = -range; r <= range; r += 1) {
     const position = { q: unit.position.q + q, r: unit.position.r + r };
-    if ((Math.abs(q) + Math.abs(r) + Math.abs(q + r)) / 2 <= range && canEnter(state, unit, position, { final: true })) cells.push(position);
+    if ((Math.abs(q) + Math.abs(r) + Math.abs(q + r)) / 2 <= range && canEnter(state, unit, position, { final: true }) && (unit.kind !== "capital" || planMovement(state, unitId, position).valid)) cells.push(position);
   }
   return cells;
 }
 
+const movementDirections = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
+const turnDistance = (from, to) => Math.min((to - from + 6) % 6, (from - to + 6) % 6);
+const headingForStep = (from, to) => movementDirections.findIndex(direction => from.q + direction.q === to.q && from.r + direction.r === to.r);
+
 export function planMovement(state, unitId, destination) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Нет исходной позиции" };
-  const steps = [];
-  let current = { ...unit.position };
-  let movementCost = 0;
-  const directions = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
-  while (!samePosition(current, destination) && steps.length < Math.max(0, unit.currentSpeed ?? unit.speed ?? 0)) {
-    const next = directions.map(direction => ({ q: current.q + direction.q, r: current.r + direction.r }))
-      .filter(position => distance(position, destination) < distance(current, destination))
-      .sort((a, b) => distance(a, destination) - distance(b, destination))[0];
-    if (!next) return { valid: false, steps, reason: "Маршрут не приближает к цели" };
-    const content = state.contents.find(item => samePosition(item.position, next));
-    const stepCost = content?.movementCost ?? 1;
-    if (movementCost + stepCost > (unit.currentSpeed ?? unit.speed ?? 0)) return { valid: false, steps, reason: "Недостаточно скорости для маршрута", movementCost };
-    if (!canEnter(state, unit, next, { final: samePosition(next, destination) })) {
-      const object = state.contents.find(item => samePosition(item.position, next) && item.kind === "object");
-      const occupant = unitAt(state, next, unit.id);
-      const reason = object ? `Маршрут заблокирован объектом: ${object.type ?? "препятствие"}`
-        : occupant ? `Гекс занят кораблём: ${occupant.name ?? occupant.id}`
-          : "Гекс недоступен для этого юнита";
-      return { valid: false, steps, reason };
+  const speed = Math.max(0, unit.currentSpeed ?? unit.speed ?? 0);
+  if (samePosition(unit.position, destination)) return { valid: true, steps: [], reason: null, movementCost: 0, turnsSpent: 0, finalHeading: unit.heading, stepHeadings: [] };
+  const start = { position: { ...unit.position }, heading: unit.heading, movementCost: 0, turnsSpent: 0, steps: [], stepHeadings: [] };
+  const queue = [start], seen = new Set([`${unit.position.q}:${unit.position.r}:${unit.heading}:${unit.turnsSpent ?? 0}:0`]);
+  while (queue.length) {
+    const route = queue.shift();
+    for (let heading = 0; heading < movementDirections.length; heading += 1) {
+      const turn = unit.kind === "capital" ? turnDistance(route.heading, heading) : 0;
+      if (unit.kind === "capital" && (turn > 1 || (unit.turnsSpent ?? 0) + route.turnsSpent + turn > (unit.maneuver ?? 0))) continue;
+      const direction = movementDirections[heading], position = { q: route.position.q + direction.q, r: route.position.r + direction.r };
+      const content = state.contents.find(item => samePosition(item.position, position));
+      const movementCost = route.movementCost + (content?.movementCost ?? 1);
+      if (movementCost > speed || !canEnter(state, unit, position, { final: samePosition(position, destination) })) continue;
+      const next = { position, heading: unit.kind === "capital" ? heading : route.heading, movementCost, turnsSpent: route.turnsSpent + turn, steps: [...route.steps, position], stepHeadings: [...route.stepHeadings, heading] };
+      if (samePosition(position, destination)) return { valid: true, steps: next.steps, reason: null, movementCost, turnsSpent: next.turnsSpent, finalHeading: next.heading, stepHeadings: next.stepHeadings };
+      const key = `${position.q}:${position.r}:${next.heading}:${next.turnsSpent}:${movementCost}`;
+      if (!seen.has(key)) { seen.add(key); queue.push(next); }
     }
-    steps.push(next); current = next; movementCost += stepCost;
   }
-  return samePosition(current, destination)
-    ? { valid: true, steps, reason: null, movementCost }
-    : { valid: false, steps, reason: "Цель вне доступной дальности", movementCost };
+  const liesOnShortestRoute = position => distance(unit.position, position) + distance(position, destination) === distance(unit.position, destination);
+  const object = state.contents.find(item => item.kind === "object" && liesOnShortestRoute(item.position));
+  const occupant = state.units.find(candidate => candidate.id !== unit.id && liesOnShortestRoute(candidate.position));
+  const reason = object ? `Маршрут заблокирован объектом: ${object.type ?? "препятствие"}` : occupant ? `Гекс занят кораблём: ${occupant.name ?? occupant.id}` : "Цель вне доступной дальности";
+  return { valid: false, steps: [], reason, movementCost: 0 };
 }
 
-export function changeHeading(state, unitId, heading) {
+export function changeHeading(state, unitId, heading, { causeEventId = null, stationary = false } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  const turnDistance = unit ? Math.min((heading - unit.heading + 6) % 6, (unit.heading - heading + 6) % 6) : 0;
-  if (!unit || unit.kind !== "capital" || !Number.isInteger(heading) || heading < 0 || heading > 5 || turnDistance > 1 || (unit.turnsSpent ?? 0) + turnDistance > (unit.maneuver ?? 0) || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId) return false;
+  const turn = unit ? turnDistance(unit.heading, heading) : 0;
+  if (!unit || unit.kind !== "capital" || !Number.isInteger(heading) || heading < 0 || heading > 5 || turn > 1 || (unit.turnsSpent ?? 0) + turn > (unit.maneuver ?? 0) || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId) return false;
+  if (turn === 0) return true;
   unit.heading = heading;
-  unit.turnsSpent = (unit.turnsSpent ?? 0) + turnDistance;
-  recordEvent(state, "heading-change", { actorId: unitId, subjectIds: [unitId], heading, turn: turnDistance });
+  unit.turnsSpent = (unit.turnsSpent ?? 0) + turn;
+  recordEvent(state, "heading-change", { actorId: unitId, subjectIds: [unitId], causeEventId, heading, turn, stationary });
   return true;
 }
 
@@ -255,19 +260,31 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
   if (!unit?.position || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   if (heading !== null && unit.kind === "capital") {
-    const turnDistance = Math.min((heading - unit.heading + 6) % 6, (unit.heading - heading + 6) % 6);
-    if (!Number.isInteger(heading) || heading < 0 || heading > 5 || turnDistance > 1 || (unit.turnsSpent ?? 0) + turnDistance > (unit.maneuver ?? 0)) return { status: "blocked", moved: 0 };
+    if (!Number.isInteger(heading) || heading < 0 || heading > 5) return { status: "blocked", moved: 0 };
+    let arrivalHeading = unit.heading, projectedTurns = unit.turnsSpent ?? 0, projectedPosition = unit.position;
+    for (const position of steps) {
+      const stepHeading = headingForStep(projectedPosition, position), stepTurn = turnDistance(arrivalHeading, stepHeading);
+      if (stepHeading < 0 || stepTurn > 1) return { status: "blocked", moved: 0 };
+      projectedTurns += stepTurn; arrivalHeading = stepHeading; projectedPosition = position;
+    }
+    const finalTurn = turnDistance(arrivalHeading, heading);
+    if (finalTurn > 1 || projectedTurns + finalTurn > (unit.maneuver ?? 0)) return { status: "blocked", moved: 0 };
   }
-  let moved = 0;
+  let moved = 0, lastMovementEventId = null;
   for (const position of steps) {
     const contents = state.contents.filter(item => samePosition(item.position, position));
     const cost = contents.find(item => item.movementCost !== undefined)?.movementCost ?? 1;
     const entry = recordEvent(state, "entry-attempt", { actorId: unitId, subjectIds: [unitId], position: { ...position }, cost });
-    if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming })) break;
+    const stepHeading = unit.kind === "capital" ? headingForStep(unit.position, position) : null;
+    const stepTurn = unit.kind === "capital" ? turnDistance(unit.heading, stepHeading) : 0;
+    if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming }) || (unit.kind === "capital" && (stepHeading < 0 || stepTurn > 1 || (unit.turnsSpent ?? 0) + stepTurn > (unit.maneuver ?? 0)))) break;
     unit.currentSpeed -= cost;
+    let causeEventId = entry.eventId;
+    if (unit.kind === "capital" && stepTurn) { changeHeading(state, unitId, stepHeading, { causeEventId: entry.eventId }); causeEventId = state.events.at(-1).eventId; }
     unit.position = { ...position };
     moved += 1;
-    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId: entry.eventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed });
+    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed, heading: unit.heading ?? null });
+    lastMovementEventId = movement.eventId;
     for (const content of contents.filter(item => (item.onEnterDamage ?? 0) > 0)) {
       const onEnter = recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unitId], causeEventId: movement.eventId, position: { ...position }, effect: "damage", amount: content.onEnterDamage });
       applyDamagePacket(state, unit, { amount: content.onEnterDamage, sourceId: content.id, cause: "onEnter", causeEventId: onEnter.eventId });
@@ -278,7 +295,11 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
     if (!state.units.includes(unit)) break;
     refreshInterception(state);
   }
-  if (moved === steps.length && state.units.includes(unit) && heading !== null && unit.kind === "capital") changeHeading(state, unitId, heading);
+  if (moved === steps.length && state.units.includes(unit) && heading !== null && unit.kind === "capital") {
+    const stationary = moved === 0;
+    const beforeHeading = unit.heading;
+    if (changeHeading(state, unitId, heading, { causeEventId: lastMovementEventId, stationary }) && stationary && beforeHeading !== heading) { unit.stationaryTurnEvasion = unit.evasion; unit.evasion = 0; }
+  }
   return { status: moved === steps.length && state.units.includes(unit) ? "moved" : "blocked", moved };
 }
 
