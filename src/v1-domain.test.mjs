@@ -112,7 +112,8 @@ test("movement collision boundaries reject occupied cells and teleports", () => 
   const events = state.events.length;
   assert.deepEqual(moveAtomic(state, "l-cap", [{ q: 2, r: 0 }]), { status: "blocked", moved: 0 });
   assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 0, r: 0 });
-  assert.equal(state.events.length, events);
+  assert.equal(state.events.length, events + 1);
+  assert.equal(state.events.at(-1).action, "entry-attempt");
   state.units.push({ id: "friendly", side: "left", kind: "squadron", position: { q: 1, r: 0 }, integrity: 1 });
   assert.deepEqual(moveAtomic(state, "l-cap", [{ q: 1, r: 0 }]), { status: "blocked", moved: 0 });
 });
@@ -174,9 +175,9 @@ test("atomic movement spends speed before entry and stops before an unaffordable
   assert.deepEqual(result, { status: "blocked", moved: 1 });
   assert.equal(unit.currentSpeed, 0);
   assert.deepEqual(unit.position, { q: 1, r: 0 });
-  assert.equal(state.events.at(-1).action, "movement-step");
-  assert.equal(state.events.at(-1).cost, 1);
-  assert.equal(state.events.at(-1).remainingSpeed, 0);
+  assert.deepEqual(state.events.slice(-3).map(event => event.action), ["entry-attempt", "movement-step", "entry-attempt"]);
+  assert.equal(state.events.at(-2).cost, 1);
+  assert.equal(state.events.at(-2).remainingSpeed, 0);
 });
 
 test("heading changes are limited to one turn and maneuver budget", () => {
@@ -195,10 +196,32 @@ test("heading changes are limited to one turn and maneuver budget", () => {
   assert.equal(unit.turnsSpent, 1);
 });
 
-test("lethal onEnter damage ends the route after entry and creates debris", () => {
-  const state = createBattle({ bounds: { minCol: 0, maxCol: 4, minRow: 0, maxRow: 1 }, units: [
+test("nonlethal and repeated onEnter damage resolves once per entry without stopping movement", () => {
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 }, units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 5, currentSpeed: 3 },
+    { id: "enemy", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ], contents: [
+    { id: "nebula", kind: "terrain", position: { q: 1, r: 0 } },
+    { id: "mine", kind: "hazard", position: { q: 1, r: 0 }, onEnterDamage: 1 }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "fighter";
+  const result = moveAtomic(state, "fighter", [{ q: 1, r: 0 }, { q: 1, r: 1 }, { q: 1, r: 0 }]);
+  const fighter = state.units.find(unit => unit.id === "fighter");
+  assert.deepEqual(result, { status: "moved", moved: 3 });
+  assert.deepEqual(fighter.position, { q: 1, r: 0 });
+  assert.equal(fighter.integrity, 3);
+  assert.equal(state.events.filter(event => event.action === "on-enter").length, 2);
+  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "on-enter", "damage-packet", "entry-attempt", "movement-step", "entry-attempt", "movement-step", "on-enter", "damage-packet"]);
+  for (const movement of state.events.filter(event => event.action === "movement-step")) assert.equal(state.events.find(event => event.eventId === movement.causeEventId)?.action, "entry-attempt");
+  for (const event of state.events.filter(candidate => candidate.action === "on-enter")) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "movement-step");
+  for (const event of state.events.filter(candidate => candidate.action === "damage-packet")) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "on-enter");
+});
+
+test("lethal onEnter damage ends the route before reactions and creates debris", () => {
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 4, minRow: 0, maxRow: 1 }, round: 1, units: [
     { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 2, currentSpeed: 3 },
-    { id: "enemy", side: "right", kind: "capital", position: { q: 4, r: 0 }, integrity: 10 }
+    { id: "enemy", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10, weapons: [{ id: "aa", ready: true, ammo: 1, maxRange: 3, damage: 1, accuracy: 100, overwatchEligible: true, overwatch: true, overwatchRound: 1 }] }
   ], contents: [{ id: "mine", kind: "hazard", position: { q: 1, r: 0 }, onEnterDamage: 2 }] });
   state.lifecycle = "Maneuver";
   state.activeUnitId = "fighter";
@@ -206,7 +229,14 @@ test("lethal onEnter damage ends the route after entry and creates debris", () =
   assert.deepEqual(result, { status: "blocked", moved: 1 });
   assert.equal(state.units.some(unit => unit.id === "fighter"), false);
   assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 1));
-  assert.deepEqual(state.events.map(event => event.action), ["movement-step", "damage-packet", "unit-destroyed", "debris-created", "victory"]);
+  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "on-enter", "damage-packet", "unit-destroyed", "debris-created", "victory"]);
+  const [entry, movement, onEnter, damage, destroyed, debris] = state.events;
+  assert.equal(movement.causeEventId, entry.eventId);
+  assert.equal(onEnter.causeEventId, movement.eventId);
+  assert.equal(damage.causeEventId, onEnter.eventId);
+  assert.equal(destroyed.causeEventId, damage.eventId);
+  assert.equal(debris.causeEventId, destroyed.eventId);
+  assert.equal(state.events.some(event => event.action.startsWith("overwatch-")), false);
 });
 
 test("movement planning rejects blocked route without mutating state", () => {

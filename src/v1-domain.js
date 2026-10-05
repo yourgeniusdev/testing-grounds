@@ -260,16 +260,21 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
   }
   let moved = 0;
   for (const position of steps) {
-    const content = state.contents.find(item => samePosition(item.position, position));
-    const cost = content?.movementCost ?? 1;
+    const contents = state.contents.filter(item => samePosition(item.position, position));
+    const cost = contents.find(item => item.movementCost !== undefined)?.movementCost ?? 1;
+    const entry = recordEvent(state, "entry-attempt", { actorId: unitId, subjectIds: [unitId], position: { ...position }, cost });
     if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming })) break;
     unit.currentSpeed -= cost;
     unit.position = { ...position };
     moved += 1;
-    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position }, cost, remainingSpeed: unit.currentSpeed });
-    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId });
+    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId: entry.eventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed });
+    for (const content of contents.filter(item => (item.onEnterDamage ?? 0) > 0)) {
+      const onEnter = recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unitId], causeEventId: movement.eventId, position: { ...position }, effect: "damage", amount: content.onEnterDamage });
+      applyDamagePacket(state, unit, { amount: content.onEnterDamage, sourceId: content.id, cause: "onEnter", causeEventId: onEnter.eventId });
+      if (!state.units.includes(unit)) break;
+    }
     if (!state.units.includes(unit)) break;
-    if ((content?.onEnterDamage ?? 0) > 0) applyDamagePacket(state, unit, { amount: content.onEnterDamage, sourceId: content.id, cause: "onEnter" });
+    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId });
     if (!state.units.includes(unit)) break;
     refreshInterception(state);
   }
@@ -294,7 +299,7 @@ export function applyDamagePacket(state, target, packet = {}) {
   if (unit.kind === "squadron" && unit.unitHealth) unit.stack = Math.min(before.stack, Math.max(0, Math.ceil((unit.integrity ?? 0) / unit.unitHealth)));
   const after = { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0, ...(unit.kind === "squadron" ? { stack: unit.stack ?? 0 } : {}) };
   const destroyed = (unit.integrity ?? 0) <= 0;
-  const damageEvent = recordEvent(state, "damage-packet", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], cause: packet.cause ?? "damage", before, after, layers });
+  const damageEvent = recordEvent(state, "damage-packet", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId: packet.causeEventId ?? null, cause: packet.cause ?? "damage", before, after, layers });
   let causeEventId = damageEvent.eventId;
   if (unit.kind === "squadron" && after.stack < before.stack) causeEventId = recordEvent(state, "squadron-craft-lost", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, before: { stack: before.stack }, after: { stack: after.stack }, lost: before.stack - after.stack }).eventId;
   if (destroyed) destroyUnit(state, unit, { causeEventId });

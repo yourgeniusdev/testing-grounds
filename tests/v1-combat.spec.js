@@ -92,9 +92,11 @@ test("browser blocks routes through obstacles and records final position", async
   await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
   await page.locator("#headingButtons [data-heading='1']").click();
   await page.locator("#confirmMoveButton").click();
-  const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-3).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
+  const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-5).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
   expect(events).toEqual([
+    { action: "entry-attempt", position: { q: 0, r: 1 }, heading: undefined },
     { action: "movement-step", position: { q: 0, r: 1 }, heading: undefined },
+    { action: "entry-attempt", position: { q: 0, r: 2 }, heading: undefined },
     { action: "movement-step", position: { q: 0, r: 2 }, heading: undefined },
     { action: "heading-change", position: undefined, heading: 1 }
   ]);
