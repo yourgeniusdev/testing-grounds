@@ -47,10 +47,10 @@ test("capital heading changes only when the planned maneuver is confirmed", asyn
     store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit) });
   });
   await page.evaluate(async () => { const { controller, renderer } = await import("/src/v1-ui.js"); controller.view.selectedUnitId = "left-cap"; controller.view.plannedRoute = [{ q: 0, r: 1 }]; controller.view.plannedPosition = { q: 0, r: 1 }; controller.render(); });
-  await page.locator("#headingButtons [data-heading='2']").dispatchEvent("click");
+  await page.locator("#headingButtons [data-heading='1']").dispatchEvent("click");
   expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(0);
   await page.locator("#confirmMoveButton").click();
-  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(2);
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(1);
   await expect(page.locator("#combatLog")).toContainText("heading-change");
 });
 
@@ -90,13 +90,13 @@ test("browser blocks routes through obstacles and records final position", async
   const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 0, r: 2 }));
   await page.mouse.click(box.x + destination.x, box.y + destination.y);
   await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
-  await page.locator("#headingButtons [data-heading='2']").click();
+  await page.locator("#headingButtons [data-heading='1']").click();
   await page.locator("#confirmMoveButton").click();
   const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-3).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
   expect(events).toEqual([
     { action: "movement-step", position: { q: 0, r: 1 }, heading: undefined },
     { action: "movement-step", position: { q: 0, r: 2 }, heading: undefined },
-    { action: "heading-change", position: undefined, heading: 2 }
+    { action: "heading-change", position: undefined, heading: 1 }
   ]);
   expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 0, r: 2 });
 });

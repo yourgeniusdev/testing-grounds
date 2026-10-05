@@ -6,7 +6,7 @@ export const LIFECYCLE = Object.freeze([
 const sides = ["left", "right"];
 
 export function createBattle({ id = "battle-1", units = [], bounds = null, contents = [] } = {}) {
-  const normalized = units.map(unit => ({ ...unit, side: unit.side ?? unit.sideId, position: unit.position ? { ...unit.position } : null, hasActivated: false, hasWaited: false }));
+  const normalized = units.map(unit => ({ ...unit, side: unit.side ?? unit.sideId, position: unit.position ? { ...unit.position } : null, currentSpeed: unit.currentSpeed ?? unit.speed ?? 1, hasActivated: false, hasWaited: false }));
   const state = {
     id, units: normalized, contents: contents.map(item => ({ ...item, position: { ...item.position } })), bounds,
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
@@ -47,10 +47,10 @@ export function disengage(state, unitId, { random = Math.random } = {}) {
   if (!unit || unit.kind !== "squadron" || !(unit.engagedWith?.length)) return { success: false, chance: 0, cost: 0 };
   const enemies = unit.engagedWith.map(id => state.units.find(candidate => candidate.id === id)).filter(Boolean);
   const cost = enemies.length;
-  if ((unit.speed ?? 0) < cost) return { success: false, chance: 0, cost };
+  if ((unit.currentSpeed ?? unit.speed ?? 0) < cost) return { success: false, chance: 0, cost };
   const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1))[0];
   const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (closest?.stack ?? 1) - 1) * 10 - Math.max(0, enemies.length - 1) * 10 + (unit.friendlyLinked ?? 0) * 10));
-  unit.speed -= cost;
+  unit.currentSpeed = (unit.currentSpeed ?? unit.speed ?? 0) - cost;
   unit.evasionPenalty = (unit.evasionPenalty ?? 0) - 10;
   const roll = random() * 100;
   const success = roll < chance;
@@ -179,6 +179,8 @@ export function decide(state, decision = "continue") {
   if (state.lifecycle !== "WaitDecision") return false;
   const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (!unit) return false;
   if (decision === "wait" && !unit.hasWaited) { unit.hasWaited = true; state.queue = [...state.queue.filter(id => id !== unit.id), unit.id]; state.activeUnitId = state.queue.find(id => !state.units.find(candidate => candidate.id === id).hasActivated); recordEvent(state, "wait", { actorId: unit.id }); return true; }
+  unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
+  unit.turnsSpent = 0;
   state.lifecycle = "ActivationStart"; recordEvent(state, "activation-start", { actorId: unit.id }); progress(state); return true;
 }
 
@@ -191,7 +193,7 @@ export function advanceActivation(state, stage) {
 export function movementDestinations(state, unitId) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit?.position) return [];
-  const range = Math.max(1, unit.speed ?? 1);
+  const range = Math.max(0, unit.currentSpeed ?? unit.speed ?? 0);
   const cells = [];
   for (let q = -range; q <= range; q += 1) for (let r = -range; r <= range; r += 1) {
     const position = { q: unit.position.q + q, r: unit.position.r + r };
@@ -205,12 +207,16 @@ export function planMovement(state, unitId, destination) {
   if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Нет исходной позиции" };
   const steps = [];
   let current = { ...unit.position };
+  let movementCost = 0;
   const directions = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
-  while (!samePosition(current, destination) && steps.length < Math.max(1, unit.speed ?? 1)) {
+  while (!samePosition(current, destination) && steps.length < Math.max(0, unit.currentSpeed ?? unit.speed ?? 0)) {
     const next = directions.map(direction => ({ q: current.q + direction.q, r: current.r + direction.r }))
       .filter(position => distance(position, destination) < distance(current, destination))
       .sort((a, b) => distance(a, destination) - distance(b, destination))[0];
     if (!next) return { valid: false, steps, reason: "Маршрут не приближает к цели" };
+    const content = state.contents.find(item => samePosition(item.position, next));
+    const stepCost = content?.movementCost ?? 1;
+    if (movementCost + stepCost > (unit.currentSpeed ?? unit.speed ?? 0)) return { valid: false, steps, reason: "Недостаточно скорости для маршрута", movementCost };
     if (!canEnter(state, unit, next, { final: samePosition(next, destination) })) {
       const object = state.contents.find(item => samePosition(item.position, next) && item.kind === "object");
       const occupant = unitAt(state, next, unit.id);
@@ -219,18 +225,20 @@ export function planMovement(state, unitId, destination) {
           : "Гекс недоступен для этого юнита";
       return { valid: false, steps, reason };
     }
-    steps.push(next); current = next;
+    steps.push(next); current = next; movementCost += stepCost;
   }
   return samePosition(current, destination)
-    ? { valid: true, steps, reason: null }
-    : { valid: false, steps, reason: "Цель вне доступной дальности" };
+    ? { valid: true, steps, reason: null, movementCost }
+    : { valid: false, steps, reason: "Цель вне доступной дальности", movementCost };
 }
 
 export function changeHeading(state, unitId, heading) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit || unit.kind !== "capital" || !Number.isInteger(heading) || heading < 0 || heading > 5 || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId) return false;
+  const turnDistance = unit ? Math.min((heading - unit.heading + 6) % 6, (unit.heading - heading + 6) % 6) : 0;
+  if (!unit || unit.kind !== "capital" || !Number.isInteger(heading) || heading < 0 || heading > 5 || turnDistance > 1 || (unit.turnsSpent ?? 0) + turnDistance > (unit.maneuver ?? 0) || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId) return false;
   unit.heading = heading;
-  recordEvent(state, "heading-change", { actorId: unitId, subjectIds: [unitId], heading });
+  unit.turnsSpent = (unit.turnsSpent ?? 0) + turnDistance;
+  recordEvent(state, "heading-change", { actorId: unitId, subjectIds: [unitId], heading, turn: turnDistance });
   return true;
 }
 
@@ -246,18 +254,27 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit?.position || state.lifecycle === "Finished" || (!ramming && state.lifecycle !== "Maneuver") || (!ramming && state.activeUnitId && state.activeUnitId !== unitId) || (!ramming && unit.hasActivated)) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
+  if (heading !== null && unit.kind === "capital") {
+    const turnDistance = Math.min((heading - unit.heading + 6) % 6, (unit.heading - heading + 6) % 6);
+    if (!Number.isInteger(heading) || heading < 0 || heading > 5 || turnDistance > 1 || (unit.turnsSpent ?? 0) + turnDistance > (unit.maneuver ?? 0)) return { status: "blocked", moved: 0 };
+  }
   let moved = 0;
   for (const position of steps) {
-    if (distance(unit.position, position) !== 1 || !canEnter(state, unit, position, { final: position === steps.at(-1), ramming })) break;
+    const content = state.contents.find(item => samePosition(item.position, position));
+    const cost = content?.movementCost ?? 1;
+    if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming })) break;
+    unit.currentSpeed -= cost;
     unit.position = { ...position };
     moved += 1;
-    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position } });
+    const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], position: { ...position }, cost, remainingSpeed: unit.currentSpeed });
     if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId });
+    if (!state.units.includes(unit)) break;
+    if ((content?.onEnterDamage ?? 0) > 0) applyDamagePacket(state, unit, { amount: content.onEnterDamage, sourceId: content.id, cause: "onEnter" });
     if (!state.units.includes(unit)) break;
     refreshInterception(state);
   }
   if (moved === steps.length && state.units.includes(unit) && heading !== null && unit.kind === "capital") changeHeading(state, unitId, heading);
-  return { status: moved === steps.length ? "moved" : "blocked", moved };
+  return { status: moved === steps.length && state.units.includes(unit) ? "moved" : "blocked", moved };
 }
 
 export function applyDamagePacket(state, target, packet = {}) {

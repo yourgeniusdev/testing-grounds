@@ -98,6 +98,7 @@ test("atomic movement enforces active maneuver ownership", () => {
   state.activeUnitId = "r-cap";
   assert.equal(moveAtomic(state, "l-cap", [{ q: 1, r: 0 }]).moved, 0);
   state.activeUnitId = "l-cap";
+  state.units.find(unit => unit.id === "l-cap").currentSpeed = 3;
   const result = moveAtomic(state, "l-cap", [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }]);
   assert.equal(result.status, "blocked");
   assert.equal(result.moved, 2);
@@ -118,7 +119,7 @@ test("movement collision boundaries reject occupied cells and teleports", () => 
 
 test("squadrons may pass through objects but may not stop on them", () => {
   const state = deployedBattle();
-  state.units.push({ id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 1 }, integrity: 2 });
+  state.units.push({ id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 1 }, integrity: 2, currentSpeed: 2 });
   state.contents.push({ id: "rock", kind: "object", position: { q: 1, r: 1 } });
   state.lifecycle = "Maneuver";
   state.activeUnitId = "fighter";
@@ -142,6 +143,7 @@ test("movement planning names occupied ships", () => {
   state.lifecycle = "Maneuver";
   state.activeUnitId = "l-cap";
   state.units.find(unit => unit.id === "l-cap").speed = 8;
+  state.units.find(unit => unit.id === "l-cap").currentSpeed = 8;
   const plan = planMovement(state, "l-cap", { q: 7, r: 0 });
   assert.equal(plan.valid, false);
   assert.match(plan.reason, /кораблём/i);
@@ -152,12 +154,59 @@ test("movement planning returns deterministic route and heading changes during m
   state.lifecycle = "Maneuver";
   state.activeUnitId = "l-cap";
   state.units.find(unit => unit.id === "l-cap").speed = 2;
+  state.units.find(unit => unit.id === "l-cap").currentSpeed = 2;
   const plan = planMovement(state, "l-cap", { q: 2, r: 0 });
   assert.equal(plan.valid, true);
   assert.deepEqual(plan.steps, [{ q: 1, r: 0 }, { q: 2, r: 0 }]);
+  state.units.find(unit => unit.id === "l-cap").maneuver = 1;
   assert.equal(changeHeading(state, "l-cap", 3), true);
   assert.equal(state.units.find(unit => unit.id === "l-cap").heading, 3);
   assert.equal(state.events.at(-1).action, "heading-change");
+});
+
+test("atomic movement spends speed before entry and stops before an unaffordable step", () => {
+  const state = deployedBattle();
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "l-cap";
+  const unit = state.units.find(candidate => candidate.id === "l-cap");
+  unit.currentSpeed = 1;
+  const result = moveAtomic(state, unit.id, [{ q: 1, r: 0 }, { q: 2, r: 0 }]);
+  assert.deepEqual(result, { status: "blocked", moved: 1 });
+  assert.equal(unit.currentSpeed, 0);
+  assert.deepEqual(unit.position, { q: 1, r: 0 });
+  assert.equal(state.events.at(-1).action, "movement-step");
+  assert.equal(state.events.at(-1).cost, 1);
+  assert.equal(state.events.at(-1).remainingSpeed, 0);
+});
+
+test("heading changes are limited to one turn and maneuver budget", () => {
+  const state = deployedBattle();
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "l-cap";
+  const unit = state.units.find(candidate => candidate.id === "l-cap");
+  unit.maneuver = 1;
+  const eventCount = state.events.length;
+  assert.equal(changeHeading(state, unit.id, 4), false);
+  assert.equal(unit.heading, 2);
+  assert.equal(state.events.length, eventCount);
+  assert.equal(changeHeading(state, unit.id, 3), true);
+  assert.equal(changeHeading(state, unit.id, 4), false);
+  assert.equal(unit.heading, 3);
+  assert.equal(unit.turnsSpent, 1);
+});
+
+test("lethal onEnter damage ends the route after entry and creates debris", () => {
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 4, minRow: 0, maxRow: 1 }, units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 2, currentSpeed: 3 },
+    { id: "enemy", side: "right", kind: "capital", position: { q: 4, r: 0 }, integrity: 10 }
+  ], contents: [{ id: "mine", kind: "hazard", position: { q: 1, r: 0 }, onEnterDamage: 2 }] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "fighter";
+  const result = moveAtomic(state, "fighter", [{ q: 1, r: 0 }, { q: 2, r: 0 }]);
+  assert.deepEqual(result, { status: "blocked", moved: 1 });
+  assert.equal(state.units.some(unit => unit.id === "fighter"), false);
+  assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 1));
+  assert.deepEqual(state.events.map(event => event.action), ["movement-step", "damage-packet", "unit-destroyed", "debris-created", "victory"]);
 });
 
 test("movement planning rejects blocked route without mutating state", () => {
@@ -252,7 +301,8 @@ test("failed disengagement spends speed, preserves links, ends maneuver, and pre
   const eventCount = state.events.length;
   const result = disengage(state, "a", { random: () => 0.6 });
   assert.deepEqual(result, { success: false, chance: 60, cost: 1 });
-  assert.equal(state.units[0].speed, 2);
+  assert.equal(state.units[0].currentSpeed, 2);
+  assert.equal(state.units[0].speed, 3);
   assert.equal(state.units[0].evasionPenalty, -10);
   assert.deepEqual(state.units[0].engagedWith, ["b"]);
   assert.deepEqual(state.units[1].engagedWith, ["a"]);
