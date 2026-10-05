@@ -152,7 +152,12 @@ function overwatchCandidates(state, target) {
     if (slot.overwatch && slot.overwatchRound === state.round && slotCanOverwatch(state, owner, slot, target) && !(slot.overwatchTargets ?? []).includes(target.id))
       candidates.push({ owner, slot, index, weapon: slot.weapon ?? slot });
   }));
-  return candidates.sort((a, b) => (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0) || `${a.owner.id}:${a.index}`.localeCompare(`${b.owner.id}:${b.index}`));
+  return candidates.sort((a, b) => {
+    const initiativeOrder = (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0);
+    if (initiativeOrder) return initiativeOrder;
+    if (a.owner === b.owner) return a.index - b.index;
+    return 0;
+  });
 }
 
 export function resolveOverwatch(state, targetId, { random = Math.random, causeEventId = null } = {}) {
@@ -161,15 +166,15 @@ export function resolveOverwatch(state, targetId, { random = Math.random, causeE
   if (!target || target.kind !== "squadron") return [];
   const results = [];
   for (const candidate of candidates) {
-    if (!state.units.includes(target) || !state.units.includes(candidate.owner) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) break;
-    const { owner, slot } = candidate, weapon = slot.weapon ?? slot;
+    if (!state.units.includes(target) || target.kind !== "squadron") break;
+    if (!state.units.includes(candidate.owner) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) continue;
+    const { owner, slot, index } = candidate, weapon = slot.weapon ?? slot;
+    const slotId = `${owner.id}:${slot.id ?? index}`;
     slot.ready = false; slot.overwatch = false; slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
-    const declared = recordEvent(state, "overwatch-declared", { actorId: owner.id, subjectIds: [target.id], causeEventId });
-    const preview = previewAttack(state, owner, target, weapon);
-    const roll = random() * 100;
-    recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, random: { roll, accuracy: preview.accuracy } });
-    const result = roll < preview.accuracy ? resolveAttack(state, owner, target, weapon, { random: () => 0 }) : { damage: 0, hits: 0, destroyed: false };
-    results.push({ ownerId: owner.id, targetId: target.id, roll, ...result });
+    const declared = recordEvent(state, "overwatch-declared", { actorId: owner.id, subjectIds: [target.id], causeEventId, slotId });
+    const launched = recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, slotId });
+    const result = resolveAttack(state, owner, target, weapon, { random, causeEventId: launched.eventId, cause: "overwatch" });
+    results.push({ ownerId: owner.id, targetId: target.id, slotId, ...result });
   }
   return results;
 }
@@ -181,7 +186,10 @@ function clearOverwatch(state) {
 export function progress(state) {
   if (state.lifecycle === "Finished") return state.lifecycle;
   if (state.lifecycle === "RoundStart") {
-    state.round += 1; state.attackSpentBy = null; clearOverwatch(state); state.units.forEach(unit => { unit.hasActivated = false; unit.hasWaited = false; });
+    state.round += 1; state.attackSpentBy = null; state.units.forEach(unit => {
+      unit.hasActivated = false; unit.hasWaited = false;
+      weaponSlots(unit).forEach(slot => { if (slot.destroyed !== true) slot.ready = true; });
+    });
     state.queue = state.units.filter(unit => unit.position).slice().sort((a, b) => (b.initiative ?? 0) - (a.initiative ?? 0)).map(unit => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
   } else if (state.lifecycle === "ActivationStart") {
@@ -192,7 +200,7 @@ export function progress(state) {
     const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
     if (next) { state.activeUnitId = next; state.lifecycle = "WaitDecision"; }
     else state.lifecycle = "RoundEnd";
-  } else if (state.lifecycle === "RoundEnd") state.lifecycle = "RoundStart";
+  } else if (state.lifecycle === "RoundEnd") { clearOverwatch(state); state.lifecycle = "RoundStart"; }
   recordEvent(state, "lifecycle-progress", { after: state.lifecycle });
   return state.lifecycle;
 }
@@ -540,7 +548,7 @@ export function ram(state, attacker, target, steps, { random = Math.random } = {
   return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed };
 }
 
-export function resolveAttack(state, attacker, target, weapon = {}, { random = Math.random } = {}) {
+export function resolveAttack(state, attacker, target, weapon = {}, { random = Math.random, causeEventId = null, cause = "attack" } = {}) {
   const preview = previewAttack(state, attacker, target, weapon);
   if (!preview.canAttack || state.lifecycle === "Finished" || state.attackSpentBy === preview.attackerId) return { ...preview, hits: 0, damage: 0 };
   let hits = 0, damage = 0;
@@ -551,11 +559,12 @@ export function resolveAttack(state, attacker, target, weapon = {}, { random = M
     const blockerHit = Boolean(current.blockerId && roll < current.hitBlocker);
     const mainHit = !blockerHit && roll < current.hitBlocker + current.hitMain;
     const hitId = blockerHit ? current.blockerId : mainHit ? current.targetId : null;
-    recordEvent(state, "attack-shot", { actorId: current.attackerId, subjectIds: [current.targetId], random: { roll, hitBlocker: current.hitBlocker, hitMain: current.hitMain, miss: current.miss }, after: { hitId } });
+    const shotEvent = recordEvent(state, "attack-shot", { actorId: current.attackerId, subjectIds: [current.targetId], causeEventId, random: { roll, hitBlocker: current.hitBlocker, hitMain: current.hitMain, miss: current.miss }, after: { hitId } });
     if (!hitId) continue;
     const unit = state.units.find(candidate => candidate.id === hitId);
     const object = state.contents.find(candidate => candidate.id === hitId);
-    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, cause: blockerHit && current.friendlyFire ? "friendly-fire" : "attack" }) : applyObjectDamage(state, object, current.damage, current.attackerId, blockerHit && current.friendlyFire ? "friendly-fire" : "attack");
+    const damageCause = blockerHit && current.friendlyFire ? "friendly-fire" : cause;
+    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, causeEventId: shotEvent.eventId, cause: damageCause }) : applyObjectDamage(state, object, current.damage, current.attackerId, damageCause);
     hits += 1;
     damage += result.amount;
     if (mainHit && result.destroyed) break;

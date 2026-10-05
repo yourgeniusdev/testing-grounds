@@ -833,13 +833,71 @@ test("an AA slot cannot trigger again against the same squadron in one round", (
   assert.equal(slot.ready, false);
   assert.equal(slot.overwatch, false);
   assert.deepEqual(slot.overwatchTargets, ["squad"]);
-  assert.deepEqual(state.events.slice(-2).map(event => event.action), ["overwatch-declared", "overwatch-shot"]);
-  assert.deepEqual(state.events.at(-1).random, { roll: 10, accuracy: 0 });
+  assert.deepEqual(state.events.slice(-3).map(event => event.action), ["overwatch-declared", "overwatch-shot", "attack-shot"]);
+  assert.deepEqual(state.events.at(-1).random, { roll: 10, hitBlocker: 0, hitMain: 0, miss: 100 });
   const counts = Object.fromEntries(["overwatch-declared", "overwatch-shot", "attack-shot", "damage-packet"].map(action => [action, state.events.filter(event => event.action === action).length]));
   slot.ready = true;
   slot.overwatch = true;
   assert.deepEqual(resolveOverwatch(state, "squad", { random: () => 0 }), []);
   for (const [action, count] of Object.entries(counts)) assert.equal(state.events.filter(event => event.action === action).length, count);
+});
+
+test("AA reactions follow initiative and stable numeric slot order", () => {
+  const slots = Array.from({ length: 11 }, (_, index) => ({ id: `aa-${index}`, ready: true, ammo: 1, maxRange: 3, damage: 1, accuracy: 0, overwatchEligible: true, overwatch: true, overwatchRound: 1 }));
+  const state = createBattle({ id: "aa-order", round: 1, units: [
+    { id: "slow", side: "left", kind: "capital", initiative: 1, position: { q: 0, r: 1 }, weapons: [{ id: "slow-aa", ready: true, ammo: 1, maxRange: 3, damage: 1, accuracy: 0, overwatchEligible: true, overwatch: true, overwatchRound: 1 }] },
+    { id: "fast", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: slots },
+    { id: "squad", side: "right", kind: "squadron", position: { q: 2, r: 0 }, integrity: 5 }
+  ] });
+  state.round = 1;
+  const results = resolveOverwatch(state, "squad", { random: () => 1 });
+  assert.deepEqual(results.map(result => result.slotId), [...slots.map(slot => `fast:${slot.id}`), "slow:slow-aa"]);
+  assert.deepEqual(state.events.filter(event => event.action === "overwatch-shot").map(event => event.slotId), [...slots.map(slot => `fast:${slot.id}`), "slow:slow-aa"]);
+  const attacks = state.events.filter(event => event.action === "attack-shot");
+  assert.equal(attacks.length, 12);
+  assert.ok(attacks.every(event => event.after.hitId === null && event.causeEventId));
+});
+
+test("lethal AA cancels remaining queued reactions without spending their readiness", () => {
+  let randomCalls = 0;
+  const state = createBattle({ id: "aa-lethal", round: 1, units: [
+    { id: "first", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "lethal", ready: true, ammo: 1, maxRange: 3, damage: 5, accuracy: 100, overwatchEligible: true, overwatch: true, overwatchRound: 1 }] },
+    { id: "later", side: "left", kind: "capital", initiative: 1, position: { q: 0, r: 1 }, weapons: [{ id: "unused", ready: true, ammo: 1, maxRange: 3, damage: 5, accuracy: 100, overwatchEligible: true, overwatch: true, overwatchRound: 1 }] },
+    { id: "squad", side: "right", kind: "squadron", position: { q: 2, r: 0 }, integrity: 5 }
+  ] });
+  state.round = 1;
+  const results = resolveOverwatch(state, "squad", { random: () => { randomCalls += 1; return 0; } });
+  assert.equal(results.length, 1);
+  assert.equal(randomCalls, 1);
+  assert.equal(state.units.some(unit => unit.id === "squad"), false);
+  const later = state.units.find(unit => unit.id === "later").weapons[0];
+  assert.equal(later.ready, true);
+  assert.equal(later.overwatch, true);
+  assert.equal(state.events.some(event => event.action === "overwatch-declared" && event.actorId === "later"), false);
+});
+
+test("RoundEnd clears overwatch and RoundStart restores readiness for a new-round reaction", () => {
+  const state = createBattle({ id: "aa-reset", round: 1, units: [
+    { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: false, ammo: 2, maxRange: 3, damage: 1, accuracy: 0, overwatchEligible: true, overwatch: true, overwatchRound: 1, overwatchTargets: ["squad"] }] },
+    { id: "squad", side: "right", kind: "squadron", position: { q: 2, r: 0 }, integrity: 5 }
+  ] });
+  state.round = 1;
+  state.lifecycle = "RoundEnd";
+  assert.equal(progress(state), "RoundStart");
+  const slot = state.units[0].weapons[0];
+  assert.equal(slot.overwatch, false);
+  assert.deepEqual(slot.overwatchTargets, []);
+  assert.equal(progress(state), "WaitDecision");
+  assert.equal(state.round, 2);
+  assert.equal(slot.ready, true);
+  assert.equal(slot.ammo, 2);
+  state.lifecycle = "EndActivation";
+  state.activeUnitId = "cap";
+  progress(state);
+  assert.equal(slot.overwatch, true);
+  const result = resolveOverwatch(state, "squad", { random: () => 1 });
+  assert.equal(result.length, 1);
+  assert.equal(state.events.at(-1).round, 2);
 });
 
 test("memory store persists and notifies domain snapshots", async () => {
