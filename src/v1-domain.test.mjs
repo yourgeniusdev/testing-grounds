@@ -10,6 +10,7 @@ import {
   movementDestinations,
   applyDamagePacket,
   refreshInterception,
+  previewDisengagement,
   disengage,
   previewAttack,
   ram,
@@ -460,7 +461,7 @@ test("lethal squadron degradation orders loss before destruction and cleans inte
   ] });
   refreshInterception(state);
   applyDamagePacket(state, "s", { amount: 20, sourceId: "enemy" });
-  assert.deepEqual(state.events.map(event => event.action), ["damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "victory"]);
+  assert.deepEqual(state.events.map(event => event.action), ["interception-link-created", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "interception-link-removed", "victory"]);
   assert.deepEqual(state.units[0].engagedWith, []);
   assert.equal(state.contents[0].cover, "debris");
 });
@@ -484,6 +485,8 @@ test("interception graph blocks engaged squadron movement and disengage clears l
     { id: "a", side: "left", kind: "squadron", position: { q: 1, r: 0 }, stack: 2, speed: 1 },
     { id: "b", side: "right", kind: "squadron", position: { q: 2, r: 0 }, stack: 1 }
   ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "a";
   refreshInterception(state);
   assert.deepEqual(state.units[0].engagedWith, ["b"]);
   assert.equal(moveAtomic(state, "a", [{ q: 0, r: 0 }]).moved, 0);
@@ -506,14 +509,70 @@ test("failed disengagement spends speed, preserves links, ends maneuver, and pre
   assert.deepEqual(result, { success: false, chance: 60, cost: 1 });
   assert.equal(state.units[0].currentSpeed, 2);
   assert.equal(state.units[0].speed, 3);
-  assert.equal(state.units[0].evasionPenalty, -10);
+  assert.equal(state.units[0].evasion, 0);
   assert.deepEqual(state.units[0].engagedWith, ["b"]);
   assert.deepEqual(state.units[1].engagedWith, ["a"]);
   assert.equal(state.lifecycle, "Attack");
-  assert.deepEqual(state.events.at(-2).random, { roll: 60, chance: 60 });
+  assert.deepEqual(state.events.find(event => event.action === "disengagement-check").random, { roll: 60, chance: 60 });
   assert.equal(moveAtomic(state, "a", [{ q: 0, r: 0 }]).moved, 0);
   assert.equal(resolveAttack(state, "a", "target", { arc: "360", maxRange: 3, accuracy: 100, damage: 2 }, { random: () => 0 }).damage, 4);
-  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengage", "activation-stage", "attack-shot", "damage-packet", "attack-shot", "damage-packet"]);
+  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengagement-declared", "disengagement-paid", "evasion-modifier-applied", "disengagement-check", "disengagement-failed", "activation-stage", "attack-shot", "damage-packet", "attack-shot", "damage-packet"]);
+});
+
+test("interception is symmetric many-to-many with bomber asymmetry and no allied links", () => {
+  const state = createBattle({ units: [
+    { id: "fighter", side: "left", kind: "squadron", role: "fighter", position: { q: 0, r: 0 } },
+    { id: "ally", side: "left", kind: "squadron", role: "fighter", position: { q: 0, r: 1 } },
+    { id: "bomber", side: "right", kind: "squadron", role: "bomber", position: { q: 1, r: 0 } },
+    { id: "enemy", side: "right", kind: "squadron", role: "fighter", position: { q: 1, r: -1 } }
+  ] });
+  refreshInterception(state);
+  assert.deepEqual(state.units.map(unit => [unit.id, unit.engagedWith]), [
+    ["fighter", ["bomber", "enemy"]], ["ally", ["bomber"]], ["bomber", ["ally", "fighter"]], ["enemy", ["fighter"]]
+  ]);
+  assert.equal(state.interceptionLinks.some(link => link.unitIds.includes("fighter") && link.unitIds.includes("ally")), false);
+  const bomberLink = state.interceptionLinks.find(link => link.unitIds.includes("fighter") && link.unitIds.includes("bomber"));
+  assert.deepEqual(bomberLink.creators, ["fighter"]);
+});
+
+test("disengagement modifiers clamp and tie-break deterministically", () => {
+  const units = [
+    { id: "a", side: "left", kind: "squadron", position: { q: 0, r: 0 }, speed: 4 },
+    { id: "ally", side: "left", kind: "squadron", position: { q: -2, r: 0 } },
+    { id: "b", side: "right", kind: "squadron", position: { q: 1, r: 0 }, stack: 3, initiative: 1 },
+    { id: "c", side: "right", kind: "squadron", position: { q: 1, r: -1 }, stack: 3, initiative: 2 }
+  ];
+  const state = createBattle({ units });
+  refreshInterception(state);
+  assert.deepEqual(previewDisengagement(state, "a"), { eligible: true, chance: 30, cost: 2, closestId: "c", craftPenalty: 20, enemyPenalty: 10, friendlyBonus: 0 });
+  state.units.find(unit => unit.id === "ally").position = { q: 0, r: 1 };
+  refreshInterception(state);
+  assert.equal(previewDisengagement(state, "a").friendlyBonus, 10);
+  state.units.find(unit => unit.id === "b").stack = 20;
+  assert.equal(previewDisengagement(state, "a").chance, 10);
+  state.units.find(unit => unit.id === "b").stack = 1;
+  state.units.find(unit => unit.id === "c").position = { q: 5, r: 5 };
+  state.units.push(...Array.from({ length: 4 }, (_, index) => ({ id: `ally-${index}`, side: "left", kind: "squadron", position: { q: 0, r: 1 } })));
+  refreshInterception(state);
+  assert.equal(previewDisengagement(state, "a").chance, 90);
+});
+
+test("successful disengagement records order, preserves escape, and clears activation penalty", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "squadron", position: { q: 0, r: 0 }, speed: 3, evasion: 40 },
+    { id: "b", side: "right", kind: "squadron", position: { q: 1, r: 0 }, stack: 1 }
+  ] });
+  state.lifecycle = "Maneuver"; state.activationStage = "Maneuver"; state.activeUnitId = "a";
+  refreshInterception(state);
+  const start = state.events.length;
+  assert.equal(disengage(state, "a", { random: () => 0.59 }).success, true);
+  assert.equal(moveAtomic(state, "a", [{ q: -1, r: 0 }]).status, "moved");
+  assert.deepEqual(state.events.slice(start, start + 6).map(event => event.action), ["disengagement-declared", "disengagement-paid", "evasion-modifier-applied", "disengagement-check", "disengagement-succeeded", "interception-link-removed"]);
+  assert.equal(state.units[0].evasion, 30);
+  state.lifecycle = "EndActivation";
+  progress(state);
+  assert.equal(state.units[0].evasion, 40);
+  assert.equal(Object.hasOwn(state.units[0], "disengagementEvasion"), false);
 });
 
 test("disengagement is unavailable without full Speed payment", () => {

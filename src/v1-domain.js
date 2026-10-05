@@ -11,7 +11,7 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
   const state = {
     id, units: normalized, contents: normalizedContents, bounds,
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
-    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0
+    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0, interceptionLinks: []
   };
   if (bounds) for (const side of sides) {
     const required = normalized.filter(unit => unit.side === side).length;
@@ -50,35 +50,73 @@ function resolveOnEnterEffect(state, unit, content, effect, movement, position) 
   recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unit.id], causeEventId: movement.eventId, position: { ...position }, effect: "modify-unit", field: effect.field, amount: effect.amount, before: Object.freeze({ [effect.field]: before }), after: Object.freeze({ [effect.field]: unit[effect.field] }) });
 }
 
-export function refreshInterception(state) {
-  state.units.forEach(unit => { if (unit.kind === "squadron") unit.engagedWith = []; });
+const interceptionKey = (a, b) => [a, b].sort().join(":");
+const initiativeOrder = (a, b) => (b.initiative ?? 0) - (a.initiative ?? 0) || String(a.id).localeCompare(String(b.id));
+
+export function refreshInterception(state, { causeEventId = null } = {}) {
+  const previous = new Map((state.interceptionLinks ?? []).map(link => [link.key, link]));
   const squadrons = state.units.filter(unit => unit.kind === "squadron" && unit.position && unit.interception !== false);
-  for (const a of squadrons) for (const b of squadrons) if (a !== b && a.side !== b.side && (a.role ?? a.type) !== "bomber" && distance(a.position, b.position) <= (a.interceptRange ?? 1)) {
-    a.engagedWith.push(b.id);
+  const next = new Map();
+  for (let i = 0; i < squadrons.length; i += 1) for (let j = i + 1; j < squadrons.length; j += 1) {
+    const a = squadrons[i], b = squadrons[j];
+    if (a.side === b.side) continue;
+    const creators = [a, b].filter((unit, index) => (unit.role ?? unit.type) !== "bomber" && distance(unit.position, index ? a.position : b.position) <= (unit.interceptRange ?? 1)).map(unit => unit.id).sort();
+    const key = interceptionKey(a.id, b.id);
+    if (creators.length && ![a, b].some(unit => unit.disengagedLinks?.includes(key))) next.set(key, { key, unitIds: [a.id, b.id].sort(), creators });
   }
+  state.interceptionLinks = [...next.values()].sort((a, b) => a.key.localeCompare(b.key));
+  state.units.forEach(unit => { if (unit.kind === "squadron") unit.engagedWith = state.interceptionLinks.filter(link => link.unitIds.includes(unit.id)).flatMap(link => link.unitIds.filter(id => id !== unit.id)).sort(); });
+  for (const [key, link] of previous) if (!next.has(key)) recordEvent(state, "interception-link-removed", { subjectIds: link.unitIds, causeEventId, creators: link.creators });
+  for (const [key, link] of next) if (!previous.has(key)) recordEvent(state, "interception-link-created", { subjectIds: link.unitIds, causeEventId, creators: link.creators });
   return state.units.filter(unit => unit.kind === "squadron").map(unit => ({ id: unit.id, engagedWith: [...(unit.engagedWith ?? [])] }));
 }
 
-export function disengage(state, unitId, { random = Math.random } = {}) {
+function restrictingEnemies(state, unit) {
+  return (state.interceptionLinks ?? []).filter(link => link.unitIds.includes(unit.id) && link.creators.some(id => id !== unit.id)).map(link => state.units.find(candidate => candidate.id === link.unitIds.find(id => id !== unit.id))).filter(Boolean);
+}
+
+export function previewDisengagement(state, unitId) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit || unit.kind !== "squadron" || !(unit.engagedWith?.length)) return { success: false, chance: 0, cost: 0 };
-  const enemies = unit.engagedWith.map(id => state.units.find(candidate => candidate.id === id)).filter(Boolean);
+  const enemies = unit ? restrictingEnemies(state, unit) : [];
   const cost = enemies.length;
-  if ((unit.currentSpeed ?? unit.speed ?? 0) < cost) return { success: false, chance: 0, cost };
-  const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1))[0];
-  const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (closest?.stack ?? 1) - 1) * 10 - Math.max(0, enemies.length - 1) * 10 + (unit.friendlyLinked ?? 0) * 10));
-  unit.currentSpeed = (unit.currentSpeed ?? unit.speed ?? 0) - cost;
-  unit.evasionPenalty = (unit.evasionPenalty ?? 0) - 10;
+  if (!unit || unit.kind !== "squadron" || !cost) return { eligible: false, chance: 0, cost };
+  const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1) || initiativeOrder(a, b))[0];
+  const enemyIds = new Set(enemies.map(enemy => enemy.id));
+  const friendlyCount = state.units.filter(candidate => candidate.kind === "squadron" && candidate.side === unit.side && candidate.id !== unit.id && (state.interceptionLinks ?? []).some(link => link.unitIds.includes(candidate.id) && link.unitIds.some(id => enemyIds.has(id)))).length;
+  const craftPenalty = Math.max(0, (closest.stack ?? closest.count ?? 1) - 1) * 10;
+  const enemyPenalty = Math.max(0, enemies.length - 1) * 10;
+  const friendlyBonus = friendlyCount * 10;
+  const chance = Math.max(10, Math.min(90, 60 - craftPenalty - enemyPenalty + friendlyBonus));
+  return { eligible: (unit.currentSpeed ?? unit.speed ?? 0) >= cost, chance, cost, closestId: closest.id, craftPenalty, enemyPenalty, friendlyBonus };
+}
+
+export function disengage(state, unitId, { random } = {}) {
+  const unit = state.units.find(candidate => candidate.id === unitId);
+  const preview = previewDisengagement(state, unitId);
+  if (!preview.eligible || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId || typeof random !== "function") return { success: false, chance: preview.eligible ? preview.chance : 0, cost: preview.cost };
+  const declared = recordEvent(state, "disengagement-declared", { actorId: unitId, subjectIds: [unitId], preview });
+  const beforeSpeed = unit.currentSpeed ?? unit.speed ?? 0;
+  unit.currentSpeed = beforeSpeed - preview.cost;
+  const paid = recordEvent(state, "disengagement-paid", { actorId: unitId, subjectIds: [unitId], causeEventId: declared.eventId, before: { speed: beforeSpeed }, after: { speed: unit.currentSpeed }, cost: preview.cost });
+  unit.disengagementEvasion = unit.evasion ?? 0;
+  unit.evasion = Math.max(0, unit.disengagementEvasion - 10);
+  recordEvent(state, "evasion-modifier-applied", { actorId: unitId, subjectIds: [unitId], causeEventId: paid.eventId, amount: -10, before: { evasion: unit.disengagementEvasion }, after: { evasion: unit.evasion } });
   const roll = random() * 100;
-  const success = roll < chance;
-  if (success) { unit.engagedWith = []; unit.disengagedUntilRound = state.round; enemies.forEach(enemy => { enemy.engagedWith = (enemy.engagedWith ?? []).filter(id => id !== unit.id); }); }
-  recordEvent(state, "disengage", { actorId: unitId, chance, success, random: { roll, chance } });
-  if (!success && state.lifecycle === "Maneuver" && state.activeUnitId === unitId) {
+  const success = roll < preview.chance;
+  const checked = recordEvent(state, "disengagement-check", { actorId: unitId, subjectIds: [unitId], causeEventId: paid.eventId, random: { roll, chance: preview.chance }, preview });
+  const resultEvent = recordEvent(state, success ? "disengagement-succeeded" : "disengagement-failed", { actorId: unitId, subjectIds: [unitId], causeEventId: checked.eventId });
+  if (success) {
+    unit.disengagedLinks = (state.interceptionLinks ?? []).filter(link => link.unitIds.includes(unitId)).map(link => link.key);
+    state.interceptionLinks = (state.interceptionLinks ?? []).filter(link => !link.unitIds.includes(unitId));
+    unit.engagedWith = [];
+    state.units.forEach(enemy => { enemy.engagedWith = (enemy.engagedWith ?? []).filter(id => id !== unitId); });
+    for (const key of unit.disengagedLinks) recordEvent(state, "interception-link-removed", { actorId: unitId, subjectIds: key.split(":"), causeEventId: resultEvent.eventId });
+  } else {
     state.lifecycle = "Attack";
     state.activationStage = "Attack";
-    recordEvent(state, "activation-stage", { actorId: unitId, after: "Attack" });
+    recordEvent(state, "activation-stage", { actorId: unitId, causeEventId: resultEvent.eventId, after: "Attack" });
   }
-  return { success, chance, cost };
+  return { success, chance: preview.chance, cost: preview.cost };
 }
 
 
@@ -195,7 +233,7 @@ export function progress(state) {
   } else if (state.lifecycle === "ActivationStart") {
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
   } else if (state.lifecycle === "EndActivation") {
-    const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; armOverwatch(state, unit.id); }
+    const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; if (Object.hasOwn(unit, "disengagementEvasion")) { unit.evasion = unit.disengagementEvasion; delete unit.disengagementEvasion; } delete unit.disengagedLinks; armOverwatch(state, unit.id); }
     state.attackSpentBy = null;
     const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
     if (next) { state.activeUnitId = next; state.lifecycle = "WaitDecision"; }
@@ -379,7 +417,8 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
     if (!state.units.includes(unit)) break;
     if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId });
     if (!state.units.includes(unit)) break;
-    refreshInterception(state);
+    refreshInterception(state, { causeEventId: movement.eventId });
+    if (unit.kind === "squadron" && restrictingEnemies(state, unit).length) break;
   }
   if (moved === steps.length && state.units.includes(unit) && heading !== null && unit.kind === "capital") {
     const stationary = moved === 0;
@@ -427,7 +466,10 @@ export function destroyUnit(state, target, { causeEventId = null } = {}) {
     state.contents.push(debris);
     recordEvent(state, "debris-created", { subjectIds: [debris.id], causeEventId: destroyedEvent.eventId, position });
   }
+  const removedLinks = (state.interceptionLinks ?? []).filter(link => link.unitIds.includes(unit.id));
+  state.interceptionLinks = (state.interceptionLinks ?? []).filter(link => !link.unitIds.includes(unit.id));
   state.units.forEach(candidate => { if (Array.isArray(candidate.engagedWith)) candidate.engagedWith = candidate.engagedWith.filter(id => id !== unit.id); });
+  removedLinks.forEach(link => recordEvent(state, "interception-link-removed", { subjectIds: link.unitIds, causeEventId: destroyedEvent.eventId, creators: link.creators }));
   const remainingSides = new Set(state.units.map(candidate => candidate.side));
   if (remainingSides.size === 1 && state.units.length) {
     state.winner = [...remainingSides][0]; state.lifecycle = "Finished";

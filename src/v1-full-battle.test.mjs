@@ -72,7 +72,7 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   assert.deepEqual(state.events.slice(reactionStart).map(event => event.action), [
     "entry-attempt", "movement-step", "entry-attempt", "movement-step", "entry-attempt", "movement-step",
     "entry-attempt", "movement-step", "entry-attempt", "movement-step", "overwatch-declared", "overwatch-shot",
-    "attack-shot", "damage-packet", "squadron-craft-lost"
+    "attack-shot", "damage-packet", "squadron-craft-lost", "interception-link-created"
   ]);
   assert.equal(advanceActivation(state, "Attack"), true);
   assert.equal(advanceActivation(state, "EndActivation"), true);
