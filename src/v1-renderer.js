@@ -54,13 +54,21 @@ export function createBattleRenderer(document) {
     const preview = state.lifecycle === "Attack" && attacker && view.selectedTargetId ? getAttackPreview(state, attacker.id, view.selectedTargetId, view.selectedWeaponIndex) : null;
     const selected = state.units.find(unit => unit.id === view.selectedUnitId);
       const routeText = view.routeReason || (view.plannedRoute.length ? `Маршрут: ${view.plannedRoute.length} шаг. → (${view.plannedRoute.at(-1).q}, ${view.plannedRoute.at(-1).r})` : "");
-      const routeCost = view.plannedRoute.length ? view.plannedRoute.length : 0;
-      const headingText = selected?.kind === "capital" ? ` · курс ${(view.plannedHeading ?? selected.heading) + 1}` : "";
-      els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : (routeText ? `${routeText}${headingText} · стоимость ${routeCost}` : `Выберите маршрут${headingText}`);
+      const maneuverPreview = view.maneuverPreview;
+      const routeCost = maneuverPreview?.movementCost ?? 0;
+      const headingText = selected?.kind === "capital" ? ` · курс ${(maneuverPreview?.finalHeading ?? view.plannedHeading ?? selected.heading) + 1}` : "";
+      const entryText = maneuverPreview?.entries.map(entry => {
+        const effects = entry.effects.map(effect => `${effect.sourceId}: ${effect.type === "damage" ? `−${effect.amount} HP` : `${effect.field} ${effect.amount >= 0 ? "+" : ""}${effect.amount}`}`);
+        const risks = entry.aaRisks.map(risk => `ПВО ${risk.ownerId} ${risk.accuracy}%/${risk.damage} урон`);
+        const notes = [...effects, ...risks, entry.lethal ? "уничтожение — следующие шаги недостижимы" : null].filter(Boolean);
+        return notes.length ? `шаг ${entry.index} (${entry.position.q},${entry.position.r}): ${notes.join(", ")}` : null;
+      }).filter(Boolean).join(" · ");
+      const legalityText = maneuverPreview?.ramRequired ? ` · требуется явный таран ${maneuverPreview.ramTargetId}` : maneuverPreview && !maneuverPreview.stopLegal ? " · остановка запрещена" : "";
+       els.summary.textContent = state.lifecycle === "Attack" ? formatAttackPreview(preview) : (routeText ? `${routeText}${headingText} · стоимость ${routeCost}` : `Выберите маршрут${headingText}`);
      const maneuverActive = state.lifecycle === "Maneuver" && selected?.id === state.activeUnitId;
      els.maneuverPopup.hidden = !maneuverActive;
      if (maneuverActive) {
-        els.maneuverDetails.textContent = view.routeReason ? `${view.routeReason}${headingText} · скорость ${selected.speed ?? 0}` : view.plannedRoute.length ? `${routeText}${headingText} · стоимость ${routeCost} · скорость ${selected.speed ?? 0}` : `Выберите допустимый гекс для маршрута${headingText} · скорость ${selected.speed ?? 0}`;
+        els.maneuverDetails.textContent = view.routeReason ? `${view.routeReason}${headingText} · скорость ${selected.speed ?? 0}` : view.plannedRoute.length ? `${routeText}${headingText} · стоимость ${routeCost} · скорость останется ${maneuverPreview.speedRemaining} · повороты ${maneuverPreview.turnsUsed}, останется ${maneuverPreview.turnsRemaining}${entryText ? ` · ${entryText}` : ""}${legalityText}` : `Выберите допустимый гекс для маршрута${headingText} · скорость ${selected.speed ?? 0}`;
        els.routeBadge.textContent = view.routeReason ? "ЗАБЛОКИРОВАН" : view.plannedRoute.length ? "ГОТОВ" : "ОЖИДАНИЕ";
      }
      const canPlanHeading = maneuverActive && selected?.kind === "capital";

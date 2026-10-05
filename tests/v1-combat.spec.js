@@ -87,6 +87,47 @@ test("browser shows planned multi-cell route and ordered event log", async ({ pa
   await expect(page.locator("#combatLog [data-event-action='movement-step']").first()).toBeVisible();
 });
 
+test("browser shows expanded pure maneuver effects and AA risk preview", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  const before = await page.evaluate(async () => {
+    const { store, controller } = await import("/src/v1-ui.js");
+    const state = store.getState();
+    store.replace({ ...state, round: 1, lifecycle: "Maneuver", activeUnitId: "left-squad", contents: [{ id: "cloud", kind: "terrain", type: "nebula", position: { q: 2, r: 0 }, movementCost: 2, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: 5 }] }], units: state.units.map(unit => unit.id === "left-squad" ? { ...unit, position: { q: 1, r: 0 }, currentSpeed: 4 } : unit.id === "right-cap" ? { ...unit, position: { q: 4, r: 0 }, weapons: [{ id: "flak", ready: true, overwatch: true, overwatchRound: 1, accuracy: 70, damage: 2, shots: 1, maxRange: 3 }] } : { ...unit, position: null }) });
+    controller.view.selectedUnitId = "left-squad";
+    controller.render();
+    return structuredClone(store.getState());
+  });
+  const canvas = page.locator("#battlefield"); const box = await canvas.boundingBox();
+  const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  await page.mouse.click(box.x + destination.x, box.y + destination.y);
+  await expect(page.locator("#maneuverDetails")).toContainText("стоимость 2");
+  await expect(page.locator("#maneuverDetails")).toContainText("скорость останется 2");
+  await expect(page.locator("#maneuverDetails")).toContainText("evasion +5");
+  await expect(page.locator("#maneuverDetails")).toContainText("ПВО right-cap 70%/2 урон");
+  expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.js")).store.getState()))).toEqual(before);
+});
+
+test("browser plans and exposes explicit ram through enemy selection", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  await page.evaluate(async () => {
+    const { store, controller } = await import("/src/v1-ui.js");
+    const state = store.getState();
+    store.replace({ ...state, lifecycle: "Maneuver", activeUnitId: "left-cap", contents: [], units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0, currentSpeed: 3, maneuver: 2 } : unit.id === "right-cap" ? { ...unit, position: { q: 2, r: 0 } } : { ...unit, position: null }) });
+    controller.view.selectedUnitId = "left-cap"; controller.render();
+  });
+  const canvas = page.locator("#battlefield"); const box = await canvas.boundingBox();
+  const target = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  await page.mouse.click(box.x + target.x, box.y + target.y);
+  await expect(page.locator("#maneuverDetails")).toContainText("требуется явный таран right-cap");
+  await expect(page.locator("#ramButton")).toBeVisible();
+});
+
 test("browser blocks routes through obstacles and records final position", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());

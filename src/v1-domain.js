@@ -145,15 +145,20 @@ export function armOverwatch(state, unitId = state.activeUnitId) {
   return armed;
 }
 
-export function resolveOverwatch(state, targetId, { random = Math.random, causeEventId = null } = {}) {
-  const target = state.units.find(unit => unit.id === targetId);
+function overwatchCandidates(state, target) {
   if (!target || target.kind !== "squadron") return [];
   const candidates = [];
   state.units.forEach(owner => weaponSlots(owner).forEach((slot, index) => {
     if (slot.overwatch && slot.overwatchRound === state.round && slotCanOverwatch(state, owner, slot, target) && !(slot.overwatchTargets ?? []).includes(target.id))
-      candidates.push({ owner, slot, index });
+      candidates.push({ owner, slot, index, weapon: slot.weapon ?? slot });
   }));
-  candidates.sort((a, b) => (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0) || `${a.owner.id}:${a.index}`.localeCompare(`${b.owner.id}:${b.index}`));
+  return candidates.sort((a, b) => (b.owner.initiative ?? 0) - (a.owner.initiative ?? 0) || `${a.owner.id}:${a.index}`.localeCompare(`${b.owner.id}:${b.index}`));
+}
+
+export function resolveOverwatch(state, targetId, { random = Math.random, causeEventId = null } = {}) {
+  const target = state.units.find(unit => unit.id === targetId);
+  const candidates = overwatchCandidates(state, target);
+  if (!target || target.kind !== "squadron") return [];
   const results = [];
   for (const candidate of candidates) {
     if (!state.units.includes(target) || !state.units.includes(candidate.owner) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) break;
@@ -248,9 +253,62 @@ export function planMovement(state, unitId, destination) {
   }
   const liesOnShortestRoute = position => distance(unit.position, position) + distance(position, destination) === distance(unit.position, destination);
   const object = state.contents.find(item => item.kind === "object" && liesOnShortestRoute(item.position));
-  const occupant = state.units.find(candidate => candidate.id !== unit.id && liesOnShortestRoute(candidate.position));
+  const occupant = state.units.find(candidate => candidate.id !== unit.id && candidate.position && liesOnShortestRoute(candidate.position));
   const reason = object ? `Маршрут заблокирован объектом: ${object.type ?? "препятствие"}` : occupant ? `Гекс занят кораблём: ${occupant.name ?? occupant.id}` : "Цель вне доступной дальности";
   return { valid: false, steps: [], reason, movementCost: 0 };
+}
+
+export function previewManeuverRoute(state, unitId, steps, { heading = null, ramTargetId = null } = {}) {
+  const source = state.units.find(candidate => candidate.id === unitId);
+  if (!source?.position || !Array.isArray(steps)) return { valid: false, reason: "Нет исходной позиции", entries: [] };
+  const projectedState = structuredClone(state);
+  const unit = projectedState.units.find(candidate => candidate.id === unitId);
+  const entries = [];
+  let movementCost = 0, turnsUsed = 0, currentHeading = unit.heading, reachable = true, reason = null;
+  for (let index = 0; index < steps.length; index += 1) {
+    const destination = steps[index];
+    const contents = projectedState.contents.filter(item => samePosition(item.position, destination));
+    const cost = contents.find(item => item.movementCost !== undefined)?.movementCost ?? 1;
+    const occupant = unitAt(projectedState, destination, unit.id);
+    const ramRequired = Boolean(occupant && unit.kind === "capital" && occupant.kind === "capital" && occupant.side !== unit.side);
+    const stepHeading = unit.kind === "capital" ? headingForStep(unit.position, destination) : currentHeading;
+    const turn = unit.kind === "capital" ? turnDistance(currentHeading, stepHeading) : 0;
+    const adjacent = distance(unit.position, destination) === 1;
+    const enterLegal = adjacent && canEnter(projectedState, unit, destination, { final: index === steps.length - 1, ramming: ramRequired });
+    const stopLegal = adjacent && canEnter(projectedState, unit, destination, { final: true });
+    if (!reachable || !enterLegal || stepHeading < 0 || turn > 1 || (unit.currentSpeed ?? 0) < cost || (unit.turnsSpent ?? 0) + turn > (unit.maneuver ?? 0)) {
+      reachable = false;
+      reason ??= "Маршрут нарушает ограничения движения";
+    }
+    const effects = contents.flatMap(content => [...(content.onEnterEffects ?? []), ...((content.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: content.onEnterDamage }] : [])].map(effect => ({ sourceId: content.id, ...normalizeOnEnterEffect(effect) })));
+    if (reachable) {
+      movementCost += cost; turnsUsed += turn; unit.currentSpeed -= cost; unit.turnsSpent = (unit.turnsSpent ?? 0) + turn;
+      unit.position = { ...destination }; currentHeading = stepHeading; unit.heading = stepHeading;
+      for (const effect of effects) {
+        if (effect.type === "modify-unit") {
+          const upper = effect.field === "evasion" ? 100 : Infinity;
+          unit[effect.field] = Math.max(0, Math.min(upper, (unit[effect.field] ?? 0) + effect.amount));
+        } else unit.integrity = Math.max(0, (unit.integrity ?? 0) - effect.amount);
+      }
+    }
+    const aaRisks = reachable && unit.integrity !== 0 ? overwatchCandidates(projectedState, unit).map(({ owner, slot, index: slotIndex, weapon }) => {
+      const attack = previewAttack(projectedState, owner, unit, weapon);
+      slot.overwatch = false;
+      slot.overwatchTargets = [...(slot.overwatchTargets ?? []), unit.id];
+      return { ownerId: owner.id, slotId: slot.id ?? `${owner.id}:${slotIndex}`, accuracy: attack.accuracy, damage: attack.damage, shots: attack.shots };
+    }) : [];
+    const lethal = reachable && unit.integrity === 0;
+    entries.push({ index: index + 1, position: { ...destination }, reachable, cost, cumulativeCost: movementCost, speedRemaining: unit.currentSpeed, heading: stepHeading, turn, effects, aaRisks, stopLegal, ramRequired, ramTargetId: ramRequired ? occupant.id : null, lethal });
+    if (lethal) { reachable = false; reason = "Детерминированный эффект уничтожает юнит на маршруте"; }
+  }
+  const target = ramTargetId ? projectedState.units.find(candidate => candidate.id === ramTargetId) : null;
+  const explicitRam = Boolean(target && source.kind === "capital" && target.kind === "capital" && target.side !== source.side && distance(unit.position, target.position) === 1);
+  const finalTurn = unit.kind === "capital" && heading !== null ? turnDistance(currentHeading, heading) : 0;
+  const finalTurnLegal = finalTurn <= 1;
+  const totalTurns = (unit.turnsSpent ?? 0) + finalTurn;
+  const valid = reachable && finalTurnLegal && totalTurns <= (unit.maneuver ?? 0) && (!entries.at(-1)?.ramRequired || entries.at(-1)?.ramTargetId === ramTargetId);
+  if (!finalTurnLegal) reason ??= "Финальный поворот превышает 60°";
+  return { valid, reason: valid ? null : reason ?? "Маршрут нарушает ограничения движения", movementCost, speedRemaining: unit.currentSpeed, turnsUsed: turnsUsed + finalTurn, turnsRemaining: Math.max(0, (unit.maneuver ?? 0) - totalTurns), finalHeading: heading ?? currentHeading, entries, stopLegal: entries.at(-1)?.stopLegal ?? true, ramRequired: Boolean(entries.at(-1)?.ramRequired || explicitRam), ramTargetId: entries.at(-1)?.ramTargetId ?? (explicitRam ? target.id : null) };
 }
 
 export function changeHeading(state, unitId, heading, { causeEventId = null, stationary = false } = {}) {

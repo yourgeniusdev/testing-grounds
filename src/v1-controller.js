@@ -1,4 +1,4 @@
-import { advanceActivation, confirmDeployment, decide, deployUnit, disengage, moveAtomic, planMovement, progress, ram, resolveAttack } from "./v1-domain.js";
+import { advanceActivation, confirmDeployment, decide, deployUnit, disengage, moveAtomic, planMovement, previewManeuverRoute, progress, ram, resolveAttack } from "./v1-domain.js";
 import { getAttackPreview, getWeaponSelection } from "./v1-preview.js";
 
 const same = (a, b) => a && b && a.q === b.q && a.r === b.r;
@@ -7,11 +7,21 @@ export function createBattleController({ document, store, renderer }) {
   const view = { selectedUnitId: null, plannedPosition: null, plannedRoute: [], plannedHeading: null, headingSelected: false, routeReason: null, selectedTargetId: null, selectedWeaponIndex: 0 };
   const clearRoute = () => { view.plannedPosition = null; view.plannedRoute = []; view.routeReason = null; };
   const clearSelection = () => { view.selectedUnitId = null; view.selectedTargetId = null; view.selectedWeaponIndex = 0; clearRoute(); view.plannedHeading = null; view.headingSelected = false; };
-  const render = () => { const state = store.getState(); if (state.lifecycle !== "Maneuver") { clearRoute(); view.plannedHeading = null; } renderer.render(state, view); };
+  const render = () => { const state = store.getState(); if (state.lifecycle !== "Maneuver") { clearRoute(); view.plannedHeading = null; } view.maneuverPreview = state.lifecycle === "Maneuver" && view.selectedUnitId ? previewManeuverRoute(state, view.selectedUnitId, view.plannedRoute, { heading: view.plannedHeading, ramTargetId: view.selectedTargetId }) : null; renderer.render(state, view); };
   const transact = command => store.transact(command);
   renderer.canvas.addEventListener("click", event => {
     const state = store.getState(); const rect = renderer.canvas.getBoundingClientRect(); const position = renderer.hexForPoint(event.clientX - rect.left, event.clientY - rect.top); const unit = state.units.find(candidate => same(candidate.position, position));
-    if (unit) { if (state.lifecycle === "Attack" && unit.side !== state.units.find(candidate => candidate.id === state.activeUnitId)?.side) view.selectedTargetId = unit.id; else { view.selectedUnitId = unit.id; clearRoute(); view.plannedHeading = unit.kind === "capital" ? unit.heading : null; view.headingSelected = false; } return render(); }
+    if (unit) {
+      const active = state.units.find(candidate => candidate.id === state.activeUnitId);
+      if (state.lifecycle === "Attack" && unit.side !== active?.side) view.selectedTargetId = unit.id;
+      else if (state.lifecycle === "Maneuver" && active?.kind === "capital" && unit.kind === "capital" && unit.side !== active.side && view.selectedUnitId === active.id) {
+        const approaches = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }].map(direction => ({ q: unit.position.q + direction.q, r: unit.position.r + direction.r }));
+        const plan = approaches.map(destination => planMovement(state, active.id, destination)).find(candidate => candidate.valid);
+        view.selectedTargetId = unit.id; view.plannedPosition = plan?.steps.at(-1) ?? null; view.plannedRoute = plan?.steps ?? []; view.routeReason = plan ? null : "Нет допустимого маршрута для тарана";
+        if (!view.headingSelected && plan) view.plannedHeading = plan.finalHeading;
+      } else { view.selectedUnitId = unit.id; view.selectedTargetId = null; clearRoute(); view.plannedHeading = unit.kind === "capital" ? unit.heading : null; view.headingSelected = false; }
+      return render();
+    }
     if (view.selectedUnitId && (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight")) transact(current => deployUnit(current, view.selectedUnitId, position, 2));
     else if (view.selectedUnitId && state.lifecycle === "Maneuver") { const plan = planMovement(state, view.selectedUnitId, position); const selected = state.units.find(candidate => candidate.id === view.selectedUnitId); view.plannedPosition = plan.valid ? position : null; view.plannedRoute = plan.valid ? plan.steps : []; if (!view.headingSelected) view.plannedHeading = plan.valid && selected?.kind === "capital" ? plan.finalHeading : selected?.kind === "capital" ? selected.heading : null; view.routeReason = plan.valid ? null : plan.reason; render(); }
   });
