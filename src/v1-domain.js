@@ -7,8 +7,9 @@ const sides = ["left", "right"];
 
 export function createBattle({ id = "battle-1", units = [], bounds = null, contents = [] } = {}) {
   const normalized = units.map(unit => ({ ...unit, side: unit.side ?? unit.sideId, position: unit.position ? { ...unit.position } : null, currentSpeed: unit.currentSpeed ?? unit.speed ?? 1, hasActivated: false, hasWaited: false }));
+  const normalizedContents = contents.map(item => ({ ...item, position: { ...item.position }, onEnterEffects: item.onEnterEffects?.map(effect => normalizeOnEnterEffect(effect)) }));
   const state = {
-    id, units: normalized, contents: contents.map(item => ({ ...item, position: { ...item.position } })), bounds,
+    id, units: normalized, contents: normalizedContents, bounds,
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
     activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0
   };
@@ -32,6 +33,22 @@ function samePosition(a, b) { return a && b && a.q === b.q && a.r === b.r; }
 function unitAt(state, position, except) { return state.units.find(unit => unit.id !== except && samePosition(unit.position, position)); }
 function distance(a, b) { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; }
 function withinBounds(bounds, position) { return position.q >= bounds.minCol && position.q <= bounds.maxCol && position.r >= bounds.minRow && position.r <= bounds.maxRow && position.q + position.r >= (bounds.minCol + bounds.minRow) && position.q + position.r <= (bounds.maxCol + bounds.maxRow); }
+function normalizeOnEnterEffect(effect) {
+  if (effect?.type === "damage" && Number.isFinite(effect.amount) && effect.amount > 0) return Object.freeze({ type: "damage", amount: effect.amount });
+  if (effect?.type === "modify-unit" && ["currentSpeed", "evasion"].includes(effect.field) && Number.isFinite(effect.amount)) return Object.freeze({ type: "modify-unit", field: effect.field, amount: effect.amount });
+  throw new TypeError("Invalid onEnter effect");
+}
+function resolveOnEnterEffect(state, unit, content, effect, movement, position) {
+  if (effect.type === "damage") {
+    const onEnter = recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unit.id], causeEventId: movement.eventId, position: { ...position }, effect: "damage", amount: effect.amount });
+    applyDamagePacket(state, unit, { amount: effect.amount, sourceId: content.id, cause: "onEnter", causeEventId: onEnter.eventId });
+    return;
+  }
+  const before = unit[effect.field] ?? 0;
+  const upper = effect.field === "evasion" ? 100 : Infinity;
+  unit[effect.field] = Math.max(0, Math.min(upper, before + effect.amount));
+  recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unit.id], causeEventId: movement.eventId, position: { ...position }, effect: "modify-unit", field: effect.field, amount: effect.amount, before: Object.freeze({ [effect.field]: before }), after: Object.freeze({ [effect.field]: unit[effect.field] }) });
+}
 
 export function refreshInterception(state) {
   state.units.forEach(unit => { if (unit.kind === "squadron") unit.engagedWith = []; });
@@ -285,9 +302,12 @@ export function moveAtomic(state, unitId, steps, { ramming = false, heading = nu
     moved += 1;
     const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed, heading: unit.heading ?? null });
     lastMovementEventId = movement.eventId;
-    for (const content of contents.filter(item => (item.onEnterDamage ?? 0) > 0)) {
-      const onEnter = recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unitId], causeEventId: movement.eventId, position: { ...position }, effect: "damage", amount: content.onEnterDamage });
-      applyDamagePacket(state, unit, { amount: content.onEnterDamage, sourceId: content.id, cause: "onEnter", causeEventId: onEnter.eventId });
+    for (const content of contents) {
+      const effects = [...(content.onEnterEffects ?? []), ...((content.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: content.onEnterDamage }] : [])];
+      for (const effect of effects) {
+        resolveOnEnterEffect(state, unit, content, normalizeOnEnterEffect(effect), movement, position);
+        if (!state.units.includes(unit)) break;
+      }
       if (!state.units.includes(unit)) break;
     }
     if (!state.units.includes(unit)) break;

@@ -334,6 +334,63 @@ test("nonlethal and repeated onEnter damage resolves once per entry without stop
   for (const event of state.events.filter(candidate => candidate.action === "damage-packet")) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "on-enter");
 });
 
+test("state-changing onEnter effects resolve in content and effect order on every entry", () => {
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 }, units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 5, currentSpeed: 4, evasion: 10 },
+    { id: "enemy", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ], contents: [
+    { id: "mist", kind: "terrain", position: { q: 1, r: 0 }, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: -2 }, { type: "modify-unit", field: "currentSpeed", amount: 1 }] },
+    { id: "wake", kind: "hazard", position: { q: 1, r: 0 }, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: 1 }] }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 1, r: 0 }, { q: 1, r: 1 }, { q: 1, r: 0 }]), { status: "moved", moved: 3 });
+  const fighter = state.units.find(unit => unit.id === "fighter");
+  assert.equal(fighter.evasion, 8);
+  assert.equal(fighter.currentSpeed, 3);
+  const effects = state.events.filter(event => event.action === "on-enter");
+  assert.deepEqual(effects.map(event => [event.actorId, event.field, event.before, event.after]), [
+    ["mist", "evasion", { evasion: 10 }, { evasion: 8 }],
+    ["mist", "currentSpeed", { currentSpeed: 3 }, { currentSpeed: 4 }],
+    ["wake", "evasion", { evasion: 8 }, { evasion: 9 }],
+    ["mist", "evasion", { evasion: 9 }, { evasion: 7 }],
+    ["mist", "currentSpeed", { currentSpeed: 2 }, { currentSpeed: 3 }],
+    ["wake", "evasion", { evasion: 7 }, { evasion: 8 }]
+  ]);
+  for (const event of effects) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "movement-step");
+});
+
+test("onEnter effect configuration rejects unsupported effects and clamps bounded unit state", () => {
+  assert.throws(() => createBattle({ contents: [{ id: "bad", position: { q: 0, r: 0 }, onEnterEffects: [{ type: "modify-unit", field: "integrity", amount: -1 }] }] }), /Invalid onEnter effect/);
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 2, minRow: 0, maxRow: 1 }, units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 5, currentSpeed: 1, evasion: 99 },
+    { id: "enemy", side: "right", kind: "capital", position: { q: 2, r: 0 }, integrity: 10 }
+  ], contents: [{ id: "surge", kind: "terrain", position: { q: 1, r: 0 }, onEnterEffects: [{ type: "modify-unit", field: "currentSpeed", amount: -5 }, { type: "modify-unit", field: "evasion", amount: 5 }] }] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 1, r: 0 }]), { status: "moved", moved: 1 });
+  const fighter = state.units.find(unit => unit.id === "fighter");
+  assert.equal(fighter.currentSpeed, 0);
+  assert.equal(fighter.evasion, 100);
+  const effects = state.events.filter(event => event.action === "on-enter");
+  assert.equal(Object.isFrozen(effects[0].before), true);
+  assert.equal(Object.isFrozen(effects[0].after), true);
+});
+
+test("state-changing onEnter can invalidate the next route step without partial movement", () => {
+  const state = createBattle({ bounds: { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 }, units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 5, currentSpeed: 2 },
+    { id: "enemy", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ], contents: [{ id: "drag", kind: "terrain", position: { q: 1, r: 0 }, onEnterEffects: [{ type: "modify-unit", field: "currentSpeed", amount: -1 }] }] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 1, r: 0 }, { q: 2, r: 0 }]), { status: "blocked", moved: 1 });
+  const fighter = state.units.find(unit => unit.id === "fighter");
+  assert.deepEqual(fighter.position, { q: 1, r: 0 });
+  assert.equal(fighter.currentSpeed, 0);
+  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "on-enter", "entry-attempt"]);
+});
+
 test("lethal onEnter damage ends the route before reactions and creates debris", () => {
   const state = createBattle({ bounds: { minCol: 0, maxCol: 4, minRow: 0, maxRow: 1 }, round: 1, units: [
     { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, integrity: 2, currentSpeed: 3 },
