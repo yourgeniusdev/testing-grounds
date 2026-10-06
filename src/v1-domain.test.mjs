@@ -20,7 +20,11 @@ import {
   planMovement,
   planRam,
   changeHeading,
-  supercoverLine
+  supercoverLine,
+  recordEvent,
+  validateDomainEvent,
+  validateEventLog,
+  replayEventLog
 } from "./v1-domain.js";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
@@ -205,9 +209,10 @@ test("atomic movement spends speed before entry and stops before an unaffordable
   assert.deepEqual(result, { status: "blocked", moved: 1 });
   assert.equal(unit.currentSpeed, 0);
   assert.deepEqual(unit.position, { q: 1, r: 0 });
-  assert.deepEqual(state.events.slice(-3).map(event => event.action), ["entry-attempt", "movement-step", "entry-attempt"]);
-  assert.equal(state.events.at(-2).cost, 1);
-  assert.equal(state.events.at(-2).remainingSpeed, 0);
+  assert.deepEqual(state.events.slice(-4).map(event => event.action), ["entry-attempt", "movement-step", "hex-entered", "entry-attempt"]);
+  const movement = state.events.findLast(event => event.action === "movement-step");
+  assert.equal(movement.cost, 1);
+  assert.equal(movement.remainingSpeed, 0);
 });
 
 test("heading changes are limited to one turn and maneuver budget", () => {
@@ -242,10 +247,12 @@ test("capital movement turns at most once before each heading-constrained step a
   assert.deepEqual(result, { status: "moved", moved: 2 });
   assert.equal(unit.heading, 5);
   assert.equal(unit.turnsSpent, 1);
-  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["entry-attempt", "movement-step", "entry-attempt", "heading-change", "movement-step"]);
-  const turn = state.events.at(-2);
-  assert.equal(turn.causeEventId, state.events.at(-3).eventId);
-  assert.equal(state.events.at(-1).causeEventId, turn.eventId);
+  assert.deepEqual(state.events.slice(-8).map(event => event.action), ["entry-attempt", "movement-step", "hex-entered", "entry-attempt", "heading-change", "movement-step", "hex-entered", "maneuver-completed"]);
+  const turn = state.events.findLast(event => event.action === "heading-change");
+  const entry = state.events.findLast(event => event.action === "entry-attempt");
+  const movement = state.events.findLast(event => event.action === "movement-step");
+  assert.equal(turn.causeEventId, entry.eventId);
+  assert.equal(movement.causeEventId, turn.eventId);
 });
 
 test("capital movement rejects a step that cannot match heading within remaining maneuver", () => {
@@ -268,8 +275,8 @@ test("capital may spend one remaining turn after arrival", () => {
   assert.deepEqual(moveAtomic(state, unit.id, [{ q: 1, r: 0 }], { heading: 1 }), { status: "moved", moved: 1 });
   assert.equal(unit.heading, 1);
   assert.equal(unit.turnsSpent, 1);
-  assert.deepEqual(state.events.slice(-3).map(event => event.action), ["entry-attempt", "movement-step", "heading-change"]);
-  assert.equal(state.events.at(-1).causeEventId, state.events.at(-2).eventId);
+  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["entry-attempt", "movement-step", "hex-entered", "heading-change", "maneuver-completed"]);
+  assert.equal(state.events.findLast(event => event.action === "heading-change").causeEventId, state.events.findLast(event => event.action === "hex-entered").eventId);
 });
 
 test("stationary capital turn spends maneuver and clears evasion", () => {
@@ -282,7 +289,7 @@ test("stationary capital turn spends maneuver and clears evasion", () => {
   assert.equal(unit.heading, 1);
   assert.equal(unit.turnsSpent, 1);
   assert.equal(unit.evasion, 0);
-  assert.equal(state.events.at(-1).stationary, true);
+  assert.equal(state.events.findLast(event => event.action === "heading-change").stationary, true);
 });
 
 test("final heading is validated from arrival heading with the combined maneuver budget before mutation", () => {
@@ -339,9 +346,9 @@ test("nonlethal and repeated onEnter damage resolves once per entry without stop
   assert.deepEqual(fighter.position, { q: 1, r: 0 });
   assert.equal(fighter.integrity, 3);
   assert.equal(state.events.filter(event => event.action === "on-enter").length, 2);
-  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "on-enter", "damage-packet", "entry-attempt", "movement-step", "entry-attempt", "movement-step", "on-enter", "damage-packet"]);
+  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "hex-entered", "on-enter", "damage-packet", "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered", "on-enter", "damage-packet", "maneuver-completed"]);
   for (const movement of state.events.filter(event => event.action === "movement-step")) assert.equal(state.events.find(event => event.eventId === movement.causeEventId)?.action, "entry-attempt");
-  for (const event of state.events.filter(candidate => candidate.action === "on-enter")) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "movement-step");
+  for (const event of state.events.filter(candidate => candidate.action === "on-enter")) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "hex-entered");
   for (const event of state.events.filter(candidate => candidate.action === "damage-packet")) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "on-enter");
 });
 
@@ -368,7 +375,7 @@ test("state-changing onEnter effects resolve in content and effect order on ever
     ["mist", "currentSpeed", { currentSpeed: 2 }, { currentSpeed: 3 }],
     ["wake", "evasion", { evasion: 7 }, { evasion: 8 }]
   ]);
-  for (const event of effects) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "movement-step");
+  for (const event of effects) assert.equal(state.events.find(candidate => candidate.eventId === event.causeEventId)?.action, "hex-entered");
 });
 
 test("onEnter effect configuration rejects unsupported effects and clamps bounded unit state", () => {
@@ -399,7 +406,7 @@ test("state-changing onEnter can invalidate the next route step without partial 
   const fighter = state.units.find(unit => unit.id === "fighter");
   assert.deepEqual(fighter.position, { q: 1, r: 0 });
   assert.equal(fighter.currentSpeed, 0);
-  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "on-enter", "entry-attempt"]);
+  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "hex-entered", "on-enter", "entry-attempt"]);
 });
 
 test("lethal onEnter damage ends the route before reactions and creates debris", () => {
@@ -413,10 +420,10 @@ test("lethal onEnter damage ends the route before reactions and creates debris",
   assert.deepEqual(result, { status: "blocked", moved: 1 });
   assert.equal(state.units.some(unit => unit.id === "fighter"), false);
   assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 1));
-  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "on-enter", "damage-packet", "unit-destroyed", "debris-created", "victory"]);
-  const [entry, movement, onEnter, damage, destroyed, debris] = state.events;
+  assert.deepEqual(state.events.map(event => event.action), ["entry-attempt", "movement-step", "hex-entered", "on-enter", "damage-packet", "unit-destroyed", "debris-created", "victory-check", "victory"]);
+  const [entry, movement, , onEnter, damage, destroyed, debris] = state.events;
   assert.equal(movement.causeEventId, entry.eventId);
-  assert.equal(onEnter.causeEventId, movement.eventId);
+  assert.equal(onEnter.causeEventId, state.events.find(event => event.action === "hex-entered").eventId);
   assert.equal(damage.causeEventId, onEnter.eventId);
   assert.equal(destroyed.causeEventId, damage.eventId);
   assert.equal(debris.causeEventId, destroyed.eventId);
@@ -471,7 +478,7 @@ test("lethal squadron degradation orders loss before destruction and cleans inte
   ] });
   refreshInterception(state);
   applyDamagePacket(state, "s", { amount: 20, sourceId: "enemy" });
-  assert.deepEqual(state.events.map(event => event.action), ["interception-link-created", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "interception-link-removed", "victory"]);
+  assert.deepEqual(state.events.map(event => event.action), ["interception-link-created", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "interception-link-removed", "victory-check", "victory"]);
   assert.deepEqual(state.units[0].engagedWith, []);
   assert.equal(state.contents[0].cover, "debris");
 });
@@ -526,7 +533,7 @@ test("failed disengagement spends speed, preserves links, ends maneuver, and pre
   assert.deepEqual(state.events.find(event => event.action === "disengagement-check").random, { roll: 60, chance: 60 });
   assert.equal(moveAtomic(state, "a", [{ q: 0, r: 0 }]).moved, 0);
   assert.equal(resolveAttack(state, "a", "target", state.units[0].weapons[0], { random: () => 0 }).damage, 4);
-  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengagement-declared", "disengagement-paid", "evasion-modifier-applied", "disengagement-check", "disengagement-failed", "activation-stage", "attack-shot", "damage-packet", "attack-shot", "damage-packet"]);
+  assert.deepEqual(state.events.slice(eventCount).map(event => event.action), ["disengagement-declared", "disengagement-paid", "evasion-modifier-applied", "disengagement-check", "disengagement-failed", "activation-stage", "action-declared", "action-paid", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet"]);
 });
 
 test("interception is symmetric many-to-many with bomber asymmetry and no allied links", () => {
@@ -673,7 +680,7 @@ test("friendly and enemy blockers use the same deterministic hit distribution", 
     assert.equal(result.damage, 3);
     assert.equal(state.units.find(unit => unit.id === "blocker").integrity, 7);
     assert.equal(state.units.find(unit => unit.id === "b").integrity, 10);
-    assert.equal(state.events.at(-1).cause, side === "left" ? "friendly-fire" : "attack");
+    assert.equal(state.events.findLast(event => event.action === "damage-packet").cause, side === "left" ? "friendly-fire" : "attack");
   }
 });
 
@@ -728,7 +735,7 @@ test("a destroyed blocker is removed before the next salvo shot", () => {
   resolveAttack(state, "a", "b", prepareAttack(state, "a"), { random: () => rolls.shift() });
   assert.equal(state.units.some(unit => unit.id === "blocker"), false);
   assert.equal(state.units.find(unit => unit.id === "b").integrity, 8);
-  assert.deepEqual(state.events.slice(-6).map(event => event.action), ["attack-shot", "damage-packet", "unit-destroyed", "debris-created", "attack-shot", "damage-packet"]);
+  assert.deepEqual(state.events.filter(event => ["line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "unit-destroyed", "debris-created", "victory-check"].includes(event.action)).map(event => event.action), ["line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "unit-destroyed", "debris-created", "victory-check", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet"]);
 });
 
 test("a large battlefield object fully obscures the target but remains hittable", () => {
@@ -849,7 +856,7 @@ test("ramming destroys a large object through the damage lifecycle", () => {
   assert.deepEqual(result, { success: true, damage: 5, targetDestroyed: true, attackerDestroyed: false });
   assert.equal(state.contents.some(item => item.id === "station"), false);
   assert.ok(state.contents.some(item => item.kind === "debris" && item.position.q === 2));
-  assert.deepEqual(state.events.slice(-7).map(event => event.action), ["ramming-impact", "damage-packet", "object-destroyed", "debris-created", "damage-packet", "ramming-resolved", "victory"]);
+  assert.deepEqual(state.events.slice(-8).map(event => event.action), ["ramming-impact", "damage-packet", "object-destroyed", "debris-created", "damage-packet", "ramming-resolved", "victory-check", "victory"]);
   assert.equal(state.events.at(-1).causeEventId, state.events.at(-2).eventId);
 });
 
@@ -1009,6 +1016,36 @@ test("manual salvo spends the activation attack and rejects another slot cleanly
   assert.deepEqual(state, before);
 });
 
+test("manual and overwatch payments record post-spend resources for replay", () => {
+  const manual = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "gun", ready: true, ammo: 2, accuracy: 0, damage: 1, maxRange: 3, arc: "360" }] },
+    { id: "b", side: "right", kind: "capital", position: { q: 1, r: 0 }, integrity: 5 }
+  ] });
+  prepareAttack(manual, "a");
+  resolveAttack(manual, "a", "b", manual.units[0].weapons[0], { random: () => 1 });
+  const manualPaid = manual.events.find(event => event.action === "action-paid");
+  assert.deepEqual(manualPaid.before, { ready: true, ammo: 2, attackSpentBy: null });
+  assert.deepEqual(manualPaid.after, { ready: false, ammo: 1, attackSpentBy: "a" });
+  const manualReplay = replayEventLog(manual.events, manual.id);
+  assert.equal(manualReplay.attackSpentBy, "a");
+  assert.deepEqual({ ready: manualReplay.units[0].weapons[0].ready, ammo: manualReplay.units[0].weapons[0].ammo }, { ready: false, ammo: 1 });
+
+  const reaction = createBattle({ units: [
+    { id: "aa", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, accuracy: 0, damage: 1, maxRange: 3, overwatchEligible: true, overwatch: true, overwatchRound: 1 }] },
+    { id: "s", side: "right", kind: "squadron", position: { q: 1, r: 0 }, integrity: 5 }
+  ] });
+  reaction.round = 1; reaction.lifecycle = "Maneuver";
+  resolveOverwatch(reaction, "s", { random: () => 1 });
+  const paid = reaction.events.find(event => event.action === "action-paid");
+  assert.deepEqual(paid.before, { ready: true, ammo: 2, overwatch: true });
+  assert.deepEqual(paid.after, { ready: false, ammo: 1, overwatch: false });
+  const declared = reaction.events.find(event => event.action === "overwatch-declared");
+  assert.equal(paid.causeEventId, declared.eventId);
+  assert.equal(reaction.events.find(event => event.action === "overwatch-shot").causeEventId, paid.eventId);
+  const paidReplay = replayEventLog(reaction.events.slice(0, paid.sequence), reaction.id);
+  assert.deepEqual({ ready: paidReplay.units[0].weapons[0].ready, ammo: paidReplay.units[0].weapons[0].ammo, overwatch: paidReplay.units[0].weapons[0].overwatch }, { ready: false, ammo: 1, overwatch: false });
+});
+
 test("manual fire and overwatch are mutually exclusive and spend ammo on declaration", () => {
   const state = createBattle({ units: [
     { id: "cap", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: true, ammo: 2, accuracy: 0, damage: 1, maxRange: 3, overwatchEligible: true }] },
@@ -1083,9 +1120,12 @@ test("an AA slot cannot trigger again against the same squadron in one round", (
   assert.equal(slot.ready, false);
   assert.equal(slot.overwatch, false);
   assert.deepEqual(slot.overwatchTargets, ["squad"]);
-  assert.deepEqual(state.events.slice(-3).map(event => event.action), ["overwatch-declared", "overwatch-shot", "attack-shot"]);
-  assert.deepEqual(state.events.at(-1).random, { roll: 10, hitBlocker: 0, hitMain: 0, miss: 100 });
-  const counts = Object.fromEntries(["overwatch-declared", "overwatch-shot", "attack-shot", "damage-packet"].map(action => [action, state.events.filter(event => event.action === action).length]));
+  assert.deepEqual(state.events.slice(-7).map(event => event.action), ["overwatch-declared", "action-paid", "overwatch-shot", "line-of-fire-check", "accuracy-check", "attack-shot", "overwatch-result"]);
+  assert.deepEqual(state.events.findLast(event => event.action === "attack-shot").random, { roll: 10, hitBlocker: 0, hitMain: 0, miss: 100 });
+  const resultEvent = state.events.at(-1);
+  assert.deepEqual(resultEvent.result, { hits: 0, damage: 0, destroyed: false });
+  assert.equal(resultEvent.causeEventId, state.events.at(-2).eventId);
+  const counts = Object.fromEntries(["overwatch-declared", "overwatch-shot", "overwatch-result", "attack-shot", "damage-packet"].map(action => [action, state.events.filter(event => event.action === action).length]));
   slot.ready = true;
   slot.overwatch = true;
   assert.deepEqual(resolveOverwatch(state, "squad", { random: () => 0 }), []);
@@ -1168,6 +1208,132 @@ test("RoundEnd clears overwatch and RoundStart restores readiness for a new-roun
   assert.equal(state.events.at(-1).round, 2);
 });
 
+test("event contract rejects unknown or incomplete events and validates causal sequence", () => {
+  const state = createBattle({ id: "events" });
+  assert.throws(() => recordEvent(state, "unknown"), /Unknown domain event action/);
+  assert.throws(() => recordEvent(state, "movement-step", { actorId: "a" }), /Missing position/);
+  assert.equal(state.sequence, 0);
+  const entry = recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
+  recordEvent(state, "movement-step", { actorId: "a", subjectIds: ["a"], causeEventId: entry.eventId, position: { q: 1, r: 0 }, cost: 1, remainingSpeed: 0, heading: null });
+  assert.equal(validateEventLog(state.events, state.id), true);
+  assert.throws(() => validateDomainEvent({ action: "attack-shot" }), /Missing eventId/);
+  const invalid = structuredClone(state.events);
+  invalid[1].causeEventId = "events:99";
+  assert.throws(() => validateEventLog(invalid, state.id), /sequence, cause, checkpoint, or delta/);
+});
+
+test("atomic event snapshots contain state after their changes", () => {
+  const state = createBattle({ id: "post-state", units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, currentSpeed: 1, heading: 0, maneuver: 0, integrity: 10 },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ] });
+  state.lifecycle = "Maneuver"; state.activeUnitId = "a";
+  moveAtomic(state, "a", [{ q: 1, r: 0 }]);
+  const movement = state.events.find(event => event.action === "movement-step");
+  const replayed = replayEventLog(state.events.slice(0, movement.sequence), state.id);
+  const unit = replayed.units.find(candidate => candidate.id === "a");
+  assert.deepEqual(unit.position, { q: 1, r: 0 });
+  assert.equal(unit.currentSpeed, 0);
+  assert.equal(state.events.filter(event => event.checkpoint !== null).length, 1);
+  assert.equal(movement.delta.patches.some(patch => patch.path[0] === "units" && patch.path.length > 1), true);
+  assert.equal(movement.delta.patches.some(patch => patch.path.length === 1 && ["units", "contents"].includes(patch.path[0])), false);
+  assert.deepEqual(replayEventLog(state.events.slice(0, movement.sequence), state.id).units.find(candidate => candidate.id === "a").position, { q: 1, r: 0 });
+});
+
+test("event replay restores the exact latest domain state without RNG", () => {
+  const state = createBattle({ id: "replay", units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10, weapons: [{ accuracy: 100, damage: 2, arc: "360", maxRange: 3 }] },
+    { id: "b", side: "right", kind: "capital", position: { q: 1, r: 0 }, integrity: 5 }
+  ] });
+  resolveAttack(state, "a", "b", prepareAttack(state, "a"), { random: () => 0.42 });
+  const replayed = replayEventLog(state.events, state.id);
+  const expected = structuredClone(state);
+  delete expected._eventCheckpoint;
+  delete expected._eventReplayState;
+  assert.deepEqual(replayed, expected);
+  assert.equal(replayed.events.find(event => event.action === "accuracy-check").random.roll, 42);
+});
+
+test("deployment-complete captures the post-transition lifecycle", () => {
+  const state = createBattle({ id: "deploy-transition", bounds, units });
+  deployUnit(state, "l-cap", { q: 0, r: 0 }, 2);
+  confirmDeployment(state, "left");
+  const completed = state.events.find(event => event.action === "deployment-complete");
+  assert.equal(state.lifecycle, "DeploymentRight");
+  assert.equal(completed.phase, "DeploymentRight");
+  assert.equal(completed.delta.patches.some(patch => patch.path.join(".") === "lifecycle" && patch.value === "DeploymentRight"), true);
+  assert.equal(replayEventLog(state.events, state.id).lifecycle, "DeploymentRight");
+});
+
+test("event envelope and action payload validation rejects invalid types", () => {
+  const state = createBattle({ id: "typed" });
+  const valid = recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
+  for (const mutate of [
+    event => { event.round = -1; }, event => { event.phase = "Nope"; }, event => { event.actorId = 7; },
+    event => { event.subjectIds = [1]; }, event => { event.position = { q: 1.5, r: 0 }; }, event => { event.cost = "1"; }, event => { event.delta = []; }
+  ]) {
+    const invalid = structuredClone(valid); mutate(invalid);
+    assert.throws(() => validateDomainEvent(invalid), /Invalid/);
+  }
+  const damage = { ...structuredClone(valid), action: "damage-packet", cause: "attack", before: {}, after: {}, layers: [{ layer: "shield", amount: "2", remaining: 0 }] };
+  assert.throws(() => validateDomainEvent(damage), /Invalid/);
+  for (const invalid of [
+    { ...structuredClone(valid), action: "deployment-start", side: "middle" },
+    { ...structuredClone(valid), action: "action-declared", kind: "teleport" },
+    { ...structuredClone(valid), action: "accuracy-check", random: { roll: 101 }, result: {} },
+    { ...structuredClone(valid), action: "ramming-declared", route: [{ q: 0.5, r: 0 }], directSteps: -1 },
+    { ...structuredClone(valid), action: "overwatch-shot", slotId: 3 },
+    { ...structuredClone(valid), action: "movement-step", position: { q: 1, r: 0 }, cost: 1, remainingSpeed: -1, heading: null },
+    { ...structuredClone(valid), action: "ramming-resolved", targetDamage: -1, attackerDamage: 0, targetDestroyed: "yes", attackerDestroyed: false },
+    { ...structuredClone(valid), action: "overwatch-result", slotId: "aa:1", result: { hits: -1, damage: 0, destroyed: false } }
+  ]) assert.throws(() => validateDomainEvent(invalid), /Invalid/);
+});
+
+test("replay invariants reject misplaced checkpoints and unsafe deltas", () => {
+  const state = createBattle({ id: "invariants" });
+  recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
+  recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 2, r: 0 }, cost: 1 });
+  for (const mutate of [
+    events => { events[0].checkpoint = null; },
+    events => { events[1].checkpoint = events[0].checkpoint; },
+    events => { events[1].delta = { patches: [{ path: ["events"], value: [] }] }; },
+    events => { events[1].delta = { patches: [{ path: [], value: 1 }] }; },
+    events => { events[1].delta = { patches: [{ path: ["round"], remove: true, value: 1 }] }; },
+    events => { events[1].delta = { patches: [{ path: ["units", 99, "integrity"], value: 1 }] }; },
+    events => { events[1].delta = { patches: [{ path: ["units", "0"], value: {} }] }; },
+    events => { events[1].delta = { patches: [{ path: ["deployment", "missing", "x"], value: true }] }; }
+  ]) {
+    const invalid = structuredClone(state.events); mutate(invalid);
+    assert.throws(() => validateEventLog(invalid, state.id), /checkpoint, or delta/);
+  }
+});
+
+test("event payloads are deeply frozen and preserve snapshots", () => {
+  const state = createBattle({ id: "frozen" });
+  const position = { q: 1, r: 2 };
+  const event = recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position, cost: 1 });
+  position.q = 9;
+  assert.equal(Object.isFrozen(event), true);
+  assert.equal(Object.isFrozen(event.position), true);
+  assert.equal(Object.isFrozen(event.subjectIds), true);
+  assert.equal(event.position.q, 1);
+  assert.throws(() => { event.position.q = 3; }, TypeError);
+});
+
+test("attack records actual RNG and object damage points to the shot", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ accuracy: 80, damage: 2, arc: "360", maxRange: 3 }] },
+    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+  ], contents: [{ id: "station", kind: "object", size: "large", position: { q: 1, r: 0 }, integrity: 5 }] });
+  resolveAttack(state, "a", "b", prepareAttack(state, "a"), { random: () => 0.25 });
+  const shot = state.events.find(event => event.action === "attack-shot");
+  const damage = state.events.find(event => event.action === "damage-packet");
+  assert.equal(shot.random.roll, 25);
+  assert.equal(shot.after.hitId, "station");
+  assert.equal(damage.causeEventId, shot.eventId);
+  assert.equal(validateEventLog(state.events, state.id), true);
+});
+
 test("memory store persists and notifies domain snapshots", async () => {
   const { createMemoryPersistence, createBattleStore } = await import("./v1-store.js");
   const persistence = createMemoryPersistence();
@@ -1178,4 +1344,71 @@ test("memory store persists and notifies domain snapshots", async () => {
   assert.equal(store.getState().round, 7);
   assert.equal(notifications, 1);
   assert.equal(persistence.load().round, 7);
+});
+
+test("legacy snapshot events migrate and continue with canonical replay internals", async () => {
+  const { createLocalPersistence } = await import("./v1-store.js");
+  const original = createBattle({ id: "legacy-events" });
+  recordEvent(original, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
+  const replayed = replayEventLog(original.events, original.id);
+  const legacy = structuredClone(original);
+  delete legacy._eventCheckpoint; delete legacy._eventReplayState;
+  legacy.events = legacy.events.map(event => {
+    const old = { ...event, snapshot: Object.fromEntries(["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks"].map(field => [field, structuredClone(replayed[field])])) };
+    delete old.checkpoint; delete old.delta;
+    return old;
+  });
+  const values = new Map([["battle", JSON.stringify(legacy)]]);
+  const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const persistence = createLocalPersistence("battle", storage);
+  const loaded = persistence.load();
+  assert.equal(loaded.events[0].checkpoint.lifecycle, "DeploymentLeft");
+  assert.deepEqual(loaded._eventReplayState.units, loaded.units);
+  recordEvent(loaded, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 2, r: 0 }, cost: 1 });
+  assert.equal(validateEventLog(loaded.events, loaded.id), true);
+  const continued = replayEventLog(loaded.events, loaded.id);
+  assert.equal(continued.sequence, loaded.sequence);
+  assert.deepEqual(continued.units, loaded.units);
+  assert.deepEqual(continued.contents, loaded.contents);
+});
+
+test("persistence restores deeply frozen validated events", async () => {
+  const { createMemoryPersistence, createLocalPersistence } = await import("./v1-store.js");
+  const state = createBattle({ id: "persisted" });
+  recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
+  const memory = createMemoryPersistence();
+  memory.save(state);
+  const loaded = memory.load();
+  assert.equal(Object.isFrozen(loaded.events[0].position), true);
+  recordEvent(loaded, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 2, r: 0 }, cost: 1 });
+  assert.equal(validateEventLog(loaded.events, loaded.id), true);
+  const continued = replayEventLog(loaded.events, loaded.id);
+  assert.equal(continued.sequence, loaded.sequence);
+  assert.deepEqual(continued.units, loaded.units);
+  const values = new Map();
+  const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };
+  const local = createLocalPersistence("battle", storage);
+  local.save(state);
+  assert.equal(Object.isFrozen(local.load().events[0].position), true);
+  const corrupt = JSON.parse(values.get("battle"));
+  corrupt.state.events[0].sequence = 2;
+  values.set("battle", JSON.stringify(corrupt));
+  assert.equal(local.load(), null);
+  values.set("battle", JSON.stringify(state));
+  const migrated = local.load();
+  assert.equal(migrated.id, state.id);
+  assert.equal(migrated.sequence, state.sequence);
+  assert.deepEqual(migrated.units, state.units);
+  local.save(migrated);
+  assert.equal(JSON.parse(values.get("battle")).persistenceVersion, 2);
+  const desynced = JSON.parse(values.get("battle"));
+  desynced.state.round = 99;
+  values.set("battle", JSON.stringify(desynced));
+  assert.equal(local.load(), null);
+  const wrongSequence = JSON.parse(JSON.stringify({ persistenceVersion: 2, state }));
+  wrongSequence.state.sequence += 1;
+  values.set("battle", JSON.stringify(wrongSequence));
+  assert.equal(local.load(), null);
+  values.set("battle", "not-json");
+  assert.equal(local.load(), null);
 });

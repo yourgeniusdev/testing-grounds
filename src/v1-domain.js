@@ -5,6 +5,104 @@ export const LIFECYCLE = Object.freeze([
 
 const sides = ["left", "right"];
 
+const EVENT_PAYLOADS = Object.freeze({
+  "deployment-start": ["side"], "deployment-complete": ["side"], "round-start": [], "round-end": [], "activation-end": [], "action-declared": ["kind"], "action-paid": ["kind", "before", "after"], "hex-entered": ["position"], "interception-link-changed": ["before", "after"], "overwatch-result": ["slotId", "result"], "line-of-fire-check": ["result"], "accuracy-check": ["random", "result"], "maneuver-completed": ["position"], "victory-check": ["result"],
+  "deployment-place": ["position", "heading"], "deployment-confirm": [], "lifecycle-progress": ["after"], wait: [], "activation-start": [], "activation-stage": ["after"],
+  "overwatch-armed": [], "overwatch-declared": ["slotId"], "overwatch-shot": ["slotId"], "entry-attempt": ["position", "cost"], "heading-change": ["heading", "turn", "stationary"], "movement-step": ["position", "cost", "remainingSpeed", "heading"],
+  "on-enter": ["position", "effect", "amount"], "interception-link-created": ["creators"], "interception-link-removed": ["creators"],
+  "disengagement-declared": ["preview"], "disengagement-paid": ["before", "after", "cost"], "evasion-modifier-applied": ["amount", "before", "after"], "disengagement-check": ["random", "preview"], "disengagement-succeeded": [], "disengagement-failed": [],
+  "attack-shot": ["random", "after"], "damage-packet": ["cause", "before", "after", "layers"], "squadron-craft-lost": ["before", "after", "lost"], "unit-destroyed": ["position", "after"], "object-destroyed": ["position", "after"], "debris-created": ["position"],
+  "ramming-declared": ["route", "directSteps"], "ramming-cancelled": ["moved"], "ramming-impact": ["targetDamage", "attackerDamage", "directSteps"], "ramming-resolved": ["targetDamage", "attackerDamage", "targetDestroyed", "attackerDestroyed"], victory: ["after"]
+});
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  Object.values(value).forEach(deepFreeze);
+  return value;
+}
+
+const isRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
+const isId = value => typeof value === "string" && value.length > 0;
+const isPosition = value => isRecord(value) && Number.isInteger(value.q) && Number.isInteger(value.r);
+const isNumber = value => typeof value === "number" && Number.isFinite(value);
+
+function validPayload(event) {
+  if (Object.hasOwn(event, "position") && event.position !== null && !isPosition(event.position)) return false;
+  if (Object.hasOwn(event, "positions") && (!Array.isArray(event.positions) || !event.positions.every(isPosition))) return false;
+  if (Object.hasOwn(event, "before") && !isRecord(event.before)) return false;
+  if (Object.hasOwn(event, "after") && !isRecord(event.after) && typeof event.after !== "string") return false;
+  if (Object.hasOwn(event, "random") && (!isRecord(event.random) || !isNumber(event.random.roll))) return false;
+  if (Object.hasOwn(event, "cost") && !isNumber(event.cost)) return false;
+  if (Object.hasOwn(event, "amount") && !isNumber(event.amount)) return false;
+  if (Object.hasOwn(event, "creators") && (!Array.isArray(event.creators) || !event.creators.every(isId))) return false;
+  if (event.action === "damage-packet" && (!Array.isArray(event.layers) || !event.layers.every(layer => isRecord(layer) && typeof layer.layer === "string" && isNumber(layer.amount) && isNumber(layer.remaining)))) return false;
+  if (["attack-shot", "accuracy-check", "disengagement-check"].includes(event.action) && (!isRecord(event.random) || event.random.roll < 0 || event.random.roll > 100)) return false;
+  if (Object.hasOwn(event, "side") && !sides.includes(event.side)) return false;
+  if (Object.hasOwn(event, "kind") && !["attack", "overwatch", "movement", "disengagement", "ramming"].includes(event.kind)) return false;
+  if (Object.hasOwn(event, "slotId") && event.slotId !== null && !isId(event.slotId)) return false;
+  if (Object.hasOwn(event, "route") && (!Array.isArray(event.route) || !event.route.every(isPosition))) return false;
+  if (Object.hasOwn(event, "directSteps") && (!Number.isInteger(event.directSteps) || event.directSteps < 0)) return false;
+  if (Object.hasOwn(event, "remainingSpeed") && (!isNumber(event.remainingSpeed) || event.remainingSpeed < 0)) return false;
+  if (Object.hasOwn(event, "result") && !isRecord(event.result)) return false;
+  if (Object.hasOwn(event, "preview") && !isRecord(event.preview)) return false;
+  if (Object.hasOwn(event, "heading") && event.heading !== null && (!Number.isInteger(event.heading) || event.heading < 0 || event.heading > 5)) return false;
+  if (Object.hasOwn(event, "targetDamage") && (!isNumber(event.targetDamage) || event.targetDamage < 0)) return false;
+  if (Object.hasOwn(event, "attackerDamage") && (!isNumber(event.attackerDamage) || event.attackerDamage < 0)) return false;
+  if (Object.hasOwn(event, "moved") && (!Number.isInteger(event.moved) || event.moved < 0)) return false;
+  if (Object.hasOwn(event, "lost") && (!Number.isInteger(event.lost) || event.lost < 0)) return false;
+  if (Object.hasOwn(event, "targetDestroyed") && typeof event.targetDestroyed !== "boolean") return false;
+  if (Object.hasOwn(event, "attackerDestroyed") && typeof event.attackerDestroyed !== "boolean") return false;
+  if (event.action === "heading-change" && (!Number.isInteger(event.heading) || event.heading < 0 || event.heading > 5 || !Number.isInteger(event.turn) || event.turn < 0 || typeof event.stationary !== "boolean")) return false;
+  if (event.action === "on-enter" && (!["damage", "modify-unit"].includes(event.effect) || (event.effect === "modify-unit" && !["currentSpeed", "evasion"].includes(event.field)))) return false;
+  if (event.action === "disengagement-check" && (!isNumber(event.random.chance) || event.random.chance < 0 || event.random.chance > 100)) return false;
+  if (event.action === "attack-shot" && (!["hitBlocker", "hitMain", "miss"].every(field => isNumber(event.random[field])) || !Object.hasOwn(event.after, "hitId"))) return false;
+  if (event.action === "action-paid" && (!isId(event.kind) || !isRecord(event.before) || !isRecord(event.after) || !["attack", "overwatch", "movement", "disengagement", "ramming"].includes(event.kind))) return false;
+  if (event.action === "victory-check" && (!Object.hasOwn(event.result, "winner") || (event.result.winner !== null && !sides.includes(event.result.winner)))) return false;
+  if (event.action === "line-of-fire-check" && (!Object.hasOwn(event.result, "blockerId") || (event.result.blockerId !== null && !isId(event.result.blockerId)) || !["hitBlocker", "hitMain", "miss"].every(field => isNumber(event.result[field])))) return false;
+  if (event.action === "accuracy-check" && (!Object.hasOwn(event.result, "hitId") || (event.result.hitId !== null && !isId(event.result.hitId)) || typeof event.result.blockerHit !== "boolean" || typeof event.result.mainHit !== "boolean")) return false;
+  if (event.action === "overwatch-result" && (!Number.isInteger(event.result.hits) || event.result.hits < 0 || !isNumber(event.result.damage) || event.result.damage < 0 || typeof event.result.destroyed !== "boolean")) return false;
+  if (event.action === "action-paid") {
+    const fields = event.kind === "attack" ? ["ready", "ammo", "attackSpentBy"] : event.kind === "overwatch" ? ["ready", "ammo", "overwatch"] : [];
+    if (!fields.every(field => Object.hasOwn(event.before, field) && Object.hasOwn(event.after, field))) return false;
+    if (["attack", "overwatch"].includes(event.kind) && (typeof event.before.ready !== "boolean" || typeof event.after.ready !== "boolean" || !Number.isInteger(event.before.ammo) || !Number.isInteger(event.after.ammo))) return false;
+  }
+  return true;
+}
+
+export function validateDomainEvent(event) {
+  if (!isRecord(event) || !Object.hasOwn(EVENT_PAYLOADS, event.action)) throw new TypeError("Unknown domain event action");
+  for (const field of ["eventId", "battleId", "round", "phase", "sequence", "actorId", "subjectIds", "causeEventId", "checkpoint", "delta", ...EVENT_PAYLOADS[event.action]]) if (!Object.hasOwn(event, field)) throw new TypeError(`Missing ${field} for ${event.action}`);
+  if (!isId(event.eventId) || !isId(event.battleId) || !Number.isInteger(event.round) || event.round < 0 || !LIFECYCLE.includes(event.phase) || !Number.isInteger(event.sequence) || event.sequence < 1 || (event.actorId !== null && !isId(event.actorId)) || !Array.isArray(event.subjectIds) || !event.subjectIds.every(isId) || (event.causeEventId !== null && !isId(event.causeEventId)) || (event.checkpoint !== null && !isRecord(event.checkpoint)) || !isRecord(event.delta) || !validPayload(event)) throw new TypeError(`Invalid ${event.action} event`);
+  return event;
+}
+
+function validReplayState(value) {
+  return isRecord(value) && Object.keys(value).every(key => REPLAY_FIELDS.has(key)) && LIFECYCLE.includes(value.lifecycle) && sides.every(side => typeof value.deployment?.[side] === "boolean") && Number.isInteger(value.round) && Array.isArray(value.queue) && Array.isArray(value.units) && Array.isArray(value.contents) && Array.isArray(value.interceptionLinks);
+}
+
+function validDelta(delta) {
+  return isRecord(delta) && Object.keys(delta).length === 1 && Array.isArray(delta.patches) && delta.patches.every(patch => isRecord(patch) && Array.isArray(patch.path) && patch.path.length > 0 && REPLAY_FIELDS.has(patch.path[0]) && patch.path.every(segment => typeof segment === "string" || Number.isInteger(segment)) && ((patch.remove === true && !Object.hasOwn(patch, "value")) || (!Object.hasOwn(patch, "remove") && Object.hasOwn(patch, "value"))));
+}
+
+export function validateEventLog(events, battleId = null) {
+  const ids = new Set();
+  let replay = null;
+  events.forEach((event, index) => {
+    validateDomainEvent(event);
+    if (event.sequence !== index + 1 || (battleId !== null && event.battleId !== battleId) || ids.has(event.eventId) || (event.causeEventId !== null && !ids.has(event.causeEventId)) || (index === 0 ? !validReplayState(event.checkpoint) : event.checkpoint !== null) || !validDelta(event.delta)) throw new TypeError("Invalid event sequence, cause, checkpoint, or delta");
+    try { replay = applyDelta(replay ?? structuredClone(event.checkpoint), event.delta); } catch { throw new TypeError("Invalid event sequence, cause, checkpoint, or delta"); }
+    ids.add(event.eventId);
+  });
+  return true;
+}
+
+export function freezeEventLog(events, battleId = null) {
+  validateEventLog(events, battleId);
+  events.forEach(deepFreeze);
+  return events;
+}
+
 export function createBattle({ id = "battle-1", units = [], bounds = null, contents = [] } = {}) {
   const normalized = units.map(unit => ({ ...unit, side: unit.side ?? unit.sideId, position: unit.position ? { ...unit.position } : null, currentSpeed: unit.currentSpeed ?? unit.speed ?? 1, hasActivated: false, hasWaited: false }));
   const normalizedContents = contents.map(item => ({ ...item, position: { ...item.position }, onEnterEffects: item.onEnterEffects?.map(effect => normalizeOnEnterEffect(effect)) }));
@@ -13,6 +111,8 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
     activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0, interceptionLinks: []
   };
+  state._eventCheckpoint = structuredClone(replayState(state));
+  state._eventReplayState = structuredClone(state._eventCheckpoint);
   if (bounds) for (const side of sides) {
     const required = normalized.filter(unit => unit.side === side).length;
     const available = deploymentZone(state, side).filter(position => !state.contents.some(item => samePosition(item.position, position))).length;
@@ -21,10 +121,68 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
   return state;
 }
 
+function replayState(state) {
+  return { bounds: state.bounds, lifecycle: state.lifecycle, deployment: state.deployment, round: state.round, queue: state.queue, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, winner: state.winner, units: state.units, contents: state.contents, interceptionLinks: state.interceptionLinks };
+}
+
+const REPLAY_FIELDS = new Set(["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks"]);
+
+function stateDelta(before, after) {
+  const patches = [];
+  const walk = (left, right, path) => {
+    if (JSON.stringify(left) === JSON.stringify(right)) return;
+    if (Array.isArray(left) && Array.isArray(right) && left.length === right.length) { right.forEach((value, index) => walk(left[index], value, [...path, index])); return; }
+    if (isRecord(left) && isRecord(right)) {
+      const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+      keys.forEach(key => key in right ? walk(left[key], right[key], [...path, key]) : patches.push({ path: [...path, key], remove: true }));
+      return;
+    }
+    patches.push({ path, value: structuredClone(right) });
+  };
+  Object.keys(after).forEach(key => walk(before[key], after[key], [key]));
+  return { patches };
+}
+
+function applyDelta(state, delta) {
+  for (const patch of delta.patches) {
+    let owner = state;
+    for (const segment of patch.path.slice(0, -1)) {
+      if ((Array.isArray(owner) && (!Number.isInteger(segment) || segment < 0 || segment >= owner.length)) || (!Array.isArray(owner) && (!isRecord(owner) || typeof segment !== "string" || !Object.hasOwn(owner, segment)))) throw new TypeError("Delta path does not exist");
+      owner = owner[segment];
+    }
+    const key = patch.path.at(-1);
+    if (Array.isArray(owner)) {
+      if (!Number.isInteger(key) || key < 0 || key >= owner.length) throw new TypeError("Invalid delta array index");
+      if (patch.remove) owner.splice(key, 1); else owner[key] = structuredClone(patch.value);
+    } else {
+      if (!isRecord(owner) || typeof key !== "string" || (patch.remove && !Object.hasOwn(owner, key))) throw new TypeError("Invalid delta object path");
+      if (patch.remove) delete owner[key]; else owner[key] = structuredClone(patch.value);
+    }
+  }
+  return state;
+}
+
+export function replayEventLog(events, battleId = null) {
+  validateEventLog(events, battleId);
+  if (!events.length) return null;
+  let state = structuredClone(events[0].checkpoint);
+  for (const event of events) state = applyDelta(state, event.delta);
+  const last = events.at(-1);
+  return { id: last.battleId, ...state, events: events.map(item => structuredClone(item)), sequence: last.sequence };
+}
+
 export function recordEvent(state, action, data = {}) {
-  const event = Object.freeze({ eventId: `${state.id}:${++state.sequence}`, battleId: state.id, round: state.round,
-    phase: state.lifecycle, sequence: state.sequence, actorId: null, subjectIds: [], action, ...data });
+  const sequence = state.sequence + 1;
+  const current = structuredClone(replayState(state));
+  const previous = state._eventReplayState ?? state._eventCheckpoint;
+  const event = structuredClone({ eventId: `${state.id}:${sequence}`, battleId: state.id, round: state.round,
+    phase: state.lifecycle, sequence, actorId: null, subjectIds: [], causeEventId: null, action, ...data, checkpoint: sequence === 1 ? state._eventCheckpoint : null, delta: stateDelta(previous, current) });
+  validateDomainEvent(event);
+  if (event.causeEventId !== null && !state.events.some(candidate => candidate.eventId === event.causeEventId)) throw new TypeError(`Unknown causeEventId for ${action}`);
+  state.sequence = sequence;
+  deepFreeze(event);
   state.events.push(event);
+  state._eventReplayState = current;
   return event;
 }
 
@@ -107,11 +265,12 @@ export function disengage(state, unitId, { random } = {}) {
   const checked = recordEvent(state, "disengagement-check", { actorId: unitId, subjectIds: [unitId], causeEventId: paid.eventId, random: { roll, chance: preview.chance }, preview });
   const resultEvent = recordEvent(state, success ? "disengagement-succeeded" : "disengagement-failed", { actorId: unitId, subjectIds: [unitId], causeEventId: checked.eventId });
   if (success) {
-    unit.disengagedLinks = (state.interceptionLinks ?? []).filter(link => link.unitIds.includes(unitId)).map(link => link.key);
+    const removedLinks = (state.interceptionLinks ?? []).filter(link => link.unitIds.includes(unitId));
+    unit.disengagedLinks = removedLinks.map(link => link.key);
     state.interceptionLinks = (state.interceptionLinks ?? []).filter(link => !link.unitIds.includes(unitId));
     unit.engagedWith = [];
     state.units.forEach(enemy => { enemy.engagedWith = (enemy.engagedWith ?? []).filter(id => id !== unitId); });
-    for (const key of unit.disengagedLinks) recordEvent(state, "interception-link-removed", { actorId: unitId, subjectIds: key.split(":"), causeEventId: resultEvent.eventId });
+    for (const link of removedLinks) recordEvent(state, "interception-link-removed", { actorId: unitId, subjectIds: link.unitIds, causeEventId: resultEvent.eventId, creators: link.creators });
   } else {
     state.lifecycle = "Attack";
     state.activationStage = "Attack";
@@ -138,6 +297,7 @@ function validDeployment(state, unit, position, heading) {
 export function deployUnit(state, unitId, position, heading = null) {
   const side = sideForLifecycle(state.lifecycle), unit = state.units.find(candidate => candidate.id === unitId);
   if (!side || !unit || unit.side !== side || state.deployment[side] || !validDeployment(state, unit, position, heading)) return false;
+  if (!state.events.some(event => event.action === "deployment-start" && event.side === side)) recordEvent(state, "deployment-start", { actorId: side, side });
   unit.position = { ...position };
   if (unit.kind === "capital") unit.heading = heading;
   recordEvent(state, "deployment-place", { actorId: unitId, subjectIds: [unitId], position: { ...position }, heading: unit.heading ?? null });
@@ -149,8 +309,9 @@ export function confirmDeployment(state, side) {
   const fleet = state.units.filter(unit => unit.side === side);
   if (fleet.some(unit => !unit.position || !validDeployment(state, unit, unit.position, unit.heading))) return false;
   state.deployment[side] = true;
-  recordEvent(state, "deployment-confirm", { actorId: side, subjectIds: fleet.map(unit => unit.id) });
+  const confirmed = recordEvent(state, "deployment-confirm", { actorId: side, subjectIds: fleet.map(unit => unit.id) });
   state.lifecycle = side === "left" ? "DeploymentRight" : "RoundStart";
+  recordEvent(state, "deployment-complete", { actorId: side, subjectIds: fleet.map(unit => unit.id), causeEventId: confirmed.eventId, side });
   if (side === "right") progress(state);
   return true;
 }
@@ -223,10 +384,13 @@ export function resolveOverwatch(state, targetId, { random = Math.random, causeE
     if (!state.units.includes(candidate.owner) || !slotCanOverwatch(state, candidate.owner, candidate.slot, target)) continue;
     const { owner, slot, index } = candidate, weapon = slot.weapon ?? slot;
     const slotId = `${owner.id}:${slot.id ?? index}`;
-    spendSlot(slot); slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
     const declared = recordEvent(state, "overwatch-declared", { actorId: owner.id, subjectIds: [target.id], causeEventId, slotId });
-    const launched = recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, slotId });
+    const beforePayment = { ready: slot.ready !== false, ammo: slotAmmo(slot), overwatch: slot.overwatch === true };
+    spendSlot(slot); slot.overwatchTargets = [...(slot.overwatchTargets ?? []), target.id];
+    const paid = recordEvent(state, "action-paid", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, kind: "overwatch", slotId, before: beforePayment, after: { ready: slot.ready !== false, ammo: slotAmmo(slot), overwatch: slot.overwatch === true } });
+    const launched = recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: paid.eventId, slotId });
     const result = resolveAttackInternal(state, owner, target, slot, { random, causeEventId: launched.eventId, cause: "overwatch", reaction: true });
+    recordEvent(state, "overwatch-result", { actorId: owner.id, subjectIds: [target.id], causeEventId: state.events.at(-1)?.eventId ?? launched.eventId, slotId, result: { hits: result.hits, damage: result.damage, destroyed: result.destroyed } });
     results.push({ ownerId: owner.id, targetId: target.id, slotId, ...result });
   }
   return results;
@@ -245,6 +409,7 @@ export function progress(state) {
     });
     state.queue = state.units.filter(unit => unit.position).slice().sort(initiativeOrder).map(unit => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
+    recordEvent(state, "round-start");
   } else if (state.lifecycle === "ActivationStart") {
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
   } else if (state.lifecycle === "EndActivation") {
@@ -253,8 +418,9 @@ export function progress(state) {
     const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
     if (next) { state.activeUnitId = next; state.lifecycle = "WaitDecision"; }
     else state.lifecycle = "RoundEnd";
-  } else if (state.lifecycle === "RoundEnd") { clearOverwatch(state); state.lifecycle = "RoundStart"; }
-  recordEvent(state, "lifecycle-progress", { after: state.lifecycle });
+    recordEvent(state, "activation-end", { actorId: unit?.id ?? null, subjectIds: unit ? [unit.id] : [] });
+  } else if (state.lifecycle === "RoundEnd") { clearOverwatch(state); state.lifecycle = "RoundStart"; recordEvent(state, "round-end"); }
+  else recordEvent(state, "lifecycle-progress", { after: state.lifecycle });
   return state.lifecycle;
 }
 
@@ -422,19 +588,20 @@ export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId 
     unit.position = { ...position };
     moved += 1;
     const movement = recordEvent(state, "movement-step", { actorId: unitId, subjectIds: [unitId], causeEventId: stepCauseEventId, position: { ...position }, cost, remainingSpeed: unit.currentSpeed, heading: unit.heading ?? null });
-    lastMovementEventId = movement.eventId;
+    const entered = recordEvent(state, "hex-entered", { actorId: unitId, subjectIds: [unitId], causeEventId: movement.eventId, position: { ...position } });
+    lastMovementEventId = entered.eventId;
     for (const content of contents) {
       const effects = [...(content.onEnterEffects ?? []), ...((content.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: content.onEnterDamage }] : [])];
       for (const effect of effects) {
-        resolveOnEnterEffect(state, unit, content, normalizeOnEnterEffect(effect), movement, position);
+        resolveOnEnterEffect(state, unit, content, normalizeOnEnterEffect(effect), entered, position);
         if (!state.units.includes(unit)) break;
       }
       if (!state.units.includes(unit)) break;
     }
     if (!state.units.includes(unit)) break;
-    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: movement.eventId });
+    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: entered.eventId });
     if (!state.units.includes(unit)) break;
-    refreshInterception(state, { causeEventId: movement.eventId });
+    refreshInterception(state, { causeEventId: entered.eventId });
     if (unit.kind === "squadron" && restrictingEnemies(state, unit).length) break;
   }
   if (moved === steps.length && state.units.includes(unit) && heading !== null && unit.kind === "capital") {
@@ -442,7 +609,9 @@ export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId 
     const beforeHeading = unit.heading;
     if (changeHeading(state, unitId, heading, { causeEventId: lastMovementEventId, stationary }) && stationary && beforeHeading !== heading) { unit.stationaryTurnEvasion = unit.evasion; unit.evasion = 0; }
   }
-  return { status: moved === steps.length && state.units.includes(unit) ? "moved" : "blocked", moved };
+  const status = moved === steps.length && state.units.includes(unit) ? "moved" : "blocked";
+  if (status === "moved") recordEvent(state, "maneuver-completed", { actorId: unitId, subjectIds: [unitId], causeEventId: lastMovementEventId, position: { ...unit.position } });
+  return { status, moved };
 }
 
 export function applyDamagePacket(state, target, packet = {}) {
@@ -471,9 +640,11 @@ export function applyDamagePacket(state, target, packet = {}) {
 
 function finishIfVictorious(state, causeEventId = null) {
   const remainingSides = new Set(state.units.map(candidate => candidate.side));
-  if (remainingSides.size === 1 && state.units.length) {
-    state.winner = [...remainingSides][0]; state.lifecycle = "Finished";
-    recordEvent(state, "victory", { causeEventId, after: { winner: state.winner } });
+  const winner = remainingSides.size === 1 && state.units.length ? [...remainingSides][0] : null;
+  const checked = recordEvent(state, "victory-check", { causeEventId, result: { winner } });
+  if (winner) {
+    state.winner = winner; state.lifecycle = "Finished";
+    recordEvent(state, "victory", { causeEventId: checked.eventId, after: { winner: state.winner } });
   }
 }
 
@@ -659,25 +830,36 @@ function resolveAttackInternal(state, attacker, target, slot, { random, causeEve
   const preview = previewAttack(state, source, victim, weapon);
   const manual = !reaction;
   if (!source || !victim || !state.units.includes(source) || !state.units.includes(victim) || !ownedSlot || !preview.canAttack || state.lifecycle === "Finished" || (reaction && state.lifecycle !== "Maneuver") || (manual && state.attackSpentBy === source.id) || (manual && (state.lifecycle !== "Attack" || state.activeUnitId !== source.id || ownedSlot.destroyed === true || ownedSlot.ready === false || ownedSlot.overwatch === true || slotAmmo(ownedSlot) <= 0))) return { ...preview, hits: 0, damage: 0 };
-  if (manual) spendSlot(ownedSlot);
+  let actionCauseEventId = causeEventId;
+  if (manual) {
+    const declared = recordEvent(state, "action-declared", { actorId: source.id, subjectIds: [victim.id], causeEventId, kind: "attack" });
+    const paymentBefore = { ready: ownedSlot.ready !== false, ammo: slotAmmo(ownedSlot), attackSpentBy: state.attackSpentBy };
+    spendSlot(ownedSlot); state.attackSpentBy = source.id;
+    const paid = recordEvent(state, "action-paid", { actorId: source.id, subjectIds: [source.id], causeEventId: declared.eventId, kind: "attack", slotId: ownedSlot.id ?? null, before: paymentBefore, after: { ready: ownedSlot.ready !== false, ammo: slotAmmo(ownedSlot), attackSpentBy: source.id } });
+    actionCauseEventId = paid.eventId;
+  }
   let hits = 0, damage = 0;
   for (let shot = 0; shot < preview.shots; shot += 1) {
+    const spentBy = state.attackSpentBy;
+    if (manual) state.attackSpentBy = null;
     const current = previewAttack(state, preview.attackerId, preview.targetId, weapon);
+    state.attackSpentBy = spentBy;
     if (!current.canAttack) break;
+    const lineOfFire = recordEvent(state, "line-of-fire-check", { actorId: current.attackerId, subjectIds: [current.targetId], causeEventId: actionCauseEventId, result: { blockerId: current.blockerId, hitBlocker: current.hitBlocker, hitMain: current.hitMain, miss: current.miss } });
     const roll = random() * 100;
     const blockerHit = Boolean(current.blockerId && roll < current.hitBlocker);
     const mainHit = !blockerHit && roll < current.hitBlocker + current.hitMain;
     const hitId = blockerHit ? current.blockerId : mainHit ? current.targetId : null;
-    const shotEvent = recordEvent(state, "attack-shot", { actorId: current.attackerId, subjectIds: [current.targetId], causeEventId, random: { roll, hitBlocker: current.hitBlocker, hitMain: current.hitMain, miss: current.miss }, after: { hitId } });
+    const accuracy = recordEvent(state, "accuracy-check", { actorId: current.attackerId, subjectIds: [current.targetId], causeEventId: lineOfFire.eventId, random: { roll }, result: { hitId, blockerHit, mainHit } });
+    const shotEvent = recordEvent(state, "attack-shot", { actorId: current.attackerId, subjectIds: [current.targetId], causeEventId: accuracy.eventId, random: { roll, hitBlocker: current.hitBlocker, hitMain: current.hitMain, miss: current.miss }, after: { hitId } });
     if (!hitId) continue;
     const unit = state.units.find(candidate => candidate.id === hitId);
     const object = state.contents.find(candidate => candidate.id === hitId);
     const damageCause = blockerHit && current.friendlyFire ? "friendly-fire" : cause;
-    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, causeEventId: shotEvent.eventId, cause: damageCause }) : applyObjectDamage(state, object, current.damage, current.attackerId, damageCause);
+    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, causeEventId: shotEvent.eventId, cause: damageCause }) : applyObjectDamage(state, object, current.damage, current.attackerId, damageCause, shotEvent.eventId);
     hits += 1;
     damage += result.amount;
     if (mainHit && result.destroyed) break;
   }
-  if (manual) state.attackSpentBy = source.id;
   return { ...preview, hits, damage, destroyed: !state.units.some(unit => unit.id === preview.targetId) };
 }

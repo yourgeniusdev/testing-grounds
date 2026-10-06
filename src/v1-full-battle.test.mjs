@@ -71,9 +71,9 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   assert.equal(rightFighter.stack, 2);
   assert.deepEqual(rightFighter.engagedWith, ["left-fighter"]);
   assert.deepEqual(state.events.slice(reactionStart).map(event => event.action), [
-    "entry-attempt", "movement-step", "entry-attempt", "movement-step", "entry-attempt", "movement-step",
-    "entry-attempt", "movement-step", "entry-attempt", "movement-step", "overwatch-declared", "overwatch-shot",
-    "attack-shot", "damage-packet", "squadron-craft-lost", "interception-link-created"
+    "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered",
+    "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered", "overwatch-declared", "action-paid", "overwatch-shot",
+    "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "squadron-craft-lost", "overwatch-result", "interception-link-created", "maneuver-completed"
   ]);
   assert.equal(advanceActivation(state, "Attack"), true);
   assert.equal(advanceActivation(state, "EndActivation"), true);
@@ -126,7 +126,7 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   assert.equal(finalAttack.destroyed, true);
   assert.equal(state.lifecycle, "Finished");
   assert.equal(state.winner, "left");
-  assert.deepEqual(state.events.slice(-6).map(event => event.action), ["attack-shot", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "victory"]);
+  assert.deepEqual(state.events.slice(-11).map(event => event.action), ["action-declared", "action-paid", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "victory-check", "victory"]);
   assert.equal(state.contents.filter(item => item.kind === "debris").length, 2);
   const eventCount = state.events.length;
   assert.equal(progress(state), "Finished");
