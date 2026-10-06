@@ -10,7 +10,9 @@ import {
   disengage,
   moveAtomic,
   progress,
-  resolveAttack
+  replayEventLog,
+  resolveAttack,
+  validateEventLog
 } from "./v1-domain.js";
 
 test("full battle reaches Finished through canonical lifecycle", () => {
@@ -64,7 +66,7 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   const reactionStart = state.events.length;
   assert.deepEqual(moveAtomic(state, "right-fighter", [
     { q: 6, r: 1 }, { q: 5, r: 1 }, { q: 4, r: 1 }, { q: 3, r: 1 }, { q: 2, r: 1 }
-  ]), { status: "moved", moved: 5 });
+  ], { random: () => 0.25 }), { status: "moved", moved: 5 });
   const rightFighter = state.units.find(unit => unit.id === "right-fighter");
   assert.equal(rightFighter.integrity, 14);
   assert.equal(state.units.find(unit => unit.id === "left-cap").weapons[0].ammo, 0);
@@ -128,8 +130,46 @@ test("multi-unit battle exercises reactions, degradation, disengagement, and vic
   assert.equal(state.winner, "left");
   assert.deepEqual(state.events.slice(-11).map(event => event.action), ["action-declared", "action-paid", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "victory-check", "victory"]);
   assert.equal(state.contents.filter(item => item.kind === "debris").length, 2);
+  assert.deepEqual(state.events.map(event => event.action), [
+    "deployment-start", "deployment-place", "deployment-place", "deployment-confirm", "deployment-complete",
+    "deployment-start", "deployment-place", "deployment-place", "deployment-confirm", "deployment-complete", "round-start",
+    "activation-start", "activation-stage", "activation-stage", "activation-stage", "activation-stage", "overwatch-armed", "activation-end",
+    "activation-start", "activation-stage", "activation-stage",
+    "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered",
+    "entry-attempt", "movement-step", "hex-entered", "entry-attempt", "movement-step", "hex-entered", "overwatch-declared", "action-paid", "overwatch-shot",
+    "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "squadron-craft-lost", "overwatch-result", "interception-link-created", "maneuver-completed",
+    "activation-stage", "activation-stage", "activation-end",
+    "activation-start", "activation-stage", "activation-stage", "disengagement-declared", "disengagement-paid", "evasion-modifier-applied", "disengagement-check", "disengagement-failed", "activation-stage", "activation-stage", "activation-end",
+    "activation-start", "activation-stage", "activation-stage", "activation-stage", "activation-stage", "activation-end", "round-end", "round-start",
+    "activation-start", "activation-stage", "activation-stage", "activation-stage", "action-declared", "action-paid", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "unit-destroyed", "debris-created", "victory-check", "activation-stage", "activation-end",
+    "activation-start", "activation-stage", "activation-stage", "activation-stage", "activation-stage", "activation-end",
+    "activation-start", "activation-stage", "activation-stage", "disengagement-declared", "disengagement-paid", "evasion-modifier-applied", "disengagement-check", "disengagement-succeeded", "interception-link-removed",
+    "entry-attempt", "movement-step", "hex-entered", "maneuver-completed", "activation-stage", "action-declared", "action-paid", "line-of-fire-check", "accuracy-check", "attack-shot", "damage-packet", "squadron-craft-lost", "unit-destroyed", "debris-created", "victory-check", "victory"
+  ]);
+  assert.equal(validateEventLog(state.events, state.id), true);
+  assert.deepEqual(state.events.map(event => event.sequence), Array.from({ length: state.events.length }, (_, index) => index + 1));
+  assert.equal(new Set(state.events.map(event => event.eventId)).size, state.events.length);
+  const replayed = replayEventLog(state.events, state.id);
+  for (const field of ["lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks"])
+    assert.deepEqual(replayed[field], state[field]);
+  assert.deepEqual(state.events.filter(event => event.action === "disengagement-check").map(event => event.random), [
+    { roll: 50, chance: 50 }, { roll: 49, chance: 50 }
+  ]);
+  assert.deepEqual(state.events.filter(event => event.action === "attack-shot").map(event => event.random), [
+    { roll: 25, hitBlocker: 0, hitMain: 100, miss: 0 },
+    { roll: 0, hitBlocker: 0, hitMain: 100, miss: 0 },
+    { roll: 0, hitBlocker: 0, hitMain: 100, miss: 0 }
+  ]);
+  const terminalSnapshot = structuredClone({ lifecycle: state.lifecycle, deployment: state.deployment, round: state.round, queue: state.queue, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, winner: state.winner, units: state.units, contents: state.contents, interceptionLinks: state.interceptionLinks });
   const eventCount = state.events.length;
+  const forbiddenRandom = () => { throw new Error("RNG called after Finished"); };
   assert.equal(progress(state), "Finished");
-  assert.equal(state.events.length, eventCount);
   assert.equal(decide(state), false);
+  assert.equal(advanceActivation(state, "EndActivation"), false);
+  assert.deepEqual(moveAtomic(state, "left-fighter", [{ q: 2, r: 0 }], { random: forbiddenRandom }), { status: "blocked", moved: 0 });
+  assert.deepEqual(disengage(state, "left-fighter", { random: forbiddenRandom }), { success: false, chance: 0, cost: 0 });
+  assert.equal(resolveAttack(state, leftCap, leftFighter, leftCap.weapons[0], { random: forbiddenRandom }).hits, 0);
+  assert.deepEqual(applyDamagePacket(state, "left-cap", { amount: 1, critChance: 100, random: forbiddenRandom }), { amount: 0, destroyed: false, layers: [] });
+  assert.deepEqual({ lifecycle: state.lifecycle, deployment: state.deployment, round: state.round, queue: state.queue, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, winner: state.winner, units: state.units, contents: state.contents, interceptionLinks: state.interceptionLinks }, terminalSnapshot);
+  assert.equal(state.events.length, eventCount);
 });

@@ -562,7 +562,7 @@ export function canEnter(state, unit, position, { final = false, ramming = false
   return true;
 }
 
-export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId = null, heading = null, causeEventId = null } = {}) {
+export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId = null, heading = null, causeEventId = null, random = Math.random } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit?.position || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId || unit.hasActivated) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
@@ -604,7 +604,7 @@ export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId 
       if (!state.units.includes(unit)) break;
     }
     if (!state.units.includes(unit)) break;
-    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { causeEventId: entered.eventId });
+    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { random, causeEventId: entered.eventId });
     if (!state.units.includes(unit)) break;
     refreshInterception(state, { causeEventId: entered.eventId });
     if (unit.kind === "squadron" && restrictingEnemies(state, unit).length) break;
