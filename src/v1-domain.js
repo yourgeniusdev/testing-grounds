@@ -11,7 +11,7 @@ const EVENT_PAYLOADS = Object.freeze({
   "overwatch-armed": [], "overwatch-declared": ["slotId"], "overwatch-shot": ["slotId"], "entry-attempt": ["position", "cost"], "heading-change": ["heading", "turn", "stationary"], "movement-step": ["position", "cost", "remainingSpeed", "heading"],
   "on-enter": ["position", "effect", "amount"], "interception-link-created": ["creators"], "interception-link-removed": ["creators"],
   "disengagement-declared": ["preview"], "disengagement-paid": ["before", "after", "cost"], "evasion-modifier-applied": ["amount", "before", "after"], "disengagement-check": ["random", "preview"], "disengagement-succeeded": [], "disengagement-failed": [],
-  "attack-shot": ["random", "after"], "damage-packet": ["cause", "before", "after", "layers"], "squadron-craft-lost": ["before", "after", "lost"], "unit-destroyed": ["position", "after"], "object-destroyed": ["position", "after"], "debris-created": ["position"],
+  "attack-shot": ["random", "after"], "critical-result": ["random", "result"], "damage-packet": ["cause", "before", "after", "layers"], "squadron-craft-lost": ["before", "after", "lost"], "unit-destroyed": ["position", "after"], "object-destroyed": ["position", "after"], "debris-created": ["position"],
   "ramming-declared": ["route", "directSteps"], "ramming-cancelled": ["moved"], "ramming-impact": ["targetDamage", "attackerDamage", "directSteps"], "ramming-resolved": ["targetDamage", "attackerDamage", "targetDestroyed", "attackerDestroyed"], victory: ["after"]
 });
 
@@ -37,7 +37,7 @@ function validPayload(event) {
   if (Object.hasOwn(event, "amount") && !isNumber(event.amount)) return false;
   if (Object.hasOwn(event, "creators") && (!Array.isArray(event.creators) || !event.creators.every(isId))) return false;
   if (event.action === "damage-packet" && (!Array.isArray(event.layers) || !event.layers.every(layer => isRecord(layer) && typeof layer.layer === "string" && isNumber(layer.amount) && isNumber(layer.remaining)))) return false;
-  if (["attack-shot", "accuracy-check", "disengagement-check"].includes(event.action) && (!isRecord(event.random) || event.random.roll < 0 || event.random.roll > 100)) return false;
+  if (["attack-shot", "accuracy-check", "disengagement-check", "critical-result"].includes(event.action) && (!isRecord(event.random) || event.random.roll < 0 || event.random.roll > 100)) return false;
   if (Object.hasOwn(event, "side") && !sides.includes(event.side)) return false;
   if (Object.hasOwn(event, "kind") && !["attack", "overwatch", "movement", "disengagement", "ramming"].includes(event.kind)) return false;
   if (Object.hasOwn(event, "slotId") && event.slotId !== null && !isId(event.slotId)) return false;
@@ -61,6 +61,7 @@ function validPayload(event) {
   if (event.action === "victory-check" && (!Object.hasOwn(event.result, "winner") || (event.result.winner !== null && !sides.includes(event.result.winner)))) return false;
   if (event.action === "line-of-fire-check" && (!Object.hasOwn(event.result, "blockerId") || (event.result.blockerId !== null && !isId(event.result.blockerId)) || !["hitBlocker", "hitMain", "miss"].every(field => isNumber(event.result[field])))) return false;
   if (event.action === "accuracy-check" && (!Object.hasOwn(event.result, "hitId") || (event.result.hitId !== null && !isId(event.result.hitId)) || typeof event.result.blockerHit !== "boolean" || typeof event.result.mainHit !== "boolean")) return false;
+  if (event.action === "critical-result" && (!isNumber(event.random.chance) || event.random.chance < 0 || event.random.chance > 100 || typeof event.result.critical !== "boolean")) return false;
   if (event.action === "overwatch-result" && (!Number.isInteger(event.result.hits) || event.result.hits < 0 || !isNumber(event.result.damage) || event.result.damage < 0 || typeof event.result.destroyed !== "boolean")) return false;
   if (event.action === "action-paid") {
     const fields = event.kind === "attack" ? ["ready", "ammo", "attackSpentBy"] : event.kind === "overwatch" ? ["ready", "ammo", "overwatch"] : [];
@@ -390,6 +391,7 @@ export function resolveOverwatch(state, targetId, { random = Math.random, causeE
     const paid = recordEvent(state, "action-paid", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, kind: "overwatch", slotId, before: beforePayment, after: { ready: slot.ready !== false, ammo: slotAmmo(slot), overwatch: slot.overwatch === true } });
     const launched = recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: paid.eventId, slotId });
     const result = resolveAttackInternal(state, owner, target, slot, { random, causeEventId: launched.eventId, cause: "overwatch", reaction: true });
+    if (state.lifecycle === "Finished" || !state.units.includes(target)) break;
     recordEvent(state, "overwatch-result", { actorId: owner.id, subjectIds: [target.id], causeEventId: state.events.at(-1)?.eventId ?? launched.eventId, slotId, result: { hits: result.hits, damage: result.damage, destroyed: result.destroyed } });
     results.push({ ownerId: owner.id, targetId: target.id, slotId, ...result });
   }
@@ -411,7 +413,13 @@ export function progress(state) {
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
     recordEvent(state, "round-start");
   } else if (state.lifecycle === "ActivationStart") {
+    const unit = state.units.find(candidate => candidate.id === state.activeUnitId);
+    if (!unit) return state.lifecycle;
+    unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
+    unit.turnsSpent = 0;
+    if (Object.hasOwn(unit, "stationaryTurnEvasion")) { unit.evasion = unit.stationaryTurnEvasion; delete unit.stationaryTurnEvasion; }
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
+    recordEvent(state, "activation-stage", { actorId: unit.id, after: "SystemActions" });
   } else if (state.lifecycle === "EndActivation") {
     const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; if (Object.hasOwn(unit, "disengagementEvasion")) { unit.evasion = unit.disengagementEvasion; delete unit.disengagementEvasion; } delete unit.disengagedLinks; armOverwatch(state, unit.id); }
     state.attackSpentBy = null;
@@ -428,15 +436,12 @@ export function decide(state, decision = "continue") {
   if (state.lifecycle !== "WaitDecision") return false;
   const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (!unit) return false;
   if (decision === "wait" && !unit.hasWaited) { unit.hasWaited = true; state.queue = [...state.queue.filter(id => id !== unit.id), unit.id]; state.activeUnitId = state.queue.find(id => !state.units.find(candidate => candidate.id === id).hasActivated); recordEvent(state, "wait", { actorId: unit.id }); return true; }
-  unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
-  unit.turnsSpent = 0;
-  if (Object.hasOwn(unit, "stationaryTurnEvasion")) { unit.evasion = unit.stationaryTurnEvasion; delete unit.stationaryTurnEvasion; }
-  state.lifecycle = "ActivationStart"; recordEvent(state, "activation-start", { actorId: unit.id }); progress(state); return true;
+  state.lifecycle = "ActivationStart"; recordEvent(state, "activation-start", { actorId: unit.id }); progress(state); return state.lifecycle === "SystemActions";
 }
 
 export function advanceActivation(state, stage) {
   const order = ["SystemActions", "Maneuver", "Attack", "EndActivation"], current = order.indexOf(state.lifecycle);
-  if (current < 0 || order.indexOf(stage) !== current + 1) return false;
+  if (current < 0 || !state.units.some(unit => unit.id === state.activeUnitId) || order.indexOf(stage) !== current + 1) return false;
   state.lifecycle = stage; state.activationStage = stage; recordEvent(state, "activation-stage", { actorId: state.activeUnitId, after: stage }); return true;
 }
 
@@ -559,7 +564,7 @@ export function canEnter(state, unit, position, { final = false, ramming = false
 
 export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId = null, heading = null, causeEventId = null } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit?.position || state.lifecycle !== "Maneuver" || (state.activeUnitId && state.activeUnitId !== unitId) || unit.hasActivated) return { status: "blocked", moved: 0 };
+  if (!unit?.position || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId || unit.hasActivated) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
   if (heading !== null && unit.kind === "capital") {
     if (!Number.isInteger(heading) || heading < 0 || heading > 5) return { status: "blocked", moved: 0 };
@@ -616,7 +621,7 @@ export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId 
 
 export function applyDamagePacket(state, target, packet = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
-  if (!unit || !state.units.includes(unit) || (packet.amount ?? 0) <= 0) return { amount: 0, destroyed: false, layers: [] };
+  if (state.lifecycle === "Finished" || !unit || !state.units.includes(unit) || !Number.isFinite(packet.amount) || packet.amount <= 0) return { amount: 0, destroyed: false, layers: [] };
   let remaining = packet.amount;
   const before = { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0, ...(unit.kind === "squadron" ? { stack: unit.stack ?? 0 } : {}) };
   const layers = [];
@@ -634,6 +639,11 @@ export function applyDamagePacket(state, target, packet = {}) {
   const damageEvent = recordEvent(state, "damage-packet", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId: packet.causeEventId ?? null, cause: packet.cause ?? "damage", before, after, layers });
   let causeEventId = damageEvent.eventId;
   if (unit.kind === "squadron" && after.stack < before.stack) causeEventId = recordEvent(state, "squadron-craft-lost", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, before: { stack: before.stack }, after: { stack: after.stack }, lost: before.stack - after.stack }).eventId;
+  if (Number.isFinite(packet.critChance) && layers.some(layer => layer.layer === "integrity" && layer.amount > 0)) {
+    const chance = Math.max(0, Math.min(100, packet.critChance));
+    const roll = (packet.random ?? Math.random)() * 100;
+    causeEventId = recordEvent(state, "critical-result", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, random: { roll, chance }, result: { critical: roll < chance } }).eventId;
+  }
   if (destroyed) destroyUnit(state, unit, { causeEventId, deferVictory: packet.deferVictory === true });
   return { amount: packet.amount - remaining, destroyed, layers };
 }
@@ -648,13 +658,25 @@ function finishIfVictorious(state, causeEventId = null) {
   }
 }
 
+function finishDestroyedActivation(state, unitId, causeEventId) {
+  if (state.lifecycle === "Finished") return;
+  const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
+  state.activeUnitId = next ?? null;
+  state.activationStage = null;
+  state.attackSpentBy = null;
+  state.lifecycle = next ? "WaitDecision" : "RoundEnd";
+  recordEvent(state, "activation-end", { actorId: unitId, subjectIds: [unitId], causeEventId });
+}
+
 export function destroyUnit(state, target, { causeEventId = null, deferVictory = false } = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
-  if (!unit || !state.units.includes(unit)) return { destroyed: false };
+  if (state.lifecycle === "Finished" || !unit || !state.units.includes(unit)) return { destroyed: false };
   const position = unit.position ? { ...unit.position } : null;
+  const wasActive = state.activeUnitId === unit.id;
   weaponSlots(unit).forEach(slot => { slot.overwatch = false; slot.overwatchTargets = []; });
   state.units = state.units.filter(candidate => candidate !== unit);
   state.queue = state.queue.filter(id => id !== unit.id);
+  if (state.activeUnitId === unit.id) { state.activeUnitId = null; state.activationStage = null; state.attackSpentBy = null; }
   state.contents = state.contents.filter(item => item.kind !== "debris" || !samePosition(item.position, position));
   const destroyedEvent = recordEvent(state, "unit-destroyed", { actorId: null, subjectIds: [unit.id], causeEventId, position, after: { debris: Boolean(position) } });
   if (position) {
@@ -666,7 +688,10 @@ export function destroyUnit(state, target, { causeEventId = null, deferVictory =
   state.interceptionLinks = (state.interceptionLinks ?? []).filter(link => !link.unitIds.includes(unit.id));
   state.units.forEach(candidate => { if (Array.isArray(candidate.engagedWith)) candidate.engagedWith = candidate.engagedWith.filter(id => id !== unit.id); });
   removedLinks.forEach(link => recordEvent(state, "interception-link-removed", { subjectIds: link.unitIds, causeEventId: destroyedEvent.eventId, creators: link.creators }));
-  if (!deferVictory) finishIfVictorious(state, destroyedEvent.eventId);
+  if (!deferVictory) {
+    finishIfVictorious(state, destroyedEvent.eventId);
+    if (wasActive && state.lifecycle !== "Finished") finishDestroyedActivation(state, unit.id, state.events.at(-1).eventId);
+  }
   return { destroyed: true, unitId: unit.id, winner: state.winner, eventId: destroyedEvent.eventId };
 }
 
@@ -815,6 +840,7 @@ export function ram(state, attacker, target, steps) {
   state.attackSpentBy = source.id;
   const resolved = recordEvent(state, "ramming-resolved", { actorId: source.id, subjectIds: [victim.id], causeEventId: impact.eventId, targetDamage: targetResult.amount, attackerDamage: attackerResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed });
   finishIfVictorious(state, resolved.eventId);
+  if (attackerResult.destroyed && state.lifecycle !== "Finished") finishDestroyedActivation(state, source.id, state.events.at(-1).eventId);
   return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed };
 }
 
@@ -856,10 +882,10 @@ function resolveAttackInternal(state, attacker, target, slot, { random, causeEve
     const unit = state.units.find(candidate => candidate.id === hitId);
     const object = state.contents.find(candidate => candidate.id === hitId);
     const damageCause = blockerHit && current.friendlyFire ? "friendly-fire" : cause;
-    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, causeEventId: shotEvent.eventId, cause: damageCause }) : applyObjectDamage(state, object, current.damage, current.attackerId, damageCause, shotEvent.eventId);
+    const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, causeEventId: shotEvent.eventId, cause: damageCause, critChance: weapon.critChance, random }) : applyObjectDamage(state, object, current.damage, current.attackerId, damageCause, shotEvent.eventId);
     hits += 1;
     damage += result.amount;
-    if (mainHit && result.destroyed) break;
+    if (state.lifecycle === "Finished" || !state.units.includes(source) || (mainHit && result.destroyed)) break;
   }
   return { ...preview, hits, damage, destroyed: !state.units.some(unit => unit.id === preview.targetId) };
 }

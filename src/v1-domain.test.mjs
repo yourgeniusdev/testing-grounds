@@ -9,6 +9,7 @@ import {
   moveAtomic,
   movementDestinations,
   applyDamagePacket,
+  destroyUnit,
   refreshInterception,
   previewDisengagement,
   disengage,
@@ -107,6 +108,16 @@ test("wait moves unit once, then activation progresses through stages", () => {
   assert.equal(advanceActivation(state, "EndActivation"), true);
 });
 
+test("activation resets before an explicit SystemActions transition and has no content effects", () => {
+  const state = deployedBattle();
+  const unit = state.units.find(candidate => candidate.id === "l-cap");
+  Object.assign(unit, { speed: 4, currentSpeed: 0, turnsSpent: 2, evasion: 0, stationaryTurnEvasion: 25 });
+  const before = state.events.length;
+  assert.equal(decide(state), true);
+  assert.deepEqual({ currentSpeed: unit.currentSpeed, turnsSpent: unit.turnsSpent, evasion: unit.evasion }, { currentSpeed: 4, turnsSpent: 0, evasion: 25 });
+  assert.deepEqual(state.events.slice(before).map(event => [event.action, event.phase]), [["activation-start", "ActivationStart"], ["activation-stage", "SystemActions"]]);
+});
+
 test("atomic movement enforces active maneuver ownership", () => {
   const state = deployedBattle();
   assert.equal(moveAtomic(state, "l-cap", [{ q: 1, r: 0 }]).moved, 0);
@@ -120,6 +131,22 @@ test("atomic movement enforces active maneuver ownership", () => {
   assert.equal(result.status, "blocked");
   assert.equal(result.moved, 2);
   assert.deepEqual(state.units.find(unit => unit.id === "l-cap").position, { q: 2, r: 0 });
+});
+
+test("movement, ramming, and manual attack require exact active ownership", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 0, maneuver: 1, currentSpeed: 2, mass: 2, integrity: 5, weapons: [{ id: "gun", ready: true, ammo: 1, accuracy: 100, damage: 1, arc: "360", maxRange: 3 }] },
+    { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 2, integrity: 5 }
+  ] });
+  state.lifecycle = "Maneuver";
+  state.activeUnitId = null;
+  const snapshot = structuredClone({ units: state.units, queue: state.queue, contents: state.contents });
+  assert.deepEqual(moveAtomic(state, "a", [{ q: 1, r: 0 }]), { status: "blocked", moved: 0 });
+  assert.deepEqual(ram(state, "a", "b", [{ q: 1, r: 0 }]), { success: false, damage: 0 });
+  state.lifecycle = "Attack";
+  assert.equal(resolveAttack(state, "a", "b", state.units[0].weapons[0], { random: () => { throw new Error("must not roll"); } }).damage, 0);
+  assert.deepEqual({ units: state.units, queue: state.queue, contents: state.contents }, snapshot);
+  assert.equal(state.events.length, 0);
 });
 
 test("movement collision boundaries reject occupied cells and teleports", () => {
@@ -483,6 +510,41 @@ test("lethal squadron degradation orders loss before destruction and cleans inte
   assert.equal(state.contents[0].cover, "debris");
 });
 
+test("damage layer boundaries and invalid amounts are deterministic", () => {
+  for (const [amount, expected, layers] of [
+    [1, [2, 2, 4], [["shield", 1, 0]]],
+    [3, [0, 2, 4], [["shield", 3, 0]]],
+    [4, [0, 1, 4], [["shield", 3, 1], ["armor", 1, 0]]],
+    [5, [0, 0, 4], [["shield", 3, 2], ["armor", 2, 0]]],
+    [6, [0, 0, 3], [["shield", 3, 3], ["armor", 2, 1], ["integrity", 1, 0]]]
+  ]) {
+    const state = createBattle({ units: [{ id: "target", side: "left", shield: 3, armor: 2, integrity: 4 }, { id: "enemy", side: "right", integrity: 4 }] });
+    const result = applyDamagePacket(state, "target", { amount });
+    assert.deepEqual([state.units[0].shield, state.units[0].armor, state.units[0].integrity], expected);
+    assert.deepEqual(result.layers.map(layer => [layer.layer, layer.amount, layer.remaining]), layers);
+  }
+  for (const amount of [0, -1, NaN, Infinity, "2"]) {
+    const state = createBattle({ units: [{ id: "target", side: "left", shield: 1, armor: 1, integrity: 1 }] });
+    assert.deepEqual(applyDamagePacket(state, "target", { amount }), { amount: 0, destroyed: false, layers: [] });
+    assert.equal(state.events.length, 0);
+  }
+});
+
+test("lethal critical resolves inside damage pipeline before destruction and Finished", () => {
+  const state = createBattle({ units: [
+    { id: "attacker", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 5, weapons: [{ id: "gun", accuracy: 100, damage: 1, critChance: 100, arc: "360", maxRange: 3 }] },
+    { id: "target", side: "right", kind: "squadron", position: { q: 1, r: 0 }, integrity: 1, unitHealth: 1, stack: 1 }
+  ] });
+  const rolls = [0, 0];
+  resolveAttack(state, "attacker", "target", prepareAttack(state, "attacker"), { random: () => rolls.shift() });
+  assert.deepEqual(state.events.slice(-7).map(event => event.action), ["damage-packet", "squadron-craft-lost", "critical-result", "unit-destroyed", "debris-created", "victory-check", "victory"]);
+  const critical = state.events.find(event => event.action === "critical-result");
+  const destroyed = state.events.find(event => event.action === "unit-destroyed");
+  assert.equal(destroyed.causeEventId, critical.eventId);
+  assert.equal(critical.phase, "Attack");
+  assert.equal(state.lifecycle, "Finished");
+});
+
 test("damage crosses layers and destruction creates debris and victory", () => {
   const state = deployedBattle();
   const target = state.units.find(unit => unit.id === "r-cap");
@@ -495,6 +557,62 @@ test("damage crosses layers and destruction creates debris and victory", () => {
   assert.equal(state.winner, "left");
   assert.ok(state.contents.some(item => item.kind === "debris"));
   assert.ok(state.events.some(event => event.action === "unit-destroyed"));
+});
+
+test("destroying active and queued units clears lifecycle ownership and rejects later commands", () => {
+  const state = createBattle({ units: [
+    { id: "active", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 1, currentSpeed: 2 },
+    { id: "ally", side: "left", kind: "capital", position: { q: 0, r: 1 }, integrity: 2 },
+    { id: "enemy", side: "right", kind: "capital", position: { q: 2, r: 0 }, integrity: 2 }
+  ] });
+  Object.assign(state, { lifecycle: "Maneuver", activeUnitId: "active", activationStage: "Maneuver", attackSpentBy: "active", queue: ["active", "ally", "enemy"] });
+  applyDamagePacket(state, "active", { amount: 1, sourceId: "enemy" });
+  assert.deepEqual({ lifecycle: state.lifecycle, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, queue: state.queue }, { lifecycle: "WaitDecision", activeUnitId: "ally", activationStage: null, attackSpentBy: null, queue: ["ally", "enemy"] });
+  assert.deepEqual(state.events.slice(-2).map(event => event.action), ["victory-check", "activation-end"]);
+  assert.equal(state.events.at(-1).causeEventId, state.events.at(-2).eventId);
+  const count = state.events.length;
+  assert.deepEqual(moveAtomic(state, "active", [{ q: 1, r: 0 }]), { status: "blocked", moved: 0 });
+  assert.equal(advanceActivation(state, "Attack"), false);
+  assert.equal(state.events.length, count);
+
+  applyDamagePacket(state, "enemy", { amount: 2, sourceId: "ally" });
+  assert.equal(state.lifecycle, "Finished");
+  const finishedCount = state.events.length;
+  assert.equal(decide(state), false);
+  assert.equal(progress(state), "Finished");
+  assert.equal(advanceActivation(state, "Maneuver"), false);
+  assert.equal(state.events.length, finishedCount);
+});
+
+test("destroying the last active unit in the queue transitions to RoundEnd", () => {
+  const state = createBattle({ units: [
+    { id: "active", side: "left", integrity: 1, position: { q: 0, r: 0 } },
+    { id: "left-done", side: "left", integrity: 2, hasActivated: true },
+    { id: "enemy-done", side: "right", integrity: 2, hasActivated: true }
+  ] });
+  Object.assign(state.units.find(unit => unit.id === "left-done"), { hasActivated: true });
+  Object.assign(state.units.find(unit => unit.id === "enemy-done"), { hasActivated: true });
+  Object.assign(state, { lifecycle: "Attack", activeUnitId: "active", activationStage: "Attack", queue: ["active", "left-done", "enemy-done"] });
+  applyDamagePacket(state, "active", { amount: 1, sourceId: "enemy-done" });
+  assert.deepEqual({ lifecycle: state.lifecycle, activeUnitId: state.activeUnitId, activationStage: state.activationStage }, { lifecycle: "RoundEnd", activeUnitId: null, activationStage: null });
+  assert.deepEqual(state.events.slice(-2).map(event => event.action), ["victory-check", "activation-end"]);
+  assert.deepEqual(replayEventLog(state.events).queue, state.queue);
+  assert.equal(replayEventLog(state.events).lifecycle, "RoundEnd");
+});
+
+test("direct damage and destruction commands are inert after Finished", () => {
+  const state = createBattle({ units: [
+    { id: "winner", side: "left", integrity: 2 },
+    { id: "loser", side: "right", integrity: 1 }
+  ] });
+  applyDamagePacket(state, "loser", { amount: 1, sourceId: "winner" });
+  assert.equal(state.lifecycle, "Finished");
+  const snapshot = structuredClone({ units: state.units, contents: state.contents, queue: state.queue });
+  const count = state.events.length;
+  assert.deepEqual(applyDamagePacket(state, "winner", { amount: 1, critChance: 100, random: () => 0 }), { amount: 0, destroyed: false, layers: [] });
+  assert.deepEqual(destroyUnit(state, "winner"), { destroyed: false });
+  assert.deepEqual({ units: state.units, contents: state.contents, queue: state.queue }, snapshot);
+  assert.equal(state.events.length, count);
 });
 
 test("interception graph blocks engaged squadron movement and disengage clears links", () => {
@@ -723,6 +841,24 @@ test("small objects do not block fire", () => {
     { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
   ], contents: [{ id: "small", kind: "object", size: "small", position: { q: 1, r: 0 }, integrity: 5 }] });
   assert.equal(previewAttack(state, "a", "b", { arc: "360", maxRange: 3 }).blockerId, "blocker");
+});
+
+test("weapon critical chance consumes attack RNG and records a result without mechanical effects", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10, weapons: [{ id: "gun", accuracy: 100, damage: 2, critChance: 25, arc: "360", maxRange: 3 }] },
+    { id: "b", side: "right", kind: "capital", position: { q: 1, r: 0 }, shield: 0, armor: 0, integrity: 10 }
+  ] });
+  const slot = prepareAttack(state, "a");
+  const rolls = [0.1, 0.2];
+  const before = structuredClone(state.units[1]);
+  assert.equal(resolveAttack(state, "a", "b", slot, { random: () => rolls.shift() }).damage, 2);
+  assert.equal(rolls.length, 0);
+  assert.equal(state.units[1].integrity, before.integrity - 2);
+  assert.deepEqual(Object.keys(state.units[1]).sort(), Object.keys(before).sort());
+  const critical = state.events.find(event => event.action === "critical-result");
+  assert.deepEqual(critical.random, { roll: 20, chance: 25 });
+  assert.deepEqual(critical.result, { critical: true });
+  assert.equal(state.events.find(event => event.eventId === critical.causeEventId).action, "damage-packet");
 });
 
 test("a destroyed blocker is removed before the next salvo shot", () => {
@@ -1174,13 +1310,16 @@ test("lethal AA cancels remaining queued reactions without spending their readin
   state.round = 1;
   state.lifecycle = "Maneuver";
   const results = resolveOverwatch(state, "squad", { random: () => { randomCalls += 1; return 0; } });
-  assert.equal(results.length, 1);
+  assert.equal(results.length, 0);
   assert.equal(randomCalls, 1);
   assert.equal(state.units.some(unit => unit.id === "squad"), false);
   const later = state.units.find(unit => unit.id === "later").weapons[0];
   assert.equal(later.ready, true);
   assert.equal(later.overwatch, true);
   assert.equal(state.events.some(event => event.action === "overwatch-declared" && event.actorId === "later"), false);
+  assert.equal(state.events.some(event => event.action === "overwatch-result"), false);
+  assert.deepEqual(state.events.slice(-5).map(event => event.action), ["damage-packet", "unit-destroyed", "debris-created", "victory-check", "victory"]);
+  assert.equal(state.events.at(-1).action, "victory");
 });
 
 test("RoundEnd clears overwatch and RoundStart restores readiness for a new-round reaction", () => {

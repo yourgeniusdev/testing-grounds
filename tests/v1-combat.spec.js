@@ -95,7 +95,7 @@ test("browser shows expanded pure maneuver effects and AA risk preview", async (
   const before = await page.evaluate(async () => {
     const { store, controller } = await import("/src/v1-ui.js");
     const state = store.getState();
-    store.replace({ ...state, round: 1, lifecycle: "Maneuver", activeUnitId: "left-squad", contents: [{ id: "cloud", kind: "terrain", type: "nebula", position: { q: 2, r: 0 }, movementCost: 2, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: 5 }] }], units: state.units.map(unit => unit.id === "left-squad" ? { ...unit, position: { q: 1, r: 0 }, currentSpeed: 4 } : unit.id === "right-cap" ? { ...unit, position: { q: 4, r: 0 }, weapons: [{ id: "flak", ready: true, overwatch: true, overwatchRound: 1, accuracy: 70, damage: 2, shots: 1, maxRange: 3 }] } : { ...unit, position: null }) });
+    store.replace({ ...state, round: 1, lifecycle: "Maneuver", activeUnitId: "left-squad", contents: [{ id: "cloud", kind: "terrain", type: "nebula", position: { q: 2, r: 0 }, movementCost: 2, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: 5 }] }], units: state.units.map(unit => unit.id === "left-squad" ? { ...unit, position: { q: 1, r: 0 }, currentSpeed: 4 } : unit.id === "right-cap" ? { ...unit, position: { q: 4, r: 0 }, weapons: [{ id: "flak", ready: true, overwatchEligible: true, overwatch: true, overwatchRound: 1, accuracy: 70, damage: 2, shots: 1, maxRange: 3 }] } : { ...unit, position: null }) });
     controller.view.selectedUnitId = "left-squad";
     controller.render();
     return structuredClone(store.getState());
@@ -149,14 +149,17 @@ test("browser blocks routes through obstacles and records final position", async
   await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
   await page.locator("#headingButtons [data-heading='0']").click();
   await page.locator("#confirmMoveButton").click();
-  const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-6).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
+  const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-9).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
   expect(events).toEqual([
     { action: "entry-attempt", position: { q: 0, r: 1 }, heading: undefined },
     { action: "heading-change", position: undefined, heading: 5 },
     { action: "movement-step", position: { q: 0, r: 1 }, heading: 5 },
+    { action: "hex-entered", position: { q: 0, r: 1 }, heading: undefined },
     { action: "entry-attempt", position: { q: 0, r: 2 }, heading: undefined },
     { action: "movement-step", position: { q: 0, r: 2 }, heading: 5 },
-    { action: "heading-change", position: undefined, heading: 0 }
+    { action: "hex-entered", position: { q: 0, r: 2 }, heading: undefined },
+    { action: "heading-change", position: undefined, heading: 0 },
+    { action: "maneuver-completed", position: { q: 0, r: 2 }, heading: undefined }
   ]);
   expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 0, r: 2 });
 });
@@ -195,7 +198,7 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
     return {
       units: state.units.map(unit => unit.id),
       debris: state.contents.some(item => item.kind === "debris" && item.position.q === 6 && item.position.r === 1),
-      events: state.events.slice(-5).map(event => ({ action: event.action, after: event.after }))
+      events: state.events.filter(event => ["attack-shot", "damage-packet", "unit-destroyed", "debris-created", "victory-check", "victory"].includes(event.action)).map(event => ({ action: event.action, after: event.after }))
     };
   });
   expect(result).toEqual({
@@ -206,6 +209,7 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
       { action: "damage-packet", after: { shield: 0, armor: 0, integrity: 0 } },
       { action: "unit-destroyed", after: { debris: true } },
       { action: "debris-created", after: undefined },
+      { action: "victory-check", after: undefined },
       { action: "victory", after: { winner: "left" } }
     ]
   });
