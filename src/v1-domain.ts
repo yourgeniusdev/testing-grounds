@@ -1,3 +1,5 @@
+import type { BattleInitialState, BattleState, Entity, RandomOptions, Rng } from "./v1-types.ts";
+
 export const LIFECYCLE = Object.freeze([
   "DeploymentLeft", "DeploymentRight", "RoundStart", "WaitDecision", "ActivationStart",
   "SystemActions", "Maneuver", "Attack", "EndActivation", "RoundEnd", "Finished"
@@ -15,19 +17,19 @@ const EVENT_PAYLOADS = Object.freeze({
   "ramming-declared": ["route", "directSteps"], "ramming-cancelled": ["moved"], "ramming-impact": ["targetDamage", "attackerDamage", "directSteps"], "ramming-resolved": ["targetDamage", "attackerDamage", "targetDestroyed", "attackerDestroyed"], victory: ["after"]
 });
 
-function deepFreeze(value) {
+function deepFreeze(value: any) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
   Object.freeze(value);
   Object.values(value).forEach(deepFreeze);
   return value;
 }
 
-const isRecord = value => value !== null && typeof value === "object" && !Array.isArray(value);
-const isId = value => typeof value === "string" && value.length > 0;
-const isPosition = value => isRecord(value) && Number.isInteger(value.q) && Number.isInteger(value.r);
-const isNumber = value => typeof value === "number" && Number.isFinite(value);
+const isRecord = (value: any) => value !== null && typeof value === "object" && !Array.isArray(value);
+const isId = (value: any) => typeof value === "string" && value.length > 0;
+const isPosition = (value: any) => isRecord(value) && Number.isInteger(value.q) && Number.isInteger(value.r);
+const isNumber = (value: any) => typeof value === "number" && Number.isFinite(value);
 
-function validPayload(event) {
+function validPayload(event: any) {
   if (Object.hasOwn(event, "position") && event.position !== null && !isPosition(event.position)) return false;
   if (Object.hasOwn(event, "positions") && (!Array.isArray(event.positions) || !event.positions.every(isPosition))) return false;
   if (Object.hasOwn(event, "before") && !isRecord(event.before)) return false;
@@ -36,7 +38,7 @@ function validPayload(event) {
   if (Object.hasOwn(event, "cost") && !isNumber(event.cost)) return false;
   if (Object.hasOwn(event, "amount") && !isNumber(event.amount)) return false;
   if (Object.hasOwn(event, "creators") && (!Array.isArray(event.creators) || !event.creators.every(isId))) return false;
-  if (event.action === "damage-packet" && (!Array.isArray(event.layers) || !event.layers.every(layer => isRecord(layer) && typeof layer.layer === "string" && isNumber(layer.amount) && isNumber(layer.remaining)))) return false;
+  if (event.action === "damage-packet" && (!Array.isArray(event.layers) || !event.layers.every((layer: any) => isRecord(layer) && typeof layer.layer === "string" && isNumber(layer.amount) && isNumber(layer.remaining)))) return false;
   if (["attack-shot", "accuracy-check", "disengagement-check", "critical-result"].includes(event.action) && (!isRecord(event.random) || event.random.roll < 0 || event.random.roll > 100)) return false;
   if (Object.hasOwn(event, "side") && !sides.includes(event.side)) return false;
   if (Object.hasOwn(event, "kind") && !["attack", "overwatch", "movement", "disengagement", "ramming"].includes(event.kind)) return false;
@@ -71,25 +73,25 @@ function validPayload(event) {
   return true;
 }
 
-export function validateDomainEvent(event) {
+export function validateDomainEvent(event: any) {
   if (!isRecord(event) || !Object.hasOwn(EVENT_PAYLOADS, event.action)) throw new TypeError("Unknown domain event action");
   for (const field of ["eventId", "battleId", "round", "phase", "sequence", "actorId", "subjectIds", "causeEventId", "checkpoint", "delta", ...EVENT_PAYLOADS[event.action]]) if (!Object.hasOwn(event, field)) throw new TypeError(`Missing ${field} for ${event.action}`);
   if (!isId(event.eventId) || !isId(event.battleId) || !Number.isInteger(event.round) || event.round < 0 || !LIFECYCLE.includes(event.phase) || !Number.isInteger(event.sequence) || event.sequence < 1 || (event.actorId !== null && !isId(event.actorId)) || !Array.isArray(event.subjectIds) || !event.subjectIds.every(isId) || (event.causeEventId !== null && !isId(event.causeEventId)) || (event.checkpoint !== null && !isRecord(event.checkpoint)) || !isRecord(event.delta) || !validPayload(event)) throw new TypeError(`Invalid ${event.action} event`);
   return event;
 }
 
-function validReplayState(value) {
+function validReplayState(value: any) {
   return isRecord(value) && Object.keys(value).every(key => REPLAY_FIELDS.has(key)) && LIFECYCLE.includes(value.lifecycle) && sides.every(side => typeof value.deployment?.[side] === "boolean") && Number.isInteger(value.round) && Array.isArray(value.queue) && Array.isArray(value.units) && Array.isArray(value.contents) && Array.isArray(value.interceptionLinks);
 }
 
-function validDelta(delta) {
-  return isRecord(delta) && Object.keys(delta).length === 1 && Array.isArray(delta.patches) && delta.patches.every(patch => isRecord(patch) && Array.isArray(patch.path) && patch.path.length > 0 && REPLAY_FIELDS.has(patch.path[0]) && patch.path.every(segment => typeof segment === "string" || Number.isInteger(segment)) && ((patch.remove === true && !Object.hasOwn(patch, "value")) || (!Object.hasOwn(patch, "remove") && Object.hasOwn(patch, "value"))));
+function validDelta(delta: any) {
+  return isRecord(delta) && Object.keys(delta).length === 1 && Array.isArray(delta.patches) && delta.patches.every((patch: any) => isRecord(patch) && Array.isArray(patch.path) && patch.path.length > 0 && REPLAY_FIELDS.has(patch.path[0]) && patch.path.every((segment: any) => typeof segment === "string" || Number.isInteger(segment)) && ((patch.remove === true && !Object.hasOwn(patch, "value")) || (!Object.hasOwn(patch, "remove") && Object.hasOwn(patch, "value"))));
 }
 
-export function validateEventLog(events, battleId = null) {
+export function validateEventLog(events: any, battleId = null) {
   const ids = new Set();
   let replay = null;
-  events.forEach((event, index) => {
+  events.forEach((event: any, index: any) => {
     validateDomainEvent(event);
     if (event.sequence !== index + 1 || (battleId !== null && event.battleId !== battleId) || ids.has(event.eventId) || (event.causeEventId !== null && !ids.has(event.causeEventId)) || (index === 0 ? !validReplayState(event.checkpoint) : event.checkpoint !== null) || !validDelta(event.delta)) throw new TypeError("Invalid event sequence, cause, checkpoint, or delta");
     try { replay = applyDelta(replay ?? structuredClone(event.checkpoint), event.delta); } catch { throw new TypeError("Invalid event sequence, cause, checkpoint, or delta"); }
@@ -98,19 +100,20 @@ export function validateEventLog(events, battleId = null) {
   return true;
 }
 
-export function freezeEventLog(events, battleId = null) {
+export function freezeEventLog(events: any, battleId = null) {
   validateEventLog(events, battleId);
   events.forEach(deepFreeze);
   return events;
 }
 
-export function createBattle({ id = "battle-1", units = [], bounds = null, contents = [] } = {}) {
+export function createBattle({ id = "battle-1", units = [], bounds = null, contents = [], round = 0 }: BattleInitialState = {}): BattleState {
   const normalized = units.map(unit => ({ ...unit, side: unit.side ?? unit.sideId, position: unit.position ? { ...unit.position } : null, currentSpeed: unit.currentSpeed ?? unit.speed ?? 1, hasActivated: false, hasWaited: false }));
   const normalizedContents = contents.map(item => ({ ...item, position: { ...item.position }, onEnterEffects: item.onEnterEffects?.map(effect => normalizeOnEnterEffect(effect)) }));
-  const state = {
+  const state: BattleState = {
     id, units: normalized, contents: normalizedContents, bounds,
-    lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round: 0, queue: [], activeUnitId: null,
-    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0, interceptionLinks: []
+    lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round, queue: [], activeUnitId: null,
+    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0, interceptionLinks: [],
+    _eventCheckpoint: {}, _eventReplayState: {}
   };
   state._eventCheckpoint = structuredClone(replayState(state));
   state._eventReplayState = structuredClone(state._eventCheckpoint);
@@ -122,15 +125,15 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
   return state;
 }
 
-function replayState(state) {
+function replayState(state: any) {
   return { bounds: state.bounds, lifecycle: state.lifecycle, deployment: state.deployment, round: state.round, queue: state.queue, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, winner: state.winner, units: state.units, contents: state.contents, interceptionLinks: state.interceptionLinks };
 }
 
 const REPLAY_FIELDS = new Set(["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks"]);
 
-function stateDelta(before, after) {
+function stateDelta(before: any, after: any) {
   const patches = [];
-  const walk = (left, right, path) => {
+  const walk = (left: any, right: any, path: any) => {
     if (JSON.stringify(left) === JSON.stringify(right)) return;
     if (Array.isArray(left) && Array.isArray(right) && left.length === right.length) { right.forEach((value, index) => walk(left[index], value, [...path, index])); return; }
     if (isRecord(left) && isRecord(right)) {
@@ -144,7 +147,7 @@ function stateDelta(before, after) {
   return { patches };
 }
 
-function applyDelta(state, delta) {
+function applyDelta(state: BattleState, delta: any) {
   for (const patch of delta.patches) {
     let owner = state;
     for (const segment of patch.path.slice(0, -1)) {
@@ -163,16 +166,16 @@ function applyDelta(state, delta) {
   return state;
 }
 
-export function replayEventLog(events, battleId = null) {
+export function replayEventLog(events: any, battleId = null) {
   validateEventLog(events, battleId);
   if (!events.length) return null;
   let state = structuredClone(events[0].checkpoint);
   for (const event of events) state = applyDelta(state, event.delta);
   const last = events.at(-1);
-  return { id: last.battleId, ...state, events: events.map(item => structuredClone(item)), sequence: last.sequence };
+  return { id: last.battleId, ...state, events: events.map((item: any) => structuredClone(item)), sequence: last.sequence };
 }
 
-export function recordEvent(state, action, data = {}) {
+export function recordEvent(state: BattleState, action: any, data = {}) {
   const sequence = state.sequence + 1;
   const current = structuredClone(replayState(state));
   const previous = state._eventReplayState ?? state._eventCheckpoint;
@@ -187,17 +190,17 @@ export function recordEvent(state, action, data = {}) {
   return event;
 }
 
-function sideForLifecycle(lifecycle) { return lifecycle === "DeploymentLeft" ? "left" : lifecycle === "DeploymentRight" ? "right" : null; }
-function samePosition(a, b) { return a && b && a.q === b.q && a.r === b.r; }
-function unitAt(state, position, except) { return state.units.find(unit => unit.id !== except && samePosition(unit.position, position)); }
-function distance(a, b) { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; }
-function withinBounds(bounds, position) { return position.q >= bounds.minCol && position.q <= bounds.maxCol && position.r >= bounds.minRow && position.r <= bounds.maxRow && position.q + position.r >= (bounds.minCol + bounds.minRow) && position.q + position.r <= (bounds.maxCol + bounds.maxRow); }
-function normalizeOnEnterEffect(effect) {
+function sideForLifecycle(lifecycle: any) { return lifecycle === "DeploymentLeft" ? "left" : lifecycle === "DeploymentRight" ? "right" : null; }
+function samePosition(a: any, b: any) { return a && b && a.q === b.q && a.r === b.r; }
+function unitAt(state: BattleState, position: any, except: any) { return state.units.find(unit => unit.id !== except && samePosition(unit.position, position)); }
+function distance(a: any, b: any) { const dq = a.q - b.q, dr = a.r - b.r; return (Math.abs(dq) + Math.abs(dr) + Math.abs(dq + dr)) / 2; }
+function withinBounds(bounds: any, position: any) { return position.q >= bounds.minCol && position.q <= bounds.maxCol && position.r >= bounds.minRow && position.r <= bounds.maxRow && position.q + position.r >= (bounds.minCol + bounds.minRow) && position.q + position.r <= (bounds.maxCol + bounds.maxRow); }
+function normalizeOnEnterEffect(effect: any) {
   if (effect?.type === "damage" && Number.isFinite(effect.amount) && effect.amount > 0) return Object.freeze({ type: "damage", amount: effect.amount });
   if (effect?.type === "modify-unit" && ["currentSpeed", "evasion"].includes(effect.field) && Number.isFinite(effect.amount)) return Object.freeze({ type: "modify-unit", field: effect.field, amount: effect.amount });
   throw new TypeError("Invalid onEnter effect");
 }
-function resolveOnEnterEffect(state, unit, content, effect, movement, position) {
+function resolveOnEnterEffect(state: BattleState, unit: any, content: any, effect: any, movement: any, position: any) {
   if (effect.type === "damage") {
     const onEnter = recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unit.id], causeEventId: movement.eventId, position: { ...position }, effect: "damage", amount: effect.amount });
     applyDamagePacket(state, unit, { amount: effect.amount, sourceId: content.id, cause: "onEnter", causeEventId: onEnter.eventId });
@@ -209,12 +212,12 @@ function resolveOnEnterEffect(state, unit, content, effect, movement, position) 
   recordEvent(state, "on-enter", { actorId: content.id, subjectIds: [unit.id], causeEventId: movement.eventId, position: { ...position }, effect: "modify-unit", field: effect.field, amount: effect.amount, before: Object.freeze({ [effect.field]: before }), after: Object.freeze({ [effect.field]: unit[effect.field] }) });
 }
 
-const interceptionKey = (a, b) => [a, b].sort().join(":");
-const compareIds = (a, b) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
-const initiativeOrder = (a, b) => (b.initiative ?? 0) - (a.initiative ?? 0) || compareIds(a.id, b.id);
+const interceptionKey = (a: any, b: any) => [a, b].sort().join(":");
+const compareIds = (a: any, b: any) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+const initiativeOrder = (a: any, b: any) => (b.initiative ?? 0) - (a.initiative ?? 0) || compareIds(a.id, b.id);
 
-export function refreshInterception(state, { causeEventId = null } = {}) {
-  const previous = new Map((state.interceptionLinks ?? []).map(link => [link.key, link]));
+export function refreshInterception(state: BattleState, { causeEventId = null } = {}) {
+  const previous = new Map<string, Entity>((state.interceptionLinks ?? []).map(link => [link.key ?? "", link]));
   const squadrons = state.units.filter(unit => unit.kind === "squadron" && unit.position && unit.interception !== false);
   const next = new Map();
   for (let i = 0; i < squadrons.length; i += 1) for (let j = i + 1; j < squadrons.length; j += 1) {
@@ -231,11 +234,11 @@ export function refreshInterception(state, { causeEventId = null } = {}) {
   return state.units.filter(unit => unit.kind === "squadron").map(unit => ({ id: unit.id, engagedWith: [...(unit.engagedWith ?? [])] }));
 }
 
-function restrictingEnemies(state, unit) {
+function restrictingEnemies(state: BattleState, unit: any) {
   return (state.interceptionLinks ?? []).filter(link => link.unitIds.includes(unit.id) && link.creators.some(id => id !== unit.id)).map(link => state.units.find(candidate => candidate.id === link.unitIds.find(id => id !== unit.id))).filter(Boolean);
 }
 
-export function previewDisengagement(state, unitId) {
+export function previewDisengagement(state: BattleState, unitId: any) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   const enemies = unit ? restrictingEnemies(state, unit) : [];
   const cost = enemies.length;
@@ -250,7 +253,7 @@ export function previewDisengagement(state, unitId) {
   return { eligible: (unit.currentSpeed ?? unit.speed ?? 0) >= cost, chance, cost, closestId: closest.id, craftPenalty, enemyPenalty, friendlyBonus };
 }
 
-export function disengage(state, unitId, { random } = {}) {
+export function disengage(state: BattleState, unitId: any, { random }: { random?: Rng } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   const preview = previewDisengagement(state, unitId);
   if (!preview.eligible || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId || typeof random !== "function") return { success: false, chance: preview.eligible ? preview.chance : 0, cost: preview.cost };
@@ -281,7 +284,7 @@ export function disengage(state, unitId, { random } = {}) {
 }
 
 
-export function deploymentZone(state, side) {
+export function deploymentZone(state: BattleState, side: any) {
   if (!state.bounds) return [];
   const edge = side === "left" ? state.bounds.minCol : state.bounds.maxCol;
   const columns = side === "left" ? [edge, edge + 1] : [edge, edge - 1];
@@ -289,13 +292,13 @@ export function deploymentZone(state, side) {
     .filter(position => withinBounds(state.bounds, position));
 }
 
-function validDeployment(state, unit, position, heading) {
+function validDeployment(state: BattleState, unit: any, position: any, heading: any) {
   return deploymentZone(state, unit.side).some(cell => samePosition(cell, position)) &&
     !unitAt(state, position, unit.id) && !state.contents.some(item => samePosition(item.position, position)) &&
     (unit.kind === "capital" ? Number.isInteger(heading) && heading >= 0 && heading <= 5 : heading === null || heading === undefined);
 }
 
-export function deployUnit(state, unitId, position, heading = null) {
+export function deployUnit(state: BattleState, unitId: any, position: any, heading: number | null = null) {
   const side = sideForLifecycle(state.lifecycle), unit = state.units.find(candidate => candidate.id === unitId);
   if (!side || !unit || unit.side !== side || state.deployment[side] || !validDeployment(state, unit, position, heading)) return false;
   if (!state.events.some(event => event.action === "deployment-start" && event.side === side)) recordEvent(state, "deployment-start", { actorId: side, side });
@@ -305,7 +308,7 @@ export function deployUnit(state, unitId, position, heading = null) {
   return true;
 }
 
-export function confirmDeployment(state, side) {
+export function confirmDeployment(state: BattleState, side: any) {
   if (side !== sideForLifecycle(state.lifecycle) || state.deployment[side]) return false;
   const fleet = state.units.filter(unit => unit.side === side);
   if (fleet.some(unit => !unit.position || !validDeployment(state, unit, unit.position, unit.heading))) return false;
@@ -317,16 +320,16 @@ export function confirmDeployment(state, side) {
   return true;
 }
 
-function weaponSlots(unit) {
+function weaponSlots(unit: any) {
   return unit?.weapons ?? unit?.weaponSlots ?? [];
 }
 
-function slotAmmo(slot) {
+function slotAmmo(slot: any) {
   const weapon = slot?.weapon ?? slot;
   return slot?.ammo ?? weapon?.ammo ?? 1;
 }
 
-function spendSlot(slot) {
+function spendSlot(slot: any) {
   const weapon = slot?.weapon ?? slot;
   slot.ready = false;
   slot.overwatch = false;
@@ -334,7 +337,7 @@ function spendSlot(slot) {
   else if (weapon && Object.hasOwn(weapon, "ammo")) weapon.ammo -= 1;
 }
 
-function slotCanOverwatch(state, owner, slot, target) {
+function slotCanOverwatch(state: BattleState, owner: any, slot: any, target: any) {
   const weapon = slot.weapon ?? slot;
   return owner && target && owner.side !== target.side && target.kind === "squadron" &&
     (slot.destroyed !== true) && (slot.ready !== false) && slot.overwatchEligible === true && slot.overwatch === true &&
@@ -342,11 +345,11 @@ function slotCanOverwatch(state, owner, slot, target) {
     previewAttack(state, owner, target, weapon).canAttack;
 }
 
-export function armOverwatch(state, unitId = state.activeUnitId) {
+export function armOverwatch(state: BattleState, unitId = state.activeUnitId) {
   const owner = state.units.find(unit => unit.id === unitId);
   if (state.lifecycle !== "EndActivation" || unitId !== state.activeUnitId || !owner) return [];
   const armed = [];
-  weaponSlots(owner).forEach((slot, index) => {
+  weaponSlots(owner).forEach((slot: any, index: any) => {
     const weapon = slot.weapon ?? slot;
     if (slot.destroyed !== true && slot.ready !== false && slot.overwatchEligible === true && slotAmmo(slot) > 0) {
       slot.overwatch = true;
@@ -359,10 +362,10 @@ export function armOverwatch(state, unitId = state.activeUnitId) {
   return armed;
 }
 
-function overwatchCandidates(state, target) {
+function overwatchCandidates(state: BattleState, target: any) {
   if (!target || target.kind !== "squadron") return [];
   const candidates = [];
-  state.units.forEach(owner => weaponSlots(owner).forEach((slot, index) => {
+  state.units.forEach(owner => weaponSlots(owner).forEach((slot: any, index: any) => {
     if (slot.overwatch && slot.overwatchRound === state.round && slotCanOverwatch(state, owner, slot, target) && !(slot.overwatchTargets ?? []).includes(target.id))
       candidates.push({ owner, slot, index, weapon: slot.weapon ?? slot });
   }));
@@ -375,10 +378,11 @@ function overwatchCandidates(state, target) {
   });
 }
 
-export function resolveOverwatch(state, targetId, { random = Math.random, causeEventId = null } = {}) {
+export function resolveOverwatch(state: BattleState, targetId: any, { random, causeEventId = null }: { random?: Rng; causeEventId?: string | null } = {}) {
   const target = state.units.find(unit => unit.id === targetId);
   if (state.lifecycle !== "Maneuver" || !target || target.kind !== "squadron") return [];
   const candidates = overwatchCandidates(state, target);
+  if (candidates.length && !random) throw new TypeError("An RNG provider is required for overwatch");
   const results = [];
   for (const candidate of candidates) {
     if (!state.units.includes(target) || target.kind !== "squadron") break;
@@ -391,29 +395,29 @@ export function resolveOverwatch(state, targetId, { random = Math.random, causeE
     const paid = recordEvent(state, "action-paid", { actorId: owner.id, subjectIds: [target.id], causeEventId: declared.eventId, kind: "overwatch", slotId, before: beforePayment, after: { ready: slot.ready !== false, ammo: slotAmmo(slot), overwatch: slot.overwatch === true } });
     const launched = recordEvent(state, "overwatch-shot", { actorId: owner.id, subjectIds: [target.id], causeEventId: paid.eventId, slotId });
     const result = resolveAttackInternal(state, owner, target, slot, { random, causeEventId: launched.eventId, cause: "overwatch", reaction: true });
-    if (state.lifecycle === "Finished" || !state.units.includes(target)) break;
-    recordEvent(state, "overwatch-result", { actorId: owner.id, subjectIds: [target.id], causeEventId: state.events.at(-1)?.eventId ?? launched.eventId, slotId, result: { hits: result.hits, damage: result.damage, destroyed: result.destroyed } });
+    if ((state.lifecycle as string) === "Finished" || !state.units.includes(target)) break;
+    recordEvent(state, "overwatch-result", { actorId: owner.id, subjectIds: [target.id], causeEventId: state.events.at(-1)?.eventId ?? launched.eventId, slotId, result: { hits: result.hits, damage: result.damage, destroyed: "destroyed" in result ? result.destroyed : false } });
     results.push({ ownerId: owner.id, targetId: target.id, slotId, ...result });
   }
   return results;
 }
 
-function clearOverwatch(state) {
-  state.units.forEach(unit => weaponSlots(unit).forEach(slot => { slot.overwatch = false; slot.overwatchTargets = []; }));
+function clearOverwatch(state: any) {
+  state.units.forEach((unit: any) => weaponSlots(unit).forEach((slot: any) => { slot.overwatch = false; slot.overwatchTargets = []; }));
 }
 
-export function progress(state) {
-  if (state.lifecycle === "Finished") return state.lifecycle;
+export function progress(state: any) {
+  if ((state.lifecycle as string) === "Finished") return state.lifecycle;
   if (state.lifecycle === "RoundStart") {
-    state.round += 1; state.attackSpentBy = null; state.units.forEach(unit => {
+    state.round += 1; state.attackSpentBy = null; state.units.forEach((unit: any) => {
       unit.hasActivated = false; unit.hasWaited = false;
-      weaponSlots(unit).forEach(slot => { if (slot.destroyed !== true) slot.ready = true; });
+      weaponSlots(unit).forEach((slot: any) => { if (slot.destroyed !== true) slot.ready = true; });
     });
-    state.queue = state.units.filter(unit => unit.position).slice().sort(initiativeOrder).map(unit => unit.id);
+    state.queue = state.units.filter((unit: any) => unit.position).slice().sort(initiativeOrder).map((unit: any) => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
     recordEvent(state, "round-start");
   } else if (state.lifecycle === "ActivationStart") {
-    const unit = state.units.find(candidate => candidate.id === state.activeUnitId);
+    const unit = state.units.find((candidate: any) => candidate.id === state.activeUnitId);
     if (!unit) return state.lifecycle;
     unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
     unit.turnsSpent = 0;
@@ -421,9 +425,9 @@ export function progress(state) {
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
     recordEvent(state, "activation-stage", { actorId: unit.id, after: "SystemActions" });
   } else if (state.lifecycle === "EndActivation") {
-    const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; if (Object.hasOwn(unit, "disengagementEvasion")) { unit.evasion = unit.disengagementEvasion; delete unit.disengagementEvasion; } delete unit.disengagedLinks; armOverwatch(state, unit.id); }
+    const unit = state.units.find((candidate: any) => candidate.id === state.activeUnitId); if (unit) { unit.hasActivated = true; if (Object.hasOwn(unit, "disengagementEvasion")) { unit.evasion = unit.disengagementEvasion; delete unit.disengagementEvasion; } delete unit.disengagedLinks; armOverwatch(state, unit.id); }
     state.attackSpentBy = null;
-    const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
+    const next = state.queue.find((id: any) => { const candidate = state.units.find((unit: any) => unit.id === id); return candidate && !candidate.hasActivated; });
     if (next) { state.activeUnitId = next; state.lifecycle = "WaitDecision"; }
     else state.lifecycle = "RoundEnd";
     recordEvent(state, "activation-end", { actorId: unit?.id ?? null, subjectIds: unit ? [unit.id] : [] });
@@ -432,20 +436,20 @@ export function progress(state) {
   return state.lifecycle;
 }
 
-export function decide(state, decision = "continue") {
+export function decide(state: BattleState, decision = "continue") {
   if (state.lifecycle !== "WaitDecision") return false;
   const unit = state.units.find(candidate => candidate.id === state.activeUnitId); if (!unit) return false;
   if (decision === "wait" && !unit.hasWaited) { unit.hasWaited = true; state.queue = [...state.queue.filter(id => id !== unit.id), unit.id]; state.activeUnitId = state.queue.find(id => !state.units.find(candidate => candidate.id === id).hasActivated); recordEvent(state, "wait", { actorId: unit.id }); return true; }
-  state.lifecycle = "ActivationStart"; recordEvent(state, "activation-start", { actorId: unit.id }); progress(state); return state.lifecycle === "SystemActions";
+  state.lifecycle = "ActivationStart"; recordEvent(state, "activation-start", { actorId: unit.id }); progress(state); return (state.lifecycle as string) === "SystemActions";
 }
 
-export function advanceActivation(state, stage) {
+export function advanceActivation(state: BattleState, stage: any) {
   const order = ["SystemActions", "Maneuver", "Attack", "EndActivation"], current = order.indexOf(state.lifecycle);
   if (current < 0 || !state.units.some(unit => unit.id === state.activeUnitId) || order.indexOf(stage) !== current + 1) return false;
   state.lifecycle = stage; state.activationStage = stage; recordEvent(state, "activation-stage", { actorId: state.activeUnitId, after: stage }); return true;
 }
 
-export function movementDestinations(state, unitId) {
+export function movementDestinations(state: BattleState, unitId: any) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit?.position) return [];
   const range = Math.max(0, unit.currentSpeed ?? unit.speed ?? 0);
@@ -458,12 +462,12 @@ export function movementDestinations(state, unitId) {
 }
 
 const movementDirections = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
-const turnDistance = (from, to) => Math.min((to - from + 6) % 6, (from - to + 6) % 6);
-const headingForStep = (from, to) => movementDirections.findIndex(direction => from.q + direction.q === to.q && from.r + direction.r === to.r);
+const turnDistance = (from: any, to: any) => Math.min((to - from + 6) % 6, (from - to + 6) % 6);
+const headingForStep = (from: any, to: any) => movementDirections.findIndex(direction => from.q + direction.q === to.q && from.r + direction.r === to.r);
 
-export function planMovement(state, unitId, destination) {
+export function planMovement(state: BattleState, unitId: any, destination: any) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Нет исходной позиции" };
+  if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Р СњР ВµРЎвЂљ Р С‘РЎРѓРЎвЂ¦Р С•Р Т‘Р Р…Р С•Р в„– Р С—Р С•Р В·Р С‘РЎвЂ Р С‘Р С‘" };
   const speed = Math.max(0, unit.currentSpeed ?? unit.speed ?? 0);
   if (samePosition(unit.position, destination)) return { valid: true, steps: [], reason: null, movementCost: 0, turnsSpent: 0, finalHeading: unit.heading, stepHeadings: [] };
   const start = { position: { ...unit.position }, heading: unit.heading, movementCost: 0, turnsSpent: 0, steps: [], stepHeadings: [] };
@@ -483,16 +487,16 @@ export function planMovement(state, unitId, destination) {
       if (!seen.has(key)) { seen.add(key); queue.push(next); }
     }
   }
-  const liesOnShortestRoute = position => distance(unit.position, position) + distance(position, destination) === distance(unit.position, destination);
+  const liesOnShortestRoute = (position: any) => distance(unit.position, position) + distance(position, destination) === distance(unit.position, destination);
   const object = state.contents.find(item => item.kind === "object" && liesOnShortestRoute(item.position));
   const occupant = state.units.find(candidate => candidate.id !== unit.id && candidate.position && liesOnShortestRoute(candidate.position));
   const reason = object ? `Маршрут заблокирован объектом: ${object.type ?? "препятствие"}` : occupant ? `Гекс занят кораблём: ${occupant.name ?? occupant.id}` : "Цель вне доступной дальности";
   return { valid: false, steps: [], reason, movementCost: 0 };
 }
 
-export function previewManeuverRoute(state, unitId, steps, { heading = null, ramTargetId = null } = {}) {
+export function previewManeuverRoute(state: BattleState, unitId: any, steps: any, { heading = null, ramTargetId = null } = {}) {
   const source = state.units.find(candidate => candidate.id === unitId);
-  if (!source?.position || !Array.isArray(steps)) return { valid: false, reason: "Нет исходной позиции", entries: [] };
+  if (!source?.position || !Array.isArray(steps)) return { valid: false, reason: "Р СњР ВµРЎвЂљ Р С‘РЎРѓРЎвЂ¦Р С•Р Т‘Р Р…Р С•Р в„– Р С—Р С•Р В·Р С‘РЎвЂ Р С‘Р С‘", entries: [] };
   const projectedState = structuredClone(state);
   const unit = projectedState.units.find(candidate => candidate.id === unitId);
   const entries = [];
@@ -510,7 +514,7 @@ export function previewManeuverRoute(state, unitId, steps, { heading = null, ram
     const stopLegal = adjacent && canEnter(projectedState, unit, destination, { final: true });
     if (!reachable || !enterLegal || stepHeading < 0 || turn > 1 || (unit.currentSpeed ?? 0) < cost || (unit.turnsSpent ?? 0) + turn > (unit.maneuver ?? 0)) {
       reachable = false;
-      reason ??= "Маршрут нарушает ограничения движения";
+      reason ??= "Р СљР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљ Р Р…Р В°РЎР‚РЎС“РЎв‚¬Р В°Р ВµРЎвЂљ Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р Т‘Р Р†Р С‘Р В¶Р ВµР Р…Р С‘РЎРЏ";
     }
     const effects = contents.flatMap(content => [...(content.onEnterEffects ?? []), ...((content.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: content.onEnterDamage }] : [])].map(effect => ({ sourceId: content.id, ...normalizeOnEnterEffect(effect) })));
     if (reachable) {
@@ -531,7 +535,7 @@ export function previewManeuverRoute(state, unitId, steps, { heading = null, ram
     }) : [];
     const lethal = reachable && unit.integrity === 0;
     entries.push({ index: index + 1, position: { ...destination }, reachable, cost, cumulativeCost: movementCost, speedRemaining: unit.currentSpeed, heading: stepHeading, turn, effects, aaRisks, stopLegal, ramRequired, ramTargetId: ramRequired ? occupant.id : null, lethal });
-    if (lethal) { reachable = false; reason = "Детерминированный эффект уничтожает юнит на маршруте"; }
+    if (lethal) { reachable = false; reason = "Р вЂќР ВµРЎвЂљР ВµРЎР‚Р СР С‘Р Р…Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р Р…РЎвЂ№Р в„– РЎРЊРЎвЂћРЎвЂћР ВµР С”РЎвЂљ РЎС“Р Р…Р С‘РЎвЂЎРЎвЂљР С•Р В¶Р В°Р ВµРЎвЂљ РЎР‹Р Р…Р С‘РЎвЂљ Р Р…Р В° Р СР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљР Вµ"; }
   }
   const target = ramTargetId ? projectedState.units.find(candidate => candidate.id === ramTargetId) : null;
   const explicitRam = Boolean(target && source.kind === "capital" && target.kind === "capital" && target.side !== source.side && distance(unit.position, target.position) === 1);
@@ -539,11 +543,11 @@ export function previewManeuverRoute(state, unitId, steps, { heading = null, ram
   const finalTurnLegal = finalTurn <= 1;
   const totalTurns = (unit.turnsSpent ?? 0) + finalTurn;
   const valid = reachable && finalTurnLegal && totalTurns <= (unit.maneuver ?? 0) && (!entries.at(-1)?.ramRequired || entries.at(-1)?.ramTargetId === ramTargetId);
-  if (!finalTurnLegal) reason ??= "Финальный поворот превышает 60°";
-  return { valid, reason: valid ? null : reason ?? "Маршрут нарушает ограничения движения", movementCost, speedRemaining: unit.currentSpeed, turnsUsed: turnsUsed + finalTurn, turnsRemaining: Math.max(0, (unit.maneuver ?? 0) - totalTurns), finalHeading: heading ?? currentHeading, entries, stopLegal: entries.at(-1)?.stopLegal ?? true, ramRequired: Boolean(entries.at(-1)?.ramRequired || explicitRam), ramTargetId: entries.at(-1)?.ramTargetId ?? (explicitRam ? target.id : null) };
+  if (!finalTurnLegal) reason ??= "Р В¤Р С‘Р Р…Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р С—Р С•Р Р†Р С•РЎР‚Р С•РЎвЂљ Р С—РЎР‚Р ВµР Р†РЎвЂ№РЎв‚¬Р В°Р ВµРЎвЂљ 60Р’В°";
+  return { valid, reason: valid ? null : reason ?? "Р СљР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљ Р Р…Р В°РЎР‚РЎС“РЎв‚¬Р В°Р ВµРЎвЂљ Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р Т‘Р Р†Р С‘Р В¶Р ВµР Р…Р С‘РЎРЏ", movementCost, speedRemaining: unit.currentSpeed, turnsUsed: turnsUsed + finalTurn, turnsRemaining: Math.max(0, (unit.maneuver ?? 0) - totalTurns), finalHeading: heading ?? currentHeading, entries, stopLegal: entries.at(-1)?.stopLegal ?? true, ramRequired: Boolean(entries.at(-1)?.ramRequired || explicitRam), ramTargetId: entries.at(-1)?.ramTargetId ?? (explicitRam ? target.id : null) };
 }
 
-export function changeHeading(state, unitId, heading, { causeEventId = null, stationary = false } = {}) {
+export function changeHeading(state: BattleState, unitId: any, heading: any, { causeEventId = null, stationary = false } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   const turn = unit ? turnDistance(unit.heading, heading) : 0;
   if (!unit || unit.kind !== "capital" || !Number.isInteger(heading) || heading < 0 || heading > 5 || turn > 1 || (unit.turnsSpent ?? 0) + turn > (unit.maneuver ?? 0) || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId) return false;
@@ -554,7 +558,7 @@ export function changeHeading(state, unitId, heading, { causeEventId = null, sta
   return true;
 }
 
-export function canEnter(state, unit, position, { final = false, ramming = false } = {}) {
+export function canEnter(state: BattleState, unit: any, position: any, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");
   if (occupant) return ramming && unit.kind === "capital" && occupant.kind === "capital" && occupant.side !== unit.side;
@@ -562,7 +566,7 @@ export function canEnter(state, unit, position, { final = false, ramming = false
   return true;
 }
 
-export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId = null, heading = null, causeEventId = null, random = Math.random } = {}) {
+export function moveAtomic(state: BattleState, unitId: any, steps: any, { ramming = false, ramTargetId = null, heading = null, causeEventId = null, random }: { ramming?: boolean; ramTargetId?: string | null; heading?: number | null; causeEventId?: string | null; random?: Rng } = {}) {
   const unit = state.units.find(candidate => candidate.id === unitId);
   if (!unit?.position || state.lifecycle !== "Maneuver" || state.activeUnitId !== unitId || unit.hasActivated) return { status: "blocked", moved: 0 };
   if (!ramming && unit.kind === "squadron" && unit.engagedWith?.length) return { status: "blocked", moved: 0 };
@@ -604,7 +608,7 @@ export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId 
       if (!state.units.includes(unit)) break;
     }
     if (!state.units.includes(unit)) break;
-    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { random, causeEventId: entered.eventId });
+    if (unit.kind === "squadron") resolveOverwatch(state, unit.id, { ...(random ? { random } : {}), causeEventId: entered.eventId });
     if (!state.units.includes(unit)) break;
     refreshInterception(state, { causeEventId: entered.eventId });
     if (unit.kind === "squadron" && restrictingEnemies(state, unit).length) break;
@@ -619,9 +623,9 @@ export function moveAtomic(state, unitId, steps, { ramming = false, ramTargetId 
   return { status, moved };
 }
 
-export function applyDamagePacket(state, target, packet = {}) {
+export function applyDamagePacket(state: BattleState, target: any, packet: { amount?: number; sourceId?: string | null; causeEventId?: string | null; cause?: string; critChance?: number; random?: Rng; deferVictory?: boolean } = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
-  if (state.lifecycle === "Finished" || !unit || !state.units.includes(unit) || !Number.isFinite(packet.amount) || packet.amount <= 0) return { amount: 0, destroyed: false, layers: [] };
+  if ((state.lifecycle as string) === "Finished" || !unit || !state.units.includes(unit) || !Number.isFinite(packet.amount) || packet.amount <= 0) return { amount: 0, destroyed: false, layers: [] };
   let remaining = packet.amount;
   const before = { shield: unit.shield ?? 0, armor: unit.armor ?? 0, integrity: unit.integrity ?? 0, ...(unit.kind === "squadron" ? { stack: unit.stack ?? 0 } : {}) };
   const layers = [];
@@ -641,15 +645,16 @@ export function applyDamagePacket(state, target, packet = {}) {
   if (unit.kind === "squadron" && after.stack < before.stack) causeEventId = recordEvent(state, "squadron-craft-lost", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, before: { stack: before.stack }, after: { stack: after.stack }, lost: before.stack - after.stack }).eventId;
   if (Number.isFinite(packet.critChance) && layers.some(layer => layer.layer === "integrity" && layer.amount > 0)) {
     const chance = Math.max(0, Math.min(100, packet.critChance));
-    const roll = (packet.random ?? Math.random)() * 100;
+    if (!packet.random) throw new TypeError("An RNG provider is required for critical damage");
+    const roll = packet.random() * 100;
     causeEventId = recordEvent(state, "critical-result", { actorId: packet.sourceId ?? null, subjectIds: [unit.id], causeEventId, random: { roll, chance }, result: { critical: roll < chance } }).eventId;
   }
   if (destroyed) destroyUnit(state, unit, { causeEventId, deferVictory: packet.deferVictory === true });
   return { amount: packet.amount - remaining, destroyed, layers };
 }
 
-function finishIfVictorious(state, causeEventId = null) {
-  const remainingSides = new Set(state.units.map(candidate => candidate.side));
+function finishIfVictorious(state: BattleState, causeEventId = null) {
+  const remainingSides = new Set(state.units.map(candidate => candidate.side).filter((side): side is "left" | "right" => side === "left" || side === "right"));
   const winner = remainingSides.size === 1 && state.units.length ? [...remainingSides][0] : null;
   const checked = recordEvent(state, "victory-check", { causeEventId, result: { winner } });
   if (winner) {
@@ -658,8 +663,8 @@ function finishIfVictorious(state, causeEventId = null) {
   }
 }
 
-function finishDestroyedActivation(state, unitId, causeEventId) {
-  if (state.lifecycle === "Finished") return;
+function finishDestroyedActivation(state: BattleState, unitId: any, causeEventId: any) {
+  if ((state.lifecycle as string) === "Finished") return;
   const next = state.queue.find(id => { const candidate = state.units.find(unit => unit.id === id); return candidate && !candidate.hasActivated; });
   state.activeUnitId = next ?? null;
   state.activationStage = null;
@@ -668,12 +673,12 @@ function finishDestroyedActivation(state, unitId, causeEventId) {
   recordEvent(state, "activation-end", { actorId: unitId, subjectIds: [unitId], causeEventId });
 }
 
-export function destroyUnit(state, target, { causeEventId = null, deferVictory = false } = {}) {
+export function destroyUnit(state: BattleState, target: any, { causeEventId = null, deferVictory = false } = {}) {
   const unit = typeof target === "string" ? state.units.find(candidate => candidate.id === target) : target;
-  if (state.lifecycle === "Finished" || !unit || !state.units.includes(unit)) return { destroyed: false };
+  if ((state.lifecycle as string) === "Finished" || !unit || !state.units.includes(unit)) return { destroyed: false };
   const position = unit.position ? { ...unit.position } : null;
   const wasActive = state.activeUnitId === unit.id;
-  weaponSlots(unit).forEach(slot => { slot.overwatch = false; slot.overwatchTargets = []; });
+  weaponSlots(unit).forEach((slot: any) => { slot.overwatch = false; slot.overwatchTargets = []; });
   state.units = state.units.filter(candidate => candidate !== unit);
   state.queue = state.queue.filter(id => id !== unit.id);
   if (state.activeUnitId === unit.id) { state.activeUnitId = null; state.activationStage = null; state.attackSpentBy = null; }
@@ -690,7 +695,7 @@ export function destroyUnit(state, target, { causeEventId = null, deferVictory =
   removedLinks.forEach(link => recordEvent(state, "interception-link-removed", { subjectIds: link.unitIds, causeEventId: destroyedEvent.eventId, creators: link.creators }));
   if (!deferVictory) {
     finishIfVictorious(state, destroyedEvent.eventId);
-    if (wasActive && state.lifecycle !== "Finished") finishDestroyedActivation(state, unit.id, state.events.at(-1).eventId);
+    if (wasActive && (state.lifecycle as string) !== "Finished") finishDestroyedActivation(state, unit.id, state.events.at(-1).eventId);
   }
   return { destroyed: true, unitId: unit.id, winner: state.winner, eventId: destroyedEvent.eventId };
 }
@@ -704,7 +709,7 @@ function roundCube({ x, y, z }) {
   return { q: rx || 0, r: rz || 0 };
 }
 
-function drawHexLine(a, b, nudge) {
+function drawHexLine(a: any, b: any, nudge: any) {
   const steps = distance(a, b);
   if (!steps) return [{ ...a }];
   const from = { x: a.q + nudge, z: a.r + nudge, y: -a.q - a.r - nudge * 2 };
@@ -715,7 +720,7 @@ function drawHexLine(a, b, nudge) {
   });
 }
 
-export function supercoverLine(a, b) {
+export function supercoverLine(a: any, b: any) {
   const cells = [...drawHexLine(a, b, 1e-6), ...drawHexLine(a, b, -1e-6)];
   const unique = [...new Map(cells.map(cell => [`${cell.q},${cell.r}`, cell])).values()];
   const delta = { q: b.q - a.q, r: b.r - a.r };
@@ -728,15 +733,15 @@ export function supercoverLine(a, b) {
 
 const hexDirections = [{ q: 1, r: 0 }, { q: 1, r: -1 }, { q: 0, r: -1 }, { q: -1, r: 0 }, { q: -1, r: 1 }, { q: 0, r: 1 }];
 
-function scaledDirection(direction, amount) { return { q: direction.q * amount, r: direction.r * amount }; }
-function sameDelta(delta, candidate) { return delta.q === candidate.q && delta.r === candidate.r; }
-function relativeToHeading(delta, heading) {
+function scaledDirection(direction: any, amount: any) { return { q: direction.q * amount, r: direction.r * amount }; }
+function sameDelta(delta: any, candidate: any) { return delta.q === candidate.q && delta.r === candidate.r; }
+function relativeToHeading(delta: any, heading: any) {
   let relative = { ...delta };
   for (let turn = 0; turn < heading; turn += 1) relative = { q: -relative.r, r: relative.q + relative.r };
   return relative;
 }
 
-function arcAllows(source, victim, weapon) {
+function arcAllows(source: any, victim: any, weapon: any) {
   const range = distance(source.position, victim.position), arc = weapon.arc ?? weapon.profile ?? "360";
   const min = weapon.minRange ?? (arc === "linear" || arc === "line" ? 3 : 1), max = weapon.maxRange ?? (arc === "linear" || arc === "line" ? 5 : 3);
   if (range < min || range > max) return false;
@@ -751,14 +756,14 @@ function arcAllows(source, victim, weapon) {
   return false;
 }
 
-function attackBlocker(state, source, victim) {
+function attackBlocker(state: BattleState, source: any, victim: any) {
   if (!source?.position || !victim?.position) return null;
   const candidates = [...state.units, ...state.contents].filter(item => item !== source && item !== victim && item.position && item.kind !== "squadron" && !(item.kind === "object" && item.size === "small") && ["small", "medium", "large"].includes(item.size));
   const line = supercoverLine(source.position, victim.position).slice(1, -1);
   return candidates.filter(item => line.some(position => samePosition(item.position, position))).sort((left, right) => distance(source.position, left.position) - distance(source.position, right.position) || left.id.localeCompare(right.id))[0] ?? null;
 }
 
-export function previewAttack(state, attacker, target, weapon = {}) {
+export function previewAttack(state: BattleState, attacker: Entity | string, target: Entity | string, weapon: Entity = {}) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
   const accuracy = Math.max(0, Math.min(100, weapon.accuracy ?? 100));
@@ -775,7 +780,7 @@ export function previewAttack(state, attacker, target, weapon = {}) {
   return { attackerId: source?.id ?? null, targetId: victim?.id ?? null, accuracy: hitMain, effectiveAccuracy, hitBlocker, hitMain, miss, baseAccuracy: accuracy, shots, damage, totalDamage: shots * damage, cover: coverPenalty, blockerId: blocker?.id ?? null, blockerCover, friendlyFire: Boolean(blocker && blocker.side === source?.side), canAttack: Boolean(source && victim && source !== victim && source.side !== victim.side && state.attackSpentBy !== source.id && arcAllows(source, victim, weapon)) };
 }
 
-function applyObjectDamage(state, object, amount, sourceId, cause = "ramming", causeEventId = null) {
+function applyObjectDamage(state: BattleState, object: any, amount: any, sourceId: any, cause = "ramming", causeEventId = null) {
   const before = object.integrity ?? 0;
   object.integrity = Math.max(0, before - amount);
   const destroyed = object.integrity === 0;
@@ -790,14 +795,14 @@ function applyObjectDamage(state, object, amount, sourceId, cause = "ramming", c
   return { amount: before - object.integrity, destroyed };
 }
 
-function straightRun(stepHeadings) {
+function straightRun(stepHeadings: any) {
   if (!stepHeadings.length) return 0;
   let length = 1;
   for (let index = stepHeadings.length - 1; index > 0 && stepHeadings[index] === stepHeadings[index - 1]; index -= 1) length += 1;
   return length;
 }
 
-export function planRam(state, attacker, target) {
+export function planRam(state: BattleState, attacker: any, target: any) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? [...state.units, ...state.contents].find(item => item.id === target) : target;
   if (!source?.position || !victim?.position || source.kind !== "capital" || !["capital", "object"].includes(victim.kind) || (victim.kind === "object" && victim.size !== "large") || source.side === victim.side) return { valid: false, steps: [], directSteps: 0 };
@@ -815,18 +820,18 @@ export function planRam(state, attacker, target) {
       queue.push({ position, heading, cost, turns: route.turns + turn, steps: [...route.steps, position], headings: [...route.headings, heading] });
     }
   }
-  const routeRisk = route => route.steps.reduce((total, position) => total + state.contents.filter(item => samePosition(item.position, position)).flatMap(item => [...(item.onEnterEffects ?? []), ...((item.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: item.onEnterDamage }] : [])]).reduce((sum, effect) => sum + (effect.type === "damage" ? effect.amount : 0), 0), 0);
+  const routeRisk = (route: any) => route.steps.reduce((total: any, position: any) => total + state.contents.filter(item => samePosition(item.position, position)).flatMap(item => [...(item.onEnterEffects ?? []), ...((item.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: item.onEnterDamage }] : [])]).reduce((sum, effect) => sum + (effect.type === "damage" ? effect.amount : 0), 0), 0);
   routes.sort((a, b) => straightRun(b.headings) - straightRun(a.headings) || routeRisk(a) - routeRisk(b) || b.steps.length - a.steps.length || a.cost - b.cost || JSON.stringify(a.steps).localeCompare(JSON.stringify(b.steps)));
   const route = routes[0];
   return route ? { valid: true, steps: route.steps, directSteps: straightRun(route.headings), movementCost: route.cost, finalHeading: route.heading } : { valid: false, steps: [], directSteps: 0 };
 }
 
-export function ram(state, attacker, target, steps) {
+export function ram(state: BattleState, attacker: any, target: any, steps: any) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? [...state.units, ...state.contents].find(item => item.id === target) : target;
   const plan = planRam(state, source, victim);
   if (!source || !victim || state.lifecycle !== "Maneuver" || state.activeUnitId !== source.id || state.attackSpentBy === source.id || !plan.valid || JSON.stringify(steps) !== JSON.stringify(plan.steps)) return { success: false, damage: 0 };
-  const declared = recordEvent(state, "ramming-declared", { actorId: source.id, subjectIds: [victim.id], route: steps.map(position => ({ ...position })), directSteps: plan.directSteps });
+  const declared = recordEvent(state, "ramming-declared", { actorId: source.id, subjectIds: [victim.id], route: steps.map((position: any) => ({ ...position })), directSteps: plan.directSteps });
   const route = moveAtomic(state, source.id, steps, { ramming: true, ramTargetId: victim.id, causeEventId: declared.eventId });
   if (route.moved !== steps.length || !state.units.includes(source) || distance(source.position, victim.position) !== 1) {
     recordEvent(state, "ramming-cancelled", { actorId: source.id, subjectIds: [victim.id], causeEventId: state.events.at(-1)?.eventId ?? declared.eventId, moved: route.moved });
@@ -840,22 +845,23 @@ export function ram(state, attacker, target, steps) {
   state.attackSpentBy = source.id;
   const resolved = recordEvent(state, "ramming-resolved", { actorId: source.id, subjectIds: [victim.id], causeEventId: impact.eventId, targetDamage: targetResult.amount, attackerDamage: attackerResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed });
   finishIfVictorious(state, resolved.eventId);
-  if (attackerResult.destroyed && state.lifecycle !== "Finished") finishDestroyedActivation(state, source.id, state.events.at(-1).eventId);
+  if (attackerResult.destroyed && (state.lifecycle as string) !== "Finished") finishDestroyedActivation(state, source.id, state.events.at(-1).eventId);
   return { success: true, damage: targetResult.amount, targetDestroyed: targetResult.destroyed, attackerDestroyed: attackerResult.destroyed };
 }
 
-export function resolveAttack(state, attacker, target, slot = null, { random = Math.random, causeEventId = null } = {}) {
+export function resolveAttack(state: BattleState, attacker: any, target: any, slot: Entity | null = null, { random, causeEventId = null }: RandomOptions) {
+  if (typeof random !== "function") throw new TypeError("An RNG provider is required");
   return resolveAttackInternal(state, attacker, target, slot, { random, causeEventId, cause: "attack", reaction: false });
 }
 
-function resolveAttackInternal(state, attacker, target, slot, { random, causeEventId, cause, reaction }) {
+function resolveAttackInternal(state: BattleState, attacker: any, target: any, slot: any, { random, causeEventId, cause, reaction }) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? state.units.find(unit => unit.id === target) : target;
-  const ownedSlot = weaponSlots(source).find(candidate => candidate === slot);
+  const ownedSlot = weaponSlots(source).find((candidate: any) => candidate === slot);
   const weapon = ownedSlot?.weapon ?? ownedSlot ?? {};
   const preview = previewAttack(state, source, victim, weapon);
   const manual = !reaction;
-  if (!source || !victim || !state.units.includes(source) || !state.units.includes(victim) || !ownedSlot || !preview.canAttack || state.lifecycle === "Finished" || (reaction && state.lifecycle !== "Maneuver") || (manual && state.attackSpentBy === source.id) || (manual && (state.lifecycle !== "Attack" || state.activeUnitId !== source.id || ownedSlot.destroyed === true || ownedSlot.ready === false || ownedSlot.overwatch === true || slotAmmo(ownedSlot) <= 0))) return { ...preview, hits: 0, damage: 0 };
+  if (!source || !victim || !state.units.includes(source) || !state.units.includes(victim) || !ownedSlot || !preview.canAttack || (state.lifecycle as string) === "Finished" || (reaction && state.lifecycle !== "Maneuver") || (manual && state.attackSpentBy === source.id) || (manual && (state.lifecycle !== "Attack" || state.activeUnitId !== source.id || ownedSlot.destroyed === true || ownedSlot.ready === false || ownedSlot.overwatch === true || slotAmmo(ownedSlot) <= 0))) return { ...preview, hits: 0, damage: 0 };
   let actionCauseEventId = causeEventId;
   if (manual) {
     const declared = recordEvent(state, "action-declared", { actorId: source.id, subjectIds: [victim.id], causeEventId, kind: "attack" });
@@ -885,7 +891,7 @@ function resolveAttackInternal(state, attacker, target, slot, { random, causeEve
     const result = unit ? applyDamagePacket(state, unit, { amount: current.damage, sourceId: current.attackerId, causeEventId: shotEvent.eventId, cause: damageCause, critChance: weapon.critChance, random }) : applyObjectDamage(state, object, current.damage, current.attackerId, damageCause, shotEvent.eventId);
     hits += 1;
     damage += result.amount;
-    if (state.lifecycle === "Finished" || !state.units.includes(source) || (mainHit && result.destroyed)) break;
+    if ((state.lifecycle as string) === "Finished" || !state.units.includes(source) || (mainHit && result.destroyed)) break;
   }
   return { ...preview, hits, damage, destroyed: !state.units.some(unit => unit.id === preview.targetId) };
 }

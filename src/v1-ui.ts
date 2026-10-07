@@ -1,6 +1,6 @@
-import { createBattleController } from "./v1-controller.js";
-import { createBattleRenderer } from "./v1-renderer.js";
-import { createBattleStore, createLocalPersistence } from "./v1-store.js";
+import { createBattleController } from "./v1-controller.ts";
+import { createBattleRenderer } from "./v1-renderer.ts";
+import { createBattleStore, createLocalPersistence } from "./v1-store.ts";
 
 const store = createBattleStore({ persistence: createLocalPersistence("v1-combat-ui-3"), initial: {
   id: "v1-ui", bounds: { minCol: 0, maxCol: 7, minRow: 0, maxRow: 5 }, units: [

@@ -1,5 +1,6 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
+import type { BattleState, Entity } from "./v1-types.ts";
 import {
   createBattle,
   deployUnit,
@@ -26,7 +27,7 @@ import {
   validateDomainEvent,
   validateEventLog,
   replayEventLog
-} from "./v1-domain.js";
+} from "./v1-domain.ts";
 
 const bounds = { minCol: 0, maxCol: 3, minRow: 0, maxRow: 1 };
 const units = [
@@ -34,7 +35,7 @@ const units = [
   { id: "r-cap", side: "right", kind: "capital", initiative: 3, shield: 0, armor: 0, integrity: 10 }
 ];
 
-function prepareAttack(state, attackerId, profile) {
+function prepareAttack(state: BattleState, attackerId: string, profile?: Entity) {
   const attacker = state.units.find(unit => unit.id === attackerId);
   const slot = profile ?? attacker.weapons?.[0];
   if (!attacker.weapons) attacker.weapons = [slot];
@@ -1093,7 +1094,7 @@ test("movement refreshes interception and stops after lethal overwatch", () => {
   state.activeUnitId = "squad";
   state.units[0].weapons[0].overwatch = true;
   state.units[0].weapons[0].overwatchRound = 1;
-  const result = moveAtomic(state, "squad", [{ q: 2, r: 0 }, { q: 1, r: 0 }, { q: 0, r: 0 }], { });
+  const result = moveAtomic(state, "squad", [{ q: 2, r: 0 }, { q: 1, r: 0 }, { q: 0, r: 0 }], { random: () => 0 });
   assert.equal(result.moved, 1);
   assert.equal(state.units.some(unit => unit.id === "squad"), false);
   assert.equal(state.events.filter(event => event.action === "movement-step").length, 1);
@@ -1473,20 +1474,29 @@ test("attack records actual RNG and object damage points to the shot", () => {
   assert.equal(validateEventLog(state.events, state.id), true);
 });
 
-test("memory store persists and notifies domain snapshots", async () => {
-  const { createMemoryPersistence, createBattleStore } = await import("./v1-store.js");
+test("memory store dispatches typed commands, persists, and notifies", async () => {
+  const { createMemoryPersistence, createBattleStore } = await import("./v1-store.ts");
   const persistence = createMemoryPersistence();
   const store = createBattleStore({ persistence, initial: { id: "stored", bounds, units } });
   let notifications = 0;
   store.subscribe(() => { notifications += 1; });
-  store.transact(state => { state.round = 7; return state.round; });
+  const round: number = store.dispatch(state => { state.round = 7; return state.round; });
+  assert.equal(round, 7);
   assert.equal(store.getState().round, 7);
   assert.equal(notifications, 1);
   assert.equal(persistence.load().round, 7);
 });
 
+test("memory store retains transact compatibility", async () => {
+  const { createBattleStore } = await import("./v1-store.ts");
+  const store = createBattleStore({ initial: { id: "compatible", bounds, units } });
+  const round = store.transact(state => { state.round = 3; return state.round; });
+  assert.equal(round, 3);
+  assert.equal(store.getState().round, 3);
+});
+
 test("legacy snapshot events migrate and continue with canonical replay internals", async () => {
-  const { createLocalPersistence } = await import("./v1-store.js");
+  const { createLocalPersistence } = await import("./v1-store.ts");
   const original = createBattle({ id: "legacy-events" });
   recordEvent(original, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
   const replayed = replayEventLog(original.events, original.id);
@@ -1512,7 +1522,7 @@ test("legacy snapshot events migrate and continue with canonical replay internal
 });
 
 test("persistence restores deeply frozen validated events", async () => {
-  const { createMemoryPersistence, createLocalPersistence } = await import("./v1-store.js");
+  const { createMemoryPersistence, createLocalPersistence } = await import("./v1-store.ts");
   const state = createBattle({ id: "persisted" });
   recordEvent(state, "entry-attempt", { actorId: "a", subjectIds: ["a"], position: { q: 1, r: 0 }, cost: 1 });
   const memory = createMemoryPersistence();

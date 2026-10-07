@@ -1,5 +1,5 @@
-import { formatAttackPreview, getAttackPreview } from "./v1-preview.js";
-import { deploymentZone, movementDestinations } from "./v1-domain.js";
+import { formatAttackPreview, getAttackPreview } from "./v1-preview.ts";
+import { deploymentZone, movementDestinations } from "./v1-domain.ts";
 
 function createHexLayout(width, height, bounds) {
   const padding = 18;

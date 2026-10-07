@@ -1,12 +1,16 @@
 {
   "compilerOptions": {
-    "allowJs": true,
-    "checkJs": false,
-    "noEmit": true,
-    "target": "ES2022",
+    "allowImportingTsExtensions": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "skipLibCheck": true
+    "noEmit": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "strict": false,
+    "target": "ES2022",
+    "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.js"]
+  "include": ["src/v1-*.ts", "playwright.config.ts", "vite.config.ts"],
+  "exclude": ["src/**/*.test.ts"]
 }

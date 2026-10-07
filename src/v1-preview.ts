@@ -1,4 +1,4 @@
-import { previewAttack } from "./v1-domain.js";
+import { previewAttack } from "./v1-domain.ts";
 
 export function getWeaponSelection(attacker, weaponIndex = 0) {
   const slot = (attacker?.weapons ?? attacker?.weaponSlots)?.[weaponIndex];

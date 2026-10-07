@@ -5,14 +5,14 @@ test("ships start visible and can be repositioned during deployment", async ({ p
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
-  const positions = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.map(unit => unit.position));
+  const positions = await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().units.map(unit => unit.position));
   expect(positions.every(Boolean)).toBe(true);
   const canvas = page.locator("#battlefield");
   const box = await canvas.boundingBox();
-  const points = await page.evaluate(async () => { const { renderer } = await import("/src/v1-ui.js"); return [renderer.pointForHex({ q: 0, r: 1 }), renderer.pointForHex({ q: 1, r: 2 })]; });
+  const points = await page.evaluate(async () => { const { renderer } = await import("/src/v1-ui.ts"); return [renderer.pointForHex({ q: 0, r: 1 }), renderer.pointForHex({ q: 1, r: 2 })]; });
   await page.mouse.click(box.x + points[0].x, box.y + points[0].y);
   await page.mouse.click(box.x + points[1].x, box.y + points[1].y);
-  const moved = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position);
+  const moved = await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().units.find(unit => unit.id === "left-cap").position);
   expect(moved).toEqual({ q: 1, r: 2 });
 });
 
@@ -43,14 +43,14 @@ test("capital heading changes only when the planned maneuver is confirmed", asyn
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   await page.evaluate(async () => {
-    const { store } = await import("/src/v1-ui.js");
+    const { store } = await import("/src/v1-ui.ts");
     store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit) });
   });
-  await page.evaluate(async () => { const { controller, renderer } = await import("/src/v1-ui.js"); controller.view.selectedUnitId = "left-cap"; controller.view.plannedRoute = [{ q: 0, r: 1 }]; controller.view.plannedPosition = { q: 0, r: 1 }; controller.render(); });
+  await page.evaluate(async () => { const { controller, renderer } = await import("/src/v1-ui.ts"); controller.view.selectedUnitId = "left-cap"; controller.view.plannedRoute = [{ q: 0, r: 1 }]; controller.view.plannedPosition = { q: 0, r: 1 }; controller.render(); });
   await page.locator("#headingButtons [data-heading='0']").dispatchEvent("click");
-  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(0);
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(0);
   await page.locator("#confirmMoveButton").click();
-  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(0);
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().units.find(unit => unit.id === "left-cap").heading)).toBe(0);
   await expect(page.locator("#combatLog")).toContainText("heading-change");
 });
 
@@ -59,13 +59,13 @@ test("browser confirms a stationary turn and preserves an explicit final heading
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
-  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.js"); store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0, maneuver: 2, turnsSpent: 0, evasion: 12 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.view.plannedHeading = 0; controller.render(); });
+  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.ts"); store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0, maneuver: 2, turnsSpent: 0, evasion: 12 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.view.plannedHeading = 0; controller.render(); });
   await page.locator("#headingButtons [data-heading='1']").click();
   await page.locator("#confirmMoveButton").click();
-  expect(await page.evaluate(async () => { const unit = (await import("/src/v1-ui.js")).store.getState().units.find(candidate => candidate.id === "left-cap"); return { heading: unit.heading, evasion: unit.evasion }; })).toEqual({ heading: 1, evasion: 0 });
-  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.js"); const state = store.getState(); store.replace({ ...state, units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, heading: 0, turnsSpent: 0 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.view.plannedHeading = 1; controller.view.headingSelected = true; controller.render(); });
+  expect(await page.evaluate(async () => { const unit = (await import("/src/v1-ui.ts")).store.getState().units.find(candidate => candidate.id === "left-cap"); return { heading: unit.heading, evasion: unit.evasion }; })).toEqual({ heading: 1, evasion: 0 });
+  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.ts"); const state = store.getState(); store.replace({ ...state, units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, heading: 0, turnsSpent: 0 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.view.plannedHeading = 1; controller.view.headingSelected = true; controller.render(); });
   const canvas = page.locator("#battlefield"); const box = await canvas.boundingBox();
-  const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 1, r: 0 }));
+  const destination = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 1, r: 0 }));
   await page.mouse.click(box.x + destination.x, box.y + destination.y);
   await expect(page.locator("#headingButtons [data-heading='1']")).toHaveClass(/active/);
 });
@@ -75,9 +75,9 @@ test("browser shows planned multi-cell route and ordered event log", async ({ pa
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
-  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.js"); store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.render(); });
+  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.ts"); store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.render(); });
   const canvas = page.locator("#battlefield"); const box = await canvas.boundingBox();
-  const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  const destination = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 2, r: 0 }));
   await page.mouse.click(box.x + destination.x, box.y + destination.y);
   await expect(page.locator("#maneuverDetails")).toContainText("Маршрут");
    await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
@@ -93,7 +93,7 @@ test("browser shows expanded pure maneuver effects and AA risk preview", async (
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   const before = await page.evaluate(async () => {
-    const { store, controller } = await import("/src/v1-ui.js");
+    const { store, controller } = await import("/src/v1-ui.ts");
     const state = store.getState();
     store.replace({ ...state, round: 1, lifecycle: "Maneuver", activeUnitId: "left-squad", contents: [{ id: "cloud", kind: "terrain", type: "nebula", position: { q: 2, r: 0 }, movementCost: 2, onEnterEffects: [{ type: "modify-unit", field: "evasion", amount: 5 }] }], units: state.units.map(unit => unit.id === "left-squad" ? { ...unit, position: { q: 1, r: 0 }, currentSpeed: 4 } : unit.id === "right-cap" ? { ...unit, position: { q: 4, r: 0 }, weapons: [{ id: "flak", ready: true, overwatchEligible: true, overwatch: true, overwatchRound: 1, accuracy: 70, damage: 2, shots: 1, maxRange: 3 }] } : { ...unit, position: null }) });
     controller.view.selectedUnitId = "left-squad";
@@ -101,13 +101,13 @@ test("browser shows expanded pure maneuver effects and AA risk preview", async (
     return structuredClone(store.getState());
   });
   const canvas = page.locator("#battlefield"); const box = await canvas.boundingBox();
-  const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  const destination = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 2, r: 0 }));
   await page.mouse.click(box.x + destination.x, box.y + destination.y);
   await expect(page.locator("#maneuverDetails")).toContainText("стоимость 2");
   await expect(page.locator("#maneuverDetails")).toContainText("скорость останется 2");
   await expect(page.locator("#maneuverDetails")).toContainText("evasion +5");
   await expect(page.locator("#maneuverDetails")).toContainText("ПВО right-cap 70%/2 урон");
-  expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.js")).store.getState()))).toEqual(before);
+  expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.ts")).store.getState()))).toEqual(before);
 });
 
 test("browser plans and exposes explicit ram through enemy selection", async ({ page }) => {
@@ -116,13 +116,13 @@ test("browser plans and exposes explicit ram through enemy selection", async ({ 
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   await page.evaluate(async () => {
-    const { store, controller } = await import("/src/v1-ui.js");
+    const { store, controller } = await import("/src/v1-ui.ts");
     const state = store.getState();
     store.replace({ ...state, lifecycle: "Maneuver", activeUnitId: "left-cap", contents: [], units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0, currentSpeed: 3, maneuver: 2 } : unit.id === "right-cap" ? { ...unit, position: { q: 2, r: 0 } } : { ...unit, position: null }) });
     controller.view.selectedUnitId = "left-cap"; controller.render();
   });
   const canvas = page.locator("#battlefield"); const box = await canvas.boundingBox();
-  const target = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  const target = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 2, r: 0 }));
   await page.mouse.click(box.x + target.x, box.y + target.y);
   await expect(page.locator("#maneuverDetails")).toContainText("требуется явный таран right-cap");
   await expect(page.locator("#ramButton")).toBeVisible();
@@ -134,22 +134,22 @@ test("browser blocks routes through obstacles and records final position", async
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   await page.evaluate(async () => {
-    const { store, controller } = await import("/src/v1-ui.js");
+    const { store, controller } = await import("/src/v1-ui.ts");
     store.replace({ ...store.getState(), lifecycle: "Maneuver", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit), contents: [...store.getState().contents, { id: "route-blocker", kind: "object", type: "asteroid", position: { q: 1, r: 0 } }] });
     controller.view.selectedUnitId = "left-cap";
     controller.render();
   });
   const canvas = page.locator("#battlefield");
   const box = await canvas.boundingBox();
-  const blockedDestination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 2, r: 0 }));
+  const blockedDestination = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 2, r: 0 }));
   await page.mouse.click(box.x + blockedDestination.x, box.y + blockedDestination.y);
   await expect(page.locator("#maneuverDetails")).toContainText("Маршрут заблокирован объектом: asteroid");
-  const destination = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 0, r: 2 }));
+  const destination = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 0, r: 2 }));
   await page.mouse.click(box.x + destination.x, box.y + destination.y);
   await expect(page.locator("#maneuverDetails")).toContainText("2 шаг");
   await page.locator("#headingButtons [data-heading='0']").click();
   await page.locator("#confirmMoveButton").click();
-  const events = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.slice(-9).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
+  const events = await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().events.slice(-9).map(event => ({ action: event.action, position: event.position, heading: event.heading })));
   expect(events).toEqual([
     { action: "entry-attempt", position: { q: 0, r: 1 }, heading: undefined },
     { action: "heading-change", position: undefined, heading: 5 },
@@ -161,7 +161,7 @@ test("browser blocks routes through obstacles and records final position", async
     { action: "heading-change", position: undefined, heading: 0 },
     { action: "maneuver-completed", position: { q: 0, r: 2 }, heading: undefined }
   ]);
-  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 0, r: 2 });
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 0, r: 2 });
 });
 
 test("browser completes a lethal salvo and reaches Finished", async ({ page }) => {
@@ -170,7 +170,7 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   await page.evaluate(async () => {
-    const { store } = await import("/src/v1-ui.js");
+    const { store } = await import("/src/v1-ui.ts");
     const state = store.getState();
     store.replace({
       ...state,
@@ -187,14 +187,14 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
   await page.getByRole("button", { name: "Продолжить" }).click();
   const canvas = page.locator("#battlefield");
   const box = await canvas.boundingBox();
-  const target = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 6, r: 1 }));
+  const target = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 6, r: 1 }));
   await page.mouse.click(box.x + target.x, box.y + target.y);
   await page.getByRole("button", { name: "battery" }).click();
   await page.getByRole("button", { name: "Подтвердить залп" }).click();
   await expect(page.locator("#stageLabel")).toHaveText("Finished");
   await expect(page.locator("#modeLabel")).toHaveText("ПОБЕДА: left");
   const result = await page.evaluate(async () => {
-    const state = (await import("/src/v1-ui.js")).store.getState();
+    const state = (await import("/src/v1-ui.ts")).store.getState();
     return {
       units: state.units.map(unit => unit.id),
       debris: state.contents.some(item => item.kind === "debris" && item.position.q === 6 && item.position.r === 1),
@@ -215,9 +215,9 @@ test("browser completes a lethal salvo and reaches Finished", async ({ page }) =
   });
   const continueButton = page.getByRole("button", { name: "Продолжить" });
   await expect(continueButton).toBeDisabled();
-  const eventCount = await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.length);
+  const eventCount = await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().events.length);
   await continueButton.dispatchEvent("click");
-  expect(await page.evaluate(async () => (await import("/src/v1-ui.js")).store.getState().events.length)).toBe(eventCount);
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().events.length)).toBe(eventCount);
 });
 
 test("browser preview shows friendly-fire distribution without resolving a shot", async ({ page }) => {
@@ -226,7 +226,7 @@ test("browser preview shows friendly-fire distribution without resolving a shot"
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   const before = await page.evaluate(async () => {
-    const { store, controller } = await import("/src/v1-ui.js");
+    const { store, controller } = await import("/src/v1-ui.ts");
     const state = store.getState();
     store.replace({ ...state, lifecycle: "Attack", activeUnitId: "left-cap", contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, weapons: [{ id: "test-gun", accuracy: 80, damage: 2, shots: 2, maxRange: 5 }] } : unit.id === "left-squad" ? { ...unit, kind: "capital", size: "medium", position: { q: 1, r: 0 } } : unit.id === "right-cap" ? { ...unit, position: { q: 3, r: 0 } } : { ...unit, position: null }) });
     controller.render();
@@ -234,14 +234,14 @@ test("browser preview shows friendly-fire distribution without resolving a shot"
   });
   const canvas = page.locator("#battlefield");
   const box = await canvas.boundingBox();
-  const targetPoint = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 3, r: 0 }));
+  const targetPoint = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 3, r: 0 }));
   await page.mouse.click(box.x + targetPoint.x, box.y + targetPoint.y);
   await page.getByRole("button", { name: "test-gun" }).click();
   await expect(page.locator("#weaponSummary")).toContainText("15% в цель");
   await expect(page.locator("#weaponSummary")).toContainText("50% в left-squad");
   await expect(page.locator("#weaponSummary")).toContainText("35% промах");
   await expect(page.locator("#weaponSummary")).toContainText("friendly fire: left-squad");
-  expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.js")).store.getState()))).toEqual(before);
+  expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.ts")).store.getState()))).toEqual(before);
 });
 
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
@@ -250,12 +250,12 @@ test("browser renders selectable weapons and a complete salvo preview", async ({
   await page.reload();
   await page.getByRole("button", { name: "Перейти к бою" }).click();
   await page.evaluate(async () => {
-    const { store } = await import("/src/v1-ui.js");
+    const { store } = await import("/src/v1-ui.ts");
     store.replace({ ...store.getState(), lifecycle: "Attack", activeUnitId: "left-cap", units: store.getState().units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 } } : unit.id === "right-cap" ? { ...unit, position: { q: 3, r: 0 } } : unit) });
   });
   const canvas = page.locator("#battlefield");
   const box = await canvas.boundingBox();
-  const targetPoint = await page.evaluate(async () => (await import("/src/v1-ui.js")).renderer.pointForHex({ q: 3, r: 0 }));
+  const targetPoint = await page.evaluate(async () => (await import("/src/v1-ui.ts")).renderer.pointForHex({ q: 3, r: 0 }));
   await page.mouse.click(box.x + targetPoint.x, box.y + targetPoint.y);
   await page.getByRole("button", { name: "lance" }).click();
   await expect(page.locator("#weaponSummary")).toContainText("1 выстр.");

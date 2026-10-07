@@ -1,7 +1,7 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
-import { createBattle, previewManeuverRoute } from "./v1-domain.js";
-import { formatAttackPreview, getAttackPreview } from "./v1-preview.js";
+import { createBattle, previewManeuverRoute } from "./v1-domain.ts";
+import { formatAttackPreview, getAttackPreview } from "./v1-preview.ts";
 
 test("attack preview exposes complete salvo details", () => {
   const state = createBattle({ contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: [

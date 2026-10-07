@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "vitest";
 import assert from "node:assert/strict";
 import {
   advanceActivation,
@@ -13,7 +13,7 @@ import {
   replayEventLog,
   resolveAttack,
   validateEventLog
-} from "./v1-domain.js";
+} from "./v1-domain.ts";
 
 test("full battle reaches Finished through canonical lifecycle", () => {
   const state = createBattle({ id: "full-battle", bounds: { minCol: 0, maxCol: 3, minRow: 0, maxRow: 0 }, units: [
