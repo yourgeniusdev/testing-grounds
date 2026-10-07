@@ -244,6 +244,25 @@ test("browser preview shows friendly-fire distribution without resolving a shot"
   expect(await page.evaluate(async () => structuredClone((await import("/src/v1-ui.ts")).store.getState()))).toEqual(before);
 });
 
+test("browser exposes SVG visuals, popup maneuver confirm, persistent log clear, and firing animation", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await page.getByRole("button", { name: "Перейти к бою" }).click();
+  await page.evaluate(async () => { const { store, controller } = await import("/src/v1-ui.ts"); const state = store.getState(); store.replace({ ...state, lifecycle: "Maneuver", activeUnitId: "left-cap", units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, heading: 0 } : unit) }); controller.view.selectedUnitId = "left-cap"; controller.view.plannedRoute = [{ q: 1, r: 0 }]; controller.view.plannedPosition = { q: 1, r: 0 }; controller.render(); });
+  await page.locator("#confirmManeuverButton").click();
+  expect(await page.evaluate(async () => (await import("/src/v1-ui.ts")).store.getState().units.find(unit => unit.id === "left-cap").position)).toEqual({ q: 1, r: 0 });
+  await expect(page.locator("#combatLog li")).not.toHaveCount(0);
+  await page.locator("#clearLogButton").click();
+  await expect(page.locator("#combatLog li")).toHaveCount(0);
+  await page.evaluate(async () => (await import("/src/v1-ui.ts")).controller.render());
+  await expect(page.locator("#combatLog li")).toHaveCount(0);
+  await page.evaluate(async () => { const { renderer } = await import("/src/v1-ui.ts"); renderer.animateAttack({ q: 1, r: 0 }, { q: 3, r: 0 }, true); });
+  await expect(page.locator("#attackEffect")).toHaveClass(/firing/);
+  await expect(page.locator("#attackEffect")).not.toHaveAttribute("hidden", "");
+  await expect(page.locator("#attackPopup")).toBeHidden();
+});
+
 test("browser renders selectable weapons and a complete salvo preview", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());

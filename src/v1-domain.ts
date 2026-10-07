@@ -308,7 +308,7 @@ export function deployUnit(state: BattleState, unitId: any, position: any, headi
   return true;
 }
 
-export function confirmDeployment(state: BattleState, side: any) {
+export function confirmDeployment(state: BattleState, side: any, { random = Math.random }: { random?: Rng } = {}) {
   if (side !== sideForLifecycle(state.lifecycle) || state.deployment[side]) return false;
   const fleet = state.units.filter(unit => unit.side === side);
   if (fleet.some(unit => !unit.position || !validDeployment(state, unit, unit.position, unit.heading))) return false;
@@ -316,7 +316,7 @@ export function confirmDeployment(state: BattleState, side: any) {
   const confirmed = recordEvent(state, "deployment-confirm", { actorId: side, subjectIds: fleet.map(unit => unit.id) });
   state.lifecycle = side === "left" ? "DeploymentRight" : "RoundStart";
   recordEvent(state, "deployment-complete", { actorId: side, subjectIds: fleet.map(unit => unit.id), causeEventId: confirmed.eventId, side });
-  if (side === "right") progress(state);
+  if (side === "right") progress(state, { random });
   return true;
 }
 
@@ -755,7 +755,8 @@ function relativeToHeading(delta: any, heading: any) {
   return relative;
 }
 
-function arcAllows(source: any, victim: any, weapon: any) {
+export function arcAllows(source: any, victim: any, weapon: any) {
+  if (!source?.position || !victim?.position) return false;
   const range = distance(source.position, victim.position), arc = weapon.arc ?? weapon.profile ?? "360";
   const min = weapon.minRange ?? (arc === "linear" || arc === "line" ? 3 : 1), max = weapon.maxRange ?? (arc === "linear" || arc === "line" ? 5 : 3);
   if (range < min || range > max) return false;
@@ -840,13 +841,13 @@ export function planRam(state: BattleState, attacker: any, target: any) {
   return route ? { valid: true, steps: route.steps, directSteps: straightRun(route.headings), movementCost: route.cost, finalHeading: route.heading } : { valid: false, steps: [], directSteps: 0 };
 }
 
-export function ram(state: BattleState, attacker: any, target: any, steps: any) {
+export function ram(state: BattleState, attacker: any, target: any, steps: any, { random }: { random?: Rng } = {}) {
   const source = typeof attacker === "string" ? state.units.find(unit => unit.id === attacker) : attacker;
   const victim = typeof target === "string" ? [...state.units, ...state.contents].find(item => item.id === target) : target;
   const plan = planRam(state, source, victim);
   if (!source || !victim || state.lifecycle !== "Maneuver" || state.activeUnitId !== source.id || state.attackSpentBy === source.id || !plan.valid || JSON.stringify(steps) !== JSON.stringify(plan.steps)) return { success: false, damage: 0 };
   const declared = recordEvent(state, "ramming-declared", { actorId: source.id, subjectIds: [victim.id], route: steps.map((position: any) => ({ ...position })), directSteps: plan.directSteps });
-  const route = moveAtomic(state, source.id, steps, { ramming: true, ramTargetId: victim.id, causeEventId: declared.eventId });
+  const route = moveAtomic(state, source.id, steps, { ramming: true, ramTargetId: victim.id, causeEventId: declared.eventId, random });
   if (route.moved !== steps.length || !state.units.includes(source) || distance(source.position, victim.position) !== 1) {
     recordEvent(state, "ramming-cancelled", { actorId: source.id, subjectIds: [victim.id], causeEventId: state.events.at(-1)?.eventId ?? declared.eventId, moved: route.moved });
     return { success: false, damage: 0, moved: route.moved };

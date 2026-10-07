@@ -36,12 +36,13 @@
         <div class="panel-heading"><div><p class="eyebrow">ОБЩАЯ ОЧЕРЕДЬ</p><h2>Инициатива</h2></div><span class="status-dot"></span></div>
         <div id="initiativeList" class="ship-list"></div>
         <div class="action-row"><button id="waitButton" class="button">Ждать</button><button id="confirmMoveButton" class="button">Подтвердить манёвр</button><button id="skipAttackButton" class="button">Пропустить атаку</button><button id="endActivationButton" class="button">Продолжить</button><button id="confirmDeploymentButton" class="button primary">Завершить расстановку</button></div>
-        <div class="mission-card"><div class="mission-icon">◎</div><div><strong>Уничтожение</strong><span>Победа, когда противник не способен двигаться или атаковать.</span></div></div>
+        <div class="mission-card"><div class="mission-icon">◎</div><div><strong>Уничтожение флота</strong><span>Победа наступает, когда на поле не остаётся ни одного юнита противника.</span></div></div>
       </aside>
 
       <section class="battlefield-wrap">
         <div class="canvas-toolbar"><div><span class="live-indicator"></span><span id="modeLabel">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
-        <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
+         <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
+         <svg id="attackEffect" class="attack-effect" aria-hidden="true" hidden><line id="attackBeam" x1="0" y1="0" x2="0" y2="0"/></svg>
         <section id="battlefieldLegend" class="legend battlefield-legend" aria-label="Легенда поля боя">
            <h3>ЛЕГЕНДА ПОЛЯ</h3>
            <div><span class="legend-swatch terrain-nebula"></span><span><b>Туманность</b> — укрытие цели, −15 п.п. точности</span></div>
@@ -57,7 +58,7 @@
           <div id="headingPicker" class="heading-picker" hidden><span>Конечный курс</span><div id="headingButtons" class="heading-buttons"></div></div>
           <div class="maneuver-popup-actions"><button id="confirmManeuverButton" class="button primary icon-action" aria-label="Подтвердить манёвр" title="Подтвердить манёвр">✓</button><button id="cancelManeuverButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
         </div>
-        <div id="attackPopup" class="maneuver-popup attack-popup" hidden>
+         <div id="attackPopup" class="maneuver-popup attack-popup" hidden aria-hidden="true">
           <div class="maneuver-popup-title"><span id="actionTitle">План атаки</span><span id="routeBadge">ГОТОВ</span></div>
           <div id="routeDetails" class="maneuver-details"></div>
           <div class="maneuver-popup-actions"><button id="confirmButton" class="button primary icon-action" aria-label="Подтвердить атаку" title="Подтвердить атаку">✓</button><button id="cancelButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
@@ -90,11 +91,11 @@
     <div class="dialog-head"><div><p class="eyebrow">MOVEMENT PLAYTEST 1</p><h2>Правила стенда</h2></div><button id="closeRules" class="icon-button" aria-label="Закрыть">×</button></div>
     <div class="rules-grid">
       <article><b>01</b><h3>Общий бюджет поворотов</h3><p>Maneuver даёт 0–3 поворота за активацию. Перед одним шагом разрешено не более 60°.</p></article>
-      <article><b>02</b><h3>Две политики</h3><p>Безопасный путь исключает вредные проверки. Рискованный выбирает минимальную стоимость и показывает последствия.</p></article>
-      <article><b>03</b><h3>Уклонение</h3><p>За 1–5 гексов начисляется 5/9/12/14/15 п.п. Действие усиливает бонус в 1.5 раза до 25 п.п.</p></article>
+       <article><b>02</b><h3>Маршрут и опасности</h3><p>Подсветка показывает достижимые гексы. Туманности и обломки дают укрытие; объекты блокируют остановку капитальных кораблей.</p></article>
+       <article><b>03</b><h3>Орудия и дуги</h3><p>Выберите противника и орудие. Цель должна находиться в дальности и дуге огня; ПВО может открыть огонь по эскадрилье во время движения.</p></article>
       <article><b>04</b><h3>Поворот на месте</h3><p>Можно потратить весь Maneuver, но уклонение становится нулевым до следующей активации.</p></article>
       <article><b>05</b><h3>Один юнит на гекс</h3><p>Эскадрилья пролетает через капитальный корабль, но не может остановиться в занятом гексе.</p></article>
-      <article><b>06</b><h3>Управляемый риск</h3><p>Каждый вход в опасность создаёт отдельную проверку с видимой вероятностью и диапазоном.</p></article>
+       <article><b>06</b><h3>Цикл активации</h3><p>Ждать можно один раз. Затем пройдите системы, манёвр и атаку; после всех активаций начинается новый раунд.</p></article>
     </div>
     <button id="dialogOkay" class="button primary dialog-confirm">Понятно</button>
   </dialog>
