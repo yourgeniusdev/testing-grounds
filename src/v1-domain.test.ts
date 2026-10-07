@@ -174,6 +174,42 @@ test("squadrons may pass through objects but may not stop on them", () => {
   assert.deepEqual(state.units.find(unit => unit.id === "fighter").position, { q: 2, r: 1 });
 });
 
+test("squadrons traverse capital and enemy squadron hexes, stop before interception, and never stop occupied", () => {
+  const state = createBattle({ units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, currentSpeed: 4, integrity: 5 },
+    { id: "capital", side: "right", kind: "capital", position: { q: 1, r: 0 }, integrity: 5 },
+    { id: "enemy", side: "right", kind: "squadron", position: { q: 3, r: 0 }, integrity: 5 }
+  ] });
+  state.lifecycle = "Maneuver"; state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(structuredClone(state), "fighter", [{ q: 1, r: 0 }]), { status: "blocked", moved: 0 });
+  const result = moveAtomic(state, "fighter", [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }, { q: 4, r: 0 }]);
+  assert.deepEqual(result, { status: "blocked", moved: 2 });
+  assert.deepEqual(state.units.find(unit => unit.id === "fighter").position, { q: 2, r: 0 });
+  assert.deepEqual(state.units.find(unit => unit.id === "fighter").engagedWith, ["enemy"]);
+  assert.equal(planMovement(state, "fighter", { q: 4, r: 0 }).valid, false);
+  assert.equal(state.units.some(unit => unit.id !== "enemy" && unit.position?.q === 3), false);
+});
+
+test("invalid enemy squadron entry attempts do not mutate interception", () => {
+  const state = createBattle({ units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, currentSpeed: 0 },
+    { id: "enemy", side: "right", kind: "squadron", position: { q: 2, r: 0 } }
+  ] });
+  state.lifecycle = "Maneuver"; state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 2, r: 0 }]), { status: "blocked", moved: 0 });
+  assert.deepEqual(state.interceptionLinks, []);
+  assert.deepEqual(state.units.map(unit => unit.engagedWith), [undefined, undefined]);
+});
+
+test("allied squadron hexes remain impassable", () => {
+  const state = createBattle({ units: [
+    { id: "fighter", side: "left", kind: "squadron", position: { q: 0, r: 0 }, currentSpeed: 2 },
+    { id: "ally", side: "left", kind: "squadron", position: { q: 1, r: 0 } }
+  ] });
+  state.lifecycle = "Maneuver"; state.activeUnitId = "fighter";
+  assert.deepEqual(moveAtomic(state, "fighter", [{ q: 1, r: 0 }, { q: 2, r: 0 }]), { status: "blocked", moved: 0 });
+});
+
 test("movement destinations exclude capital hexes unreachable within remaining maneuver", () => {
   const state = deployedBattle();
   state.lifecycle = "Maneuver";
@@ -733,13 +769,25 @@ test("attack preview applies every endpoint cover modifier and ignores intermedi
     if (cover) contents.push({ kind: "terrain", cover, position: { q: 3, r: 0 } });
     const state = createBattle({ units: [
       { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 2 },
-      { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
+      { id: "b", side: "right", kind: "squadron", position: { q: 3, r: 0 } }
     ], contents });
     const result = previewAttack(state, "a", "b", { accuracy: 80, arc: "linear", minRange: 3, maxRange: 5 });
     assert.equal(result.canAttack, true);
     assert.equal(result.cover, penalty);
     assert.equal(result.accuracy, 80 - penalty);
   }
+});
+
+test("capital targets ignore endpoint cover while squadron targets receive it", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } },
+    { id: "capital", side: "right", kind: "capital", position: { q: 1, r: 0 } },
+    { id: "squadron", side: "right", kind: "squadron", position: { q: 2, r: 0 } }
+  ], contents: [
+    { kind: "terrain", cover: "asteroid", position: { q: 1, r: 0 } },
+    { kind: "terrain", cover: "asteroid", position: { q: 2, r: 0 } }
+  ] });
+  assert.deepEqual([previewAttack(state, "a", "capital", { accuracy: 80, arc: "360" }).cover, previewAttack(state, "a", "squadron", { accuracy: 80, arc: "360" }).cover], [0, 20]);
 });
 
 test("endpoint cover clamps accuracy and is shared by attacks and overwatch", () => {
@@ -758,7 +806,7 @@ test("generated debris provides endpoint cover", () => {
   const state = createBattle({ units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, integrity: 10 },
     { id: "wreck", side: "right", kind: "capital", position: { q: 2, r: 0 }, integrity: 1 },
-    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 10 }
+    { id: "b", side: "right", kind: "squadron", position: { q: 3, r: 0 }, integrity: 10 }
   ] });
   applyDamagePacket(state, "wreck", { amount: 1, sourceId: "a" });
   state.units.find(unit => unit.id === "b").position = { q: 2, r: 0 };
@@ -769,7 +817,7 @@ test("endpoint cover preserves blocker selection and friendly-fire classificatio
   const state = createBattle({ units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 } },
     { id: "blocker", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 5 },
-    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 5 }
+    { id: "b", side: "right", kind: "squadron", position: { q: 3, r: 0 }, integrity: 5 }
   ], contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }] });
   const preview = previewAttack(state, "a", "b", { accuracy: 80, arc: "360", maxRange: 3 });
   assert.equal(preview.blockerId, "blocker");
@@ -932,6 +980,18 @@ test("weapon arcs cover their complete heading-relative geometry", () => {
       assert.equal(previewAttack(state, "a", "b", { arc: "linear" }).canAttack, true, `heading ${heading}, range ${range}`);
     }
   }
+});
+
+test("ramming leaves attacker in the last free hex and never moves the target", () => {
+  const state = createBattle({ units: [
+    { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, mass: 2, integrity: 10 },
+    { id: "b", side: "right", kind: "capital", position: { q: 2, r: 0 }, mass: 1, integrity: 10 }
+  ] });
+  state.lifecycle = "Maneuver"; state.activeUnitId = "a";
+  assert.equal(ram(state, "a", "b", [{ q: 1, r: 0 }]).success, true);
+  assert.deepEqual(state.units.find(unit => unit.id === "a").position, { q: 1, r: 0 });
+  assert.deepEqual(state.units.find(unit => unit.id === "b").position, { q: 2, r: 0 });
+  assert.equal(state.events.filter(event => event.action === "hex-entered").some(event => event.position.q === 2), false);
 });
 
 test("ramming applies mass damage and resets attacker evasion", () => {
@@ -1323,6 +1383,49 @@ test("lethal AA cancels remaining queued reactions without spending their readin
   assert.equal(state.events.at(-1).action, "victory");
 });
 
+test("round start orders initiative then speed then stable public random keys and replays atomically", () => {
+  const state = createBattle({ id: "round-order", units: [
+    { id: "slow", side: "left", position: { q: 0, r: 0 }, initiative: 5, currentSpeed: 1 },
+    { id: "fast-high", side: "right", position: { q: 1, r: 0 }, initiative: 5, currentSpeed: 3 },
+    { id: "fast-low", side: "left", position: { q: 2, r: 0 }, initiative: 5, currentSpeed: 3 }
+  ] });
+  state.lifecycle = "RoundStart";
+  const rolls = [0.9, 0.8, 0.2];
+  progress(state, { random: () => rolls.shift() });
+  assert.deepEqual(state.queue, ["fast-low", "fast-high", "slow"]);
+  assert.deepEqual(state.roundKeys, { slow: 0.9, "fast-high": 0.8, "fast-low": 0.2 });
+  const event = state.events.at(-1);
+  assert.deepEqual(event.random.keys, state.roundKeys);
+  assert.deepEqual(event.after.queue, state.queue);
+  const replayed = replayEventLog(state.events, state.id);
+  assert.deepEqual(replayed.roundKeys, state.roundKeys);
+  assert.deepEqual(replayed.queue, state.queue);
+});
+
+test("activation start cleans temporary effects, restores speed and energy, and start damage can win", () => {
+  const state = createBattle({ units: [
+    { id: "active", side: "left", position: { q: 0, r: 0 }, integrity: 1, speed: 3, currentSpeed: 0, energy: 0, maxEnergy: 4, evasion: 0, stationaryTurnEvasion: 20, disengagementEvasion: 30, disengagedLinks: ["x"], activationStartEffects: [{ type: "damage", amount: 1, sourceId: "enemy" }] },
+    { id: "enemy", side: "right", position: { q: 1, r: 0 }, integrity: 2 }
+  ] });
+  Object.assign(state, { lifecycle: "ActivationStart", activeUnitId: "active", queue: ["active", "enemy"] });
+  assert.equal(progress(state), "Finished");
+  assert.equal(state.winner, "right");
+  assert.equal(state.units.some(unit => unit.id === "active"), false);
+  const destroyed = state.events.find(event => event.action === "unit-destroyed");
+  assert.equal(state.events.find(event => event.eventId === destroyed.causeEventId).cause, "activation-start");
+});
+
+test("activation start restores resources and clears until-next-activation state before continuing", () => {
+  const state = createBattle({ units: [{ id: "active", side: "left", position: { q: 0, r: 0 }, integrity: 3, speed: 3, currentSpeed: 0, energy: 0, maxEnergy: 4, evasion: 0, stationaryTurnEvasion: 20, disengagementEvasion: 30, disengagedLinks: ["x"] }] });
+  Object.assign(state, { lifecycle: "ActivationStart", activeUnitId: "active" });
+  assert.equal(progress(state), "SystemActions");
+  const unit = state.units[0];
+  assert.deepEqual({ speed: unit.currentSpeed, energy: unit.energy, evasion: unit.evasion }, { speed: 3, energy: 4, evasion: 30 });
+  assert.equal(Object.hasOwn(unit, "stationaryTurnEvasion"), false);
+  assert.equal(Object.hasOwn(unit, "disengagementEvasion"), false);
+  assert.equal(Object.hasOwn(unit, "disengagedLinks"), false);
+});
+
 test("RoundEnd clears overwatch and RoundStart restores readiness for a new-round reaction", () => {
   const state = createBattle({ id: "aa-reset", round: 1, units: [
     { id: "cap", side: "left", kind: "capital", initiative: 5, position: { q: 0, r: 0 }, weapons: [{ id: "aa", ready: false, ammo: 2, maxRange: 3, damage: 1, accuracy: 0, overwatchEligible: true, overwatch: true, overwatchRound: 1, overwatchTargets: ["squad"] }] },
@@ -1519,6 +1622,15 @@ test("legacy snapshot events migrate and continue with canonical replay internal
   assert.equal(continued.sequence, loaded.sequence);
   assert.deepEqual(continued.units, loaded.units);
   assert.deepEqual(continued.contents, loaded.contents);
+});
+
+test("versioned persistence normalizes missing round keys", async () => {
+  const { createMemoryPersistence } = await import("./v1-store.ts");
+  const state = createBattle({ id: "old-v2" });
+  delete (state as any).roundKeys;
+  const persistence = createMemoryPersistence({ persistenceVersion: 2, state } as any);
+  const loaded = persistence.load();
+  assert.deepEqual(loaded.roundKeys, {});
 });
 
 test("persistence restores deeply frozen validated events", async () => {

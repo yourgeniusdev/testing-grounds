@@ -6,7 +6,7 @@ import { formatAttackPreview, getAttackPreview } from "./v1-preview.ts";
 test("attack preview exposes complete salvo details", () => {
   const state = createBattle({ contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ id: "battery", accuracy: 80, damage: 2, shots: 2, minRange: 1, maxRange: 5 }] },
-    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 } }
+    { id: "b", side: "right", kind: "squadron", position: { q: 3, r: 0 } }
   ] });
   const preview = getAttackPreview(state, "a", "b");
   assert.equal(preview.totalDamage, 4);
@@ -22,7 +22,7 @@ test("attack preview exposes friendly-fire blocker distribution without mutation
   const state = createBattle({ contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: [
     { id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, weapons: [{ accuracy: 80, damage: 2, shots: 2, maxRange: 5 }] },
     { id: "ally", side: "left", kind: "capital", size: "medium", position: { q: 1, r: 0 }, integrity: 5 },
-    { id: "b", side: "right", kind: "capital", position: { q: 3, r: 0 }, integrity: 5 }
+    { id: "b", side: "right", kind: "squadron", position: { q: 3, r: 0 }, integrity: 5 }
   ] });
   const before = structuredClone(state);
   const text = formatAttackPreview(getAttackPreview(state, "a", "b"));
@@ -60,6 +60,15 @@ test("attack preview uses a selected weapon slot and explains unavailable target
   assert.equal(preview.totalDamage, 6);
   assert.equal(formatAttackPreview(getAttackPreview(state, "a", "b", 0)), "Цель недоступна для этого оружия");
   assert.equal(formatAttackPreview(null), "Выберите доступную цель");
+});
+
+test("maneuver preview exposes readable route failure reasons", () => {
+  const state = createBattle({ units: [{ id: "a", side: "left", kind: "capital", position: { q: 0, r: 0 }, heading: 0, currentSpeed: 1, maneuver: 0 }] });
+  assert.equal(previewManeuverRoute(state, "missing", []).reason, "Нет исходной позиции");
+  const preview = previewManeuverRoute(state, "a", [{ q: 0, r: 1 }]);
+  assert.equal(preview.valid, false);
+  assert.equal(preview.reason, "Маршрут нарушает ограничения движения");
+  assert.equal(/[Р][ Ў]/.test(preview.reason), false);
 });
 
 test("maneuver preview reports costs, turns, deterministic effects, AA risks, and remains pure", () => {

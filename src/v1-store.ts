@@ -2,7 +2,7 @@ import { createBattle, freezeEventLog, replayEventLog } from "./v1-domain.ts";
 import type { BattleInitialState, BattleState, DomainEvent, StorageLike } from "./v1-types.ts";
 
 const PERSISTENCE_VERSION = 2;
-const replayFields = ["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks"] as const;
+const replayFields = ["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks", "roundKeys"] as const;
 type ReplayField = typeof replayFields[number];
 type PersistedBattle = { persistenceVersion: number; state: BattleState };
 type Listener = (state: BattleState) => void;
@@ -41,9 +41,10 @@ function legacyDelta(before: Record<string, unknown>, after: Record<string, unkn
 function migrateLegacyEvents(state: BattleState): BattleState | null {
   if (!state.events.length || state.events.every(event => Object.hasOwn(event, "checkpoint") && Object.hasOwn(event, "delta"))) return state;
   if (!state.events.every(event => event.snapshot && typeof event.snapshot === "object")) return null;
-  let previous = replayShape(state.events[0].snapshot as BattleState);
+  const snapshotState = (event: DomainEvent) => ({ ...(event.snapshot as BattleState), roundKeys: (event.snapshot as BattleState).roundKeys ?? {} });
+  let previous = replayShape(snapshotState(state.events[0]));
   state.events = state.events.map((event, index) => {
-    const current = replayShape(event.snapshot as BattleState);
+    const current = replayShape(snapshotState(event));
     const migrated = { ...event, checkpoint: index === 0 ? structuredClone(current) : null, delta: index === 0 ? { patches: [] } : legacyDelta(previous, current) };
     delete (migrated as Record<string, unknown>).snapshot;
     previous = current;
@@ -56,7 +57,9 @@ function legacyState(value: unknown): BattleState | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<BattleState>;
   if (typeof candidate.id !== "string" || !Array.isArray(candidate.units) || !Array.isArray(candidate.contents) || !Array.isArray(candidate.events) || !Number.isInteger(candidate.sequence)) return null;
-  return migrateLegacyEvents(structuredClone(candidate) as BattleState);
+  const normalized = structuredClone(candidate) as BattleState;
+  normalized.roundKeys ??= {};
+  return migrateLegacyEvents(normalized);
 }
 
 function sameReplayState(state: BattleState, replayed: BattleState): boolean {
@@ -67,6 +70,7 @@ function restore(value: unknown): BattleState | null {
   const wrapped = value && typeof value === "object" ? value as Partial<PersistedBattle> : null;
   const state = wrapped?.persistenceVersion === PERSISTENCE_VERSION ? structuredClone(wrapped.state) : legacyState(value);
   if (!state) return null;
+  state.roundKeys ??= {};
   try {
     if (state.events.length) {
       freezeEventLog(state.events, state.id);

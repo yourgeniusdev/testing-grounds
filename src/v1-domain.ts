@@ -8,7 +8,7 @@ export const LIFECYCLE = Object.freeze([
 const sides = ["left", "right"];
 
 const EVENT_PAYLOADS = Object.freeze({
-  "deployment-start": ["side"], "deployment-complete": ["side"], "round-start": [], "round-end": [], "activation-end": [], "action-declared": ["kind"], "action-paid": ["kind", "before", "after"], "hex-entered": ["position"], "interception-link-changed": ["before", "after"], "overwatch-result": ["slotId", "result"], "line-of-fire-check": ["result"], "accuracy-check": ["random", "result"], "maneuver-completed": ["position"], "victory-check": ["result"],
+  "deployment-start": ["side"], "deployment-complete": ["side"], "round-start": ["random", "after"], "round-end": [], "activation-end": [], "action-declared": ["kind"], "action-paid": ["kind", "before", "after"], "hex-entered": ["position"], "interception-link-changed": ["before", "after"], "overwatch-result": ["slotId", "result"], "line-of-fire-check": ["result"], "accuracy-check": ["random", "result"], "maneuver-completed": ["position"], "victory-check": ["result"],
   "deployment-place": ["position", "heading"], "deployment-confirm": [], "lifecycle-progress": ["after"], wait: [], "activation-start": [], "activation-stage": ["after"],
   "overwatch-armed": [], "overwatch-declared": ["slotId"], "overwatch-shot": ["slotId"], "entry-attempt": ["position", "cost"], "heading-change": ["heading", "turn", "stationary"], "movement-step": ["position", "cost", "remainingSpeed", "heading"],
   "on-enter": ["position", "effect", "amount"], "interception-link-created": ["creators"], "interception-link-removed": ["creators"],
@@ -34,7 +34,7 @@ function validPayload(event: any) {
   if (Object.hasOwn(event, "positions") && (!Array.isArray(event.positions) || !event.positions.every(isPosition))) return false;
   if (Object.hasOwn(event, "before") && !isRecord(event.before)) return false;
   if (Object.hasOwn(event, "after") && !isRecord(event.after) && typeof event.after !== "string") return false;
-  if (Object.hasOwn(event, "random") && (!isRecord(event.random) || !isNumber(event.random.roll))) return false;
+  if (Object.hasOwn(event, "random") && (!isRecord(event.random) || (event.action === "round-start" ? !isRecord(event.random.keys) || !Object.values(event.random.keys).every(isNumber) : !isNumber(event.random.roll)))) return false;
   if (Object.hasOwn(event, "cost") && !isNumber(event.cost)) return false;
   if (Object.hasOwn(event, "amount") && !isNumber(event.amount)) return false;
   if (Object.hasOwn(event, "creators") && (!Array.isArray(event.creators) || !event.creators.every(isId))) return false;
@@ -112,7 +112,7 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
   const state: BattleState = {
     id, units: normalized, contents: normalizedContents, bounds,
     lifecycle: "DeploymentLeft", deployment: { left: false, right: false }, round, queue: [], activeUnitId: null,
-    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0, interceptionLinks: [],
+    activationStage: null, attackSpentBy: null, winner: null, events: [], sequence: 0, interceptionLinks: [], roundKeys: {},
     _eventCheckpoint: {}, _eventReplayState: {}
   };
   state._eventCheckpoint = structuredClone(replayState(state));
@@ -126,10 +126,10 @@ export function createBattle({ id = "battle-1", units = [], bounds = null, conte
 }
 
 function replayState(state: any) {
-  return { bounds: state.bounds, lifecycle: state.lifecycle, deployment: state.deployment, round: state.round, queue: state.queue, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, winner: state.winner, units: state.units, contents: state.contents, interceptionLinks: state.interceptionLinks };
+  return { bounds: state.bounds, lifecycle: state.lifecycle, deployment: state.deployment, round: state.round, queue: state.queue, activeUnitId: state.activeUnitId, activationStage: state.activationStage, attackSpentBy: state.attackSpentBy, winner: state.winner, units: state.units, contents: state.contents, interceptionLinks: state.interceptionLinks, roundKeys: state.roundKeys };
 }
 
-const REPLAY_FIELDS = new Set(["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks"]);
+const REPLAY_FIELDS = new Set(["bounds", "lifecycle", "deployment", "round", "queue", "activeUnitId", "activationStage", "attackSpentBy", "winner", "units", "contents", "interceptionLinks", "roundKeys"]);
 
 function stateDelta(before: any, after: any) {
   const patches = [];
@@ -214,7 +214,7 @@ function resolveOnEnterEffect(state: BattleState, unit: any, content: any, effec
 
 const interceptionKey = (a: any, b: any) => [a, b].sort().join(":");
 const compareIds = (a: any, b: any) => String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
-const initiativeOrder = (a: any, b: any) => (b.initiative ?? 0) - (a.initiative ?? 0) || compareIds(a.id, b.id);
+const initiativeOrder = (roundKeys: Record<string, number>) => (a: any, b: any) => (b.initiative ?? 0) - (a.initiative ?? 0) || (b.currentSpeed ?? b.speed ?? 0) - (a.currentSpeed ?? a.speed ?? 0) || (roundKeys[a.id] ?? 0) - (roundKeys[b.id] ?? 0) || compareIds(a.id, b.id);
 
 export function refreshInterception(state: BattleState, { causeEventId = null } = {}) {
   const previous = new Map<string, Entity>((state.interceptionLinks ?? []).map(link => [link.key ?? "", link]));
@@ -243,7 +243,7 @@ export function previewDisengagement(state: BattleState, unitId: any) {
   const enemies = unit ? restrictingEnemies(state, unit) : [];
   const cost = enemies.length;
   if (!unit || unit.kind !== "squadron" || !cost) return { eligible: false, chance: 0, cost };
-  const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1) || initiativeOrder(a, b))[0];
+  const closest = enemies.slice().sort((a, b) => (b.stack ?? b.count ?? 1) - (a.stack ?? a.count ?? 1) || initiativeOrder(state.roundKeys)(a, b))[0];
   const enemyIds = new Set(enemies.map(enemy => enemy.id));
   const friendlyCount = state.units.filter(candidate => candidate.kind === "squadron" && candidate.side === unit.side && candidate.id !== unit.id && (state.interceptionLinks ?? []).some(link => link.unitIds.includes(candidate.id) && link.unitIds.some(id => enemyIds.has(id)))).length;
   const craftPenalty = Math.max(0, (closest.stack ?? closest.count ?? 1) - 1) * 10;
@@ -406,22 +406,32 @@ function clearOverwatch(state: any) {
   state.units.forEach((unit: any) => weaponSlots(unit).forEach((slot: any) => { slot.overwatch = false; slot.overwatchTargets = []; }));
 }
 
-export function progress(state: any) {
+export function progress(state: any, { random = Math.random }: { random?: Rng } = {}) {
   if ((state.lifecycle as string) === "Finished") return state.lifecycle;
   if (state.lifecycle === "RoundStart") {
+    if (typeof random !== "function") throw new TypeError("An RNG provider is required for round start");
     state.round += 1; state.attackSpentBy = null; state.units.forEach((unit: any) => {
       unit.hasActivated = false; unit.hasWaited = false;
       weaponSlots(unit).forEach((slot: any) => { if (slot.destroyed !== true) slot.ready = true; });
     });
-    state.queue = state.units.filter((unit: any) => unit.position).slice().sort(initiativeOrder).map((unit: any) => unit.id);
+    const keys = Object.fromEntries(state.units.filter((unit: any) => unit.position).map((unit: any) => [unit.id, random()]));
+    state.roundKeys = keys;
+    state.queue = state.units.filter((unit: any) => unit.position).slice().sort(initiativeOrder(keys)).map((unit: any) => unit.id);
     state.lifecycle = "WaitDecision"; state.activeUnitId = state.queue[0] ?? null;
-    recordEvent(state, "round-start");
+    recordEvent(state, "round-start", { random: { keys }, after: { queue: [...state.queue] } });
   } else if (state.lifecycle === "ActivationStart") {
     const unit = state.units.find((candidate: any) => candidate.id === state.activeUnitId);
     if (!unit) return state.lifecycle;
-    unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
-    unit.turnsSpent = 0;
     if (Object.hasOwn(unit, "stationaryTurnEvasion")) { unit.evasion = unit.stationaryTurnEvasion; delete unit.stationaryTurnEvasion; }
+    if (Object.hasOwn(unit, "disengagementEvasion")) { unit.evasion = unit.disengagementEvasion; delete unit.disengagementEvasion; }
+    delete unit.disengagedLinks;
+    unit.currentSpeed = unit.baseSpeed ?? unit.speed ?? unit.currentSpeed ?? 0;
+    if (Number.isFinite(unit.maxEnergy)) unit.energy = unit.maxEnergy;
+    unit.turnsSpent = 0;
+    for (const effect of unit.activationStartEffects ?? []) if (effect.type === "damage") {
+      applyDamagePacket(state, unit, { amount: effect.amount, sourceId: effect.sourceId ?? unit.id, cause: "activation-start", deferVictory: false });
+      if (!state.units.includes(unit) || (state.lifecycle as string) === "Finished") return state.lifecycle;
+    }
     state.lifecycle = "SystemActions"; state.activationStage = "SystemActions";
     recordEvent(state, "activation-stage", { actorId: unit.id, after: "SystemActions" });
   } else if (state.lifecycle === "EndActivation") {
@@ -467,7 +477,7 @@ const headingForStep = (from: any, to: any) => movementDirections.findIndex(dire
 
 export function planMovement(state: BattleState, unitId: any, destination: any) {
   const unit = state.units.find(candidate => candidate.id === unitId);
-  if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Р СњР ВµРЎвЂљ Р С‘РЎРѓРЎвЂ¦Р С•Р Т‘Р Р…Р С•Р в„– Р С—Р С•Р В·Р С‘РЎвЂ Р С‘Р С‘" };
+  if (!unit?.position || !destination) return { valid: false, steps: [], reason: "Нет исходной позиции" };
   const speed = Math.max(0, unit.currentSpeed ?? unit.speed ?? 0);
   if (samePosition(unit.position, destination)) return { valid: true, steps: [], reason: null, movementCost: 0, turnsSpent: 0, finalHeading: unit.heading, stepHeadings: [] };
   const start = { position: { ...unit.position }, heading: unit.heading, movementCost: 0, turnsSpent: 0, steps: [], stepHeadings: [] };
@@ -496,7 +506,7 @@ export function planMovement(state: BattleState, unitId: any, destination: any) 
 
 export function previewManeuverRoute(state: BattleState, unitId: any, steps: any, { heading = null, ramTargetId = null } = {}) {
   const source = state.units.find(candidate => candidate.id === unitId);
-  if (!source?.position || !Array.isArray(steps)) return { valid: false, reason: "Р СњР ВµРЎвЂљ Р С‘РЎРѓРЎвЂ¦Р С•Р Т‘Р Р…Р С•Р в„– Р С—Р С•Р В·Р С‘РЎвЂ Р С‘Р С‘", entries: [] };
+  if (!source?.position || !Array.isArray(steps)) return { valid: false, reason: "Нет исходной позиции", entries: [] };
   const projectedState = structuredClone(state);
   const unit = projectedState.units.find(candidate => candidate.id === unitId);
   const entries = [];
@@ -514,7 +524,7 @@ export function previewManeuverRoute(state: BattleState, unitId: any, steps: any
     const stopLegal = adjacent && canEnter(projectedState, unit, destination, { final: true });
     if (!reachable || !enterLegal || stepHeading < 0 || turn > 1 || (unit.currentSpeed ?? 0) < cost || (unit.turnsSpent ?? 0) + turn > (unit.maneuver ?? 0)) {
       reachable = false;
-      reason ??= "Р СљР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљ Р Р…Р В°РЎР‚РЎС“РЎв‚¬Р В°Р ВµРЎвЂљ Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р Т‘Р Р†Р С‘Р В¶Р ВµР Р…Р С‘РЎРЏ";
+      reason ??= "Маршрут нарушает ограничения движения";
     }
     const effects = contents.flatMap(content => [...(content.onEnterEffects ?? []), ...((content.onEnterDamage ?? 0) > 0 ? [{ type: "damage", amount: content.onEnterDamage }] : [])].map(effect => ({ sourceId: content.id, ...normalizeOnEnterEffect(effect) })));
     if (reachable) {
@@ -535,7 +545,7 @@ export function previewManeuverRoute(state: BattleState, unitId: any, steps: any
     }) : [];
     const lethal = reachable && unit.integrity === 0;
     entries.push({ index: index + 1, position: { ...destination }, reachable, cost, cumulativeCost: movementCost, speedRemaining: unit.currentSpeed, heading: stepHeading, turn, effects, aaRisks, stopLegal, ramRequired, ramTargetId: ramRequired ? occupant.id : null, lethal });
-    if (lethal) { reachable = false; reason = "Р вЂќР ВµРЎвЂљР ВµРЎР‚Р СР С‘Р Р…Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р Р…РЎвЂ№Р в„– РЎРЊРЎвЂћРЎвЂћР ВµР С”РЎвЂљ РЎС“Р Р…Р С‘РЎвЂЎРЎвЂљР С•Р В¶Р В°Р ВµРЎвЂљ РЎР‹Р Р…Р С‘РЎвЂљ Р Р…Р В° Р СР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљР Вµ"; }
+    if (lethal) { reachable = false; reason = "Детерминированный эффект уничтожает юнит на маршруте"; }
   }
   const target = ramTargetId ? projectedState.units.find(candidate => candidate.id === ramTargetId) : null;
   const explicitRam = Boolean(target && source.kind === "capital" && target.kind === "capital" && target.side !== source.side && distance(unit.position, target.position) === 1);
@@ -543,8 +553,8 @@ export function previewManeuverRoute(state: BattleState, unitId: any, steps: any
   const finalTurnLegal = finalTurn <= 1;
   const totalTurns = (unit.turnsSpent ?? 0) + finalTurn;
   const valid = reachable && finalTurnLegal && totalTurns <= (unit.maneuver ?? 0) && (!entries.at(-1)?.ramRequired || entries.at(-1)?.ramTargetId === ramTargetId);
-  if (!finalTurnLegal) reason ??= "Р В¤Р С‘Р Р…Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р С—Р С•Р Р†Р С•РЎР‚Р С•РЎвЂљ Р С—РЎР‚Р ВµР Р†РЎвЂ№РЎв‚¬Р В°Р ВµРЎвЂљ 60Р’В°";
-  return { valid, reason: valid ? null : reason ?? "Р СљР В°РЎР‚РЎв‚¬РЎР‚РЎС“РЎвЂљ Р Р…Р В°РЎР‚РЎС“РЎв‚¬Р В°Р ВµРЎвЂљ Р С•Р С–РЎР‚Р В°Р Р…Р С‘РЎвЂЎР ВµР Р…Р С‘РЎРЏ Р Т‘Р Р†Р С‘Р В¶Р ВµР Р…Р С‘РЎРЏ", movementCost, speedRemaining: unit.currentSpeed, turnsUsed: turnsUsed + finalTurn, turnsRemaining: Math.max(0, (unit.maneuver ?? 0) - totalTurns), finalHeading: heading ?? currentHeading, entries, stopLegal: entries.at(-1)?.stopLegal ?? true, ramRequired: Boolean(entries.at(-1)?.ramRequired || explicitRam), ramTargetId: entries.at(-1)?.ramTargetId ?? (explicitRam ? target.id : null) };
+  if (!finalTurnLegal) reason ??= "Финальный поворот превышает 60°";
+  return { valid, reason: valid ? null : reason ?? "Маршрут нарушает ограничения движения", movementCost, speedRemaining: unit.currentSpeed, turnsUsed: turnsUsed + finalTurn, turnsRemaining: Math.max(0, (unit.maneuver ?? 0) - totalTurns), finalHeading: heading ?? currentHeading, entries, stopLegal: entries.at(-1)?.stopLegal ?? true, ramRequired: Boolean(entries.at(-1)?.ramRequired || explicitRam), ramTargetId: entries.at(-1)?.ramTargetId ?? (explicitRam ? target.id : null) };
 }
 
 export function changeHeading(state: BattleState, unitId: any, heading: any, { causeEventId = null, stationary = false } = {}) {
@@ -561,7 +571,7 @@ export function changeHeading(state: BattleState, unitId: any, heading: any, { c
 export function canEnter(state: BattleState, unit: any, position: any, { final = false, ramming = false } = {}) {
   if (!unit || !position || (state.bounds && !withinBounds(state.bounds, position))) return false;
   const occupant = unitAt(state, position, unit.id), object = state.contents.find(item => samePosition(item.position, position) && item.kind === "object");
-  if (occupant) return ramming && unit.kind === "capital" && occupant.kind === "capital" && occupant.side !== unit.side;
+  if (occupant) return unit.kind === "squadron" && occupant.kind !== "squadron" && !final;
   if (object) return unit.kind === "squadron" && !final;
   return true;
 }
@@ -590,7 +600,11 @@ export function moveAtomic(state: BattleState, unitId: any, steps: any, { rammin
     const stepTurn = unit.kind === "capital" ? turnDistance(unit.heading, stepHeading) : 0;
     const occupant = unitAt(state, position, unit.id);
     const targetEntry = Boolean(ramming && occupant?.id === ramTargetId && samePosition(position, steps.at(-1)));
-    if (distance(unit.position, position) !== 1 || (unit.currentSpeed ?? 0) < cost || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming: targetEntry }) || (unit.kind === "capital" && (stepHeading < 0 || stepTurn > 1 || (unit.turnsSpent ?? 0) + stepTurn > (unit.maneuver ?? 0)))) break;
+    const adjacent = distance(unit.position, position) === 1;
+    const affordable = (unit.currentSpeed ?? 0) >= cost;
+    const headingLegal = unit.kind !== "capital" || unit.heading === undefined || (stepHeading >= 0 && stepTurn <= 1 && (unit.turnsSpent ?? 0) + stepTurn <= (unit.maneuver ?? 0));
+    if (adjacent && affordable && headingLegal && unit.kind === "squadron" && occupant?.kind === "squadron" && occupant.side !== unit.side) { refreshInterception(state, { causeEventId: entry.eventId }); break; }
+    if (targetEntry || !adjacent || !affordable || !canEnter(state, unit, position, { final: samePosition(position, steps.at(-1)), ramming: false }) || !headingLegal) break;
     unit.currentSpeed -= cost;
     let stepCauseEventId = entry.eventId;
     if (unit.kind === "capital" && stepTurn) { changeHeading(state, unitId, stepHeading, { causeEventId: entry.eventId }); stepCauseEventId = state.events.at(-1).eventId; }
@@ -769,7 +783,7 @@ export function previewAttack(state: BattleState, attacker: Entity | string, tar
   const accuracy = Math.max(0, Math.min(100, weapon.accuracy ?? 100));
   const shots = (weapon.shots ?? 1) * (source?.kind === "squadron" ? (source.stack ?? 1) : 1);
   const damage = weapon.damage ?? 0;
-  const terrain = victim?.position && state.contents.find(item => samePosition(item.position, victim.position) && item.cover);
+  const terrain = victim?.kind === "squadron" && victim.position && state.contents.find(item => samePosition(item.position, victim.position) && item.cover);
   const coverPenalty = terrain?.cover === "nebula" ? 15 : terrain?.cover === "debris" ? 10 : terrain?.cover === "asteroid" ? 20 : 0;
   const blocker = attackBlocker(state, source, victim);
   const blockerCover = blocker ? ({ small: 25, medium: 50, large: 100 }[blocker.size] ?? 0) : 0;

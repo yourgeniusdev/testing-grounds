@@ -228,7 +228,7 @@ test("browser preview shows friendly-fire distribution without resolving a shot"
   const before = await page.evaluate(async () => {
     const { store, controller } = await import("/src/v1-ui.ts");
     const state = store.getState();
-    store.replace({ ...state, lifecycle: "Attack", activeUnitId: "left-cap", contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, weapons: [{ id: "test-gun", accuracy: 80, damage: 2, shots: 2, maxRange: 5 }] } : unit.id === "left-squad" ? { ...unit, kind: "capital", size: "medium", position: { q: 1, r: 0 } } : unit.id === "right-cap" ? { ...unit, position: { q: 3, r: 0 } } : { ...unit, position: null }) });
+    store.replace({ ...state, lifecycle: "Attack", activeUnitId: "left-cap", contents: [{ kind: "terrain", cover: "nebula", position: { q: 3, r: 0 } }], units: state.units.map(unit => unit.id === "left-cap" ? { ...unit, position: { q: 0, r: 0 }, weapons: [{ id: "test-gun", accuracy: 80, damage: 2, shots: 2, maxRange: 5 }] } : unit.id === "left-squad" ? { ...unit, kind: "capital", size: "medium", position: { q: 1, r: 0 } } : unit.id === "right-cap" ? { ...unit, kind: "squadron", position: { q: 3, r: 0 } } : { ...unit, position: null }) });
     controller.render();
     return structuredClone(store.getState());
   });

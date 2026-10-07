@@ -21,6 +21,8 @@ export interface Entity {
   speed?: number;
   baseSpeed?: number;
   currentSpeed?: number;
+  energy?: number;
+  maxEnergy?: number;
   maneuver?: number;
   turnsSpent?: number;
   evasion?: number;
@@ -40,6 +42,7 @@ export interface Entity {
   movementCost?: number;
   onEnterDamage?: number;
   onEnterEffects?: OnEnterEffect[];
+  activationStartEffects?: ActivationStartEffect[];
   weapons?: Entity[];
   weaponSlots?: Entity[];
   weapon?: Entity;
@@ -63,6 +66,7 @@ export interface Entity {
   creators?: string[];
 }
 export type OnEnterEffect = { type: "damage"; amount: number } | { type: "modify-unit"; field: "currentSpeed" | "evasion"; amount: number };
+export type ActivationStartEffect = { type: "damage"; amount: number; sourceId?: string };
 export type EntityArray = Entity[];
 export interface DomainEvent {
   eventId: string;
@@ -105,6 +109,7 @@ export interface BattleState {
   events: EventArray;
   sequence: number;
   interceptionLinks: EntityArray;
+  roundKeys: Record<string, number>;
   _eventCheckpoint: Record<string, unknown>;
   _eventReplayState: Record<string, unknown>;
 }
