@@ -191,6 +191,12 @@ function renderRouteInspector() {
    el.attackPopup.hidden = !attacking || !selected || Boolean(ui.animation);
   el.attackPopup.setAttribute("aria-label", attacking ? "Фаза атаки: выберите орудия и цель" : "Фаза атаки");
   el.actionTitle.textContent = attacking ? "План атаки" : "План манёвра";
+  if (deploying) {
+    el.headingPicker.hidden = true;
+    el.confirmButton.hidden = true;
+    el.cancelButton.hidden = true;
+    return;
+  }
    if (attacking) {
     el.headingPicker.hidden = true;
     el.confirmButton.hidden = false;
@@ -483,7 +489,7 @@ function selectHex(position) {
   if (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight") {
     const side = state.lifecycle === "DeploymentLeft" ? "azure" : "crimson";
     const occupant = unitAt(state, position);
-    if (occupant?.sideId === side) { ui.selected = { deploymentUnitId: occupant.id }; refresh(); return; }
+    if (occupant?.sideId === side) { ui.selected = { deploymentUnitId: occupant.id }; renderAll(); return; }
     const selected = unitById(state, ui.selected?.deploymentUnitId);
     if (selected && !occupant && deployUnit(state, selected.id, position, selected.heading)) refresh();
     return;

@@ -5,21 +5,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "vitest run",
-    "test:browser": "playwright test",
+    "test": "node --test src/*.test.mjs",
     "serve": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc -p tsconfig.json",
-    "lint": "eslint src tests *.config.ts"
+    "lint": "eslint src --ext .js,.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.63.0",
-    "@types/node": "^26.6.4",
-    "@typescript-eslint/eslint-plugin": "^8.71.1",
-    "@typescript-eslint/parser": "^8.71.1",
     "eslint": "^9.39.5",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.71.1",
-    "vite": "^8.3.3",
-    "vitest": "^5.0.3"
+    "vite": "^8.3.3"
   }
 }
