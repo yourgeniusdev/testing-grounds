@@ -1,3 +1,5 @@
+import { buildCapitalProfile, buildSquadronProfile } from "./config/index.js";
+
 export const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 export const ARROWS = ["→", "↗", "↖", "←", "↙", "↘"];
 export const EVASION_BY_STEPS = [0, 5, 9, 12, 14, 15];
@@ -34,15 +36,20 @@ export function movementEvasion(stepCount, evasiveManeuver = false) {
 }
 
 export function createScenario() {
-  const weapon = (id, name, role, mount, weaponClass, accuracy, effectiveRange, maxRange, shots, damage, critChance, energyCost = 0) => ({ id, name, role, mount, weaponClass, accuracy, effectiveRange, maxRange, shots, damage, critChance, energyCost });
-  const units = [
-    placed(-4, -2, { id: "atlas", name: "Крейсер «Атлас»", sideId: "azure", kind: "capital", heading: 0, baseSpeed: 3, currentSpeed: 3, maneuver: 2, initiative: 3, mass: 92, shield: 35, maxShield: 35, armor: 35, maxArmor: 35, integrity: 120, maxIntegrity: 120, baseEvasion: 6, reactor: { capacity: 6, rechargeRate: 2, currentEnergy: 4 }, weapons: [weapon("atlas-battery-left", "Левая кинетическая батарея", "primary", "battery-left", "kinetic", 75, 3, 5, 4, 4, 8), weapon("atlas-battery-right", "Правая кинетическая батарея", "primary", "battery-right", "kinetic", 75, 3, 5, 4, 4, 8), weapon("atlas-plasma", "Плазменный разряд", "auxiliary", "turret", "energy", 90, 2, 3, 1, 13, 12, 3)], color: "#66e4ff", glyph: "cruiser" }),
-    placed(-4, 2, { id: "swift", name: "Фрегат «Стриж»", sideId: "azure", kind: "capital", heading: 0, baseSpeed: 5, currentSpeed: 5, maneuver: 3, initiative: 5, mass: 48, shield: 20, maxShield: 20, armor: 15, maxArmor: 15, integrity: 75, maxIntegrity: 75, baseEvasion: 10, reactor: { capacity: 5, rechargeRate: 2, currentEnergy: 4 }, weapons: [weapon("swift-turret", "Кинетическая башня", "primary", "turret", "kinetic", 75, 3, 4, 3, 3, 6), weapon("swift-pulse", "Энергетический импульс", "auxiliary", "turret", "energy", 90, 2, 3, 1, 7, 6, 2)], color: "#66e4ff", glyph: "frigate" }),
-    placed(-4, 0, { id: "wasps", name: "Эскадрилья «Осы»", sideId: "azure", kind: "squadron", currentSpeed: 6, baseSpeed: 6, initiative: 4, stack: 5, shield: 0, maxShield: 0, armor: 0, maxArmor: 0, integrity: 25, maxIntegrity: 25, engagedWith: [], weapons: [weapon("wasps-front", "Фронтальная кинетическая атака", "primary", "squadron-front", "kinetic", 70, 1, 2, 5, 1, 2)], color: "#66e4ff", glyph: "squadron" }),
-    placed(4, -2, { id: "bastion", name: "Линкор «Бастион»", sideId: "crimson", kind: "capital", heading: 3, baseSpeed: 2, currentSpeed: 2, maneuver: 1, initiative: 1, mass: 188, shield: 50, maxShield: 50, armor: 60, maxArmor: 60, integrity: 180, maxIntegrity: 180, baseEvasion: 2, reactor: { capacity: 8, rechargeRate: 2, currentEnergy: 6 }, weapons: [weapon("bastion-line", "Линейная кинетическая пушка", "primary", "line", "kinetic", 75, 5, 7, 1, 18, 20), weapon("bastion-battery-left", "Левая взрывная батарея", "primary", "battery-left", "explosive", 80, 3, 5, 2, 7, 15), weapon("bastion-battery-right", "Правая взрывная батарея", "primary", "battery-right", "explosive", 80, 3, 5, 2, 7, 15), weapon("bastion-pulse", "Энергетический импульс", "auxiliary", "turret", "energy", 90, 3, 4, 1, 12, 10, 3)], color: "#ff667d", glyph: "battleship" }),
-    placed(4, 2, { id: "raptor", name: "Эсминец «Раптор»", sideId: "crimson", kind: "capital", heading: 3, baseSpeed: 3, currentSpeed: 3, maneuver: 2, initiative: 3, mass: 76, shield: 25, maxShield: 25, armor: 25, maxArmor: 25, integrity: 100, maxIntegrity: 100, baseEvasion: 7, reactor: { capacity: 6, rechargeRate: 2, currentEnergy: 4 }, weapons: [weapon("raptor-battery-right", "Правая взрывная батарея", "primary", "battery-right", "explosive", 80, 3, 5, 2, 6, 15), weapon("raptor-beam", "Энергетический луч", "auxiliary", "turret", "energy", 90, 3, 4, 1, 9, 8, 2)], color: "#ff667d", glyph: "destroyer" }),
-    placed(4, 0, { id: "mantis", name: "Эскадрилья «Мантисы»", sideId: "crimson", kind: "squadron", currentSpeed: 6, baseSpeed: 6, initiative: 4, stack: 5, shield: 0, maxShield: 0, armor: 0, maxArmor: 0, integrity: 25, maxIntegrity: 25, engagedWith: [], weapons: [weapon("mantis-front", "Фронтальная кинетическая атака", "primary", "squadron-front", "kinetic", 70, 1, 2, 5, 1, 2)], color: "#ff7d9f", glyph: "squadron" })
+  const unitInstances = [
+    { id: "atlas", loadoutId: "atlas", name: "Крейсер «Атлас»", sideId: "azure", color: "#66e4ff", col: -4, row: -2, heading: 0, initialEnergy: 4 },
+    { id: "swift", loadoutId: "swift", name: "Фрегат «Стриж»", sideId: "azure", color: "#66e4ff", col: -4, row: 2, heading: 0, initialEnergy: 4 },
+    { id: "wasps", loadoutId: "wasps", name: "Эскадрилья «Осы»", callsign: "Осы", sideId: "azure", color: "#66e4ff", col: -4, row: 0 },
+    { id: "bastion", loadoutId: "bastion", name: "Линкор «Бастион»", sideId: "crimson", color: "#ff667d", col: 4, row: -2, heading: 3, initialEnergy: 6 },
+    { id: "raptor", loadoutId: "raptor", name: "Эсминец «Раптор»", sideId: "crimson", color: "#ff667d", col: 4, row: 2, heading: 3, initialEnergy: 4 },
+    { id: "mantis", loadoutId: "mantis", name: "Эскадрилья «Мантисы»", callsign: "Мантисы", sideId: "crimson", color: "#ff7d9f", col: 4, row: 0 }
   ];
+  const units = unitInstances.map(instance => {
+    const { col, row, initialEnergy, ...data } = instance;
+    const profile = initialEnergy === undefined ? buildSquadronProfile(instance.loadoutId) : buildCapitalProfile(instance.loadoutId);
+    const reactor = profile.reactor ? { ...profile.reactor, currentEnergy: initialEnergy } : undefined;
+    return placed(col, row, { ...profile, ...data, ...(reactor ? { reactor } : {}) });
+  });
   const contents = [
     placed(-2, -1, { id: "asteroids-a", kind: "terrain", type: "asteroidField", label: "Астероидное поле", hazard: { probability: 0.35, min: 4, max: 10, effect: "урон целостности" } }),
     placed(-1, 0, { id: "debris-a", kind: "terrain", type: "debrisField", label: "Поле обломков", hazard: { probability: 0.25, min: 2, max: 7, effect: "урон целостности" } }),
@@ -59,7 +66,7 @@ export function createBattleState() {
   const scenario = createScenario();
   const randomKeys = Object.fromEntries(scenario.units.map((unit, index) => [unit.id, ((index * 37 + 17) % 97) / 97]));
   const initiativeOrder = [...scenario.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || randomKeys[a.id] - randomKeys[b.id]).map(unit => unit.id);
-  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(weapon => ({ ...weapon })), criticals: [], primaryReady: true, auxiliaryReady: true, hasActivated: false, hasWaited: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, unitHealth: unit.kind === "squadron" ? 5 : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
+  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(weapon => ({ ...weapon })), criticals: [], primaryReady: true, auxiliaryReady: true, hasActivated: false, hasWaited: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
   return { scenario, units, roundNumber: 1, phase: "activation", lifecycle: "DeploymentLeft", stage: "system", initiativeOrder: [], activeUnitId: units[0]?.id || null, winner: null, log: [], events: [], sequence: 0, rng: Math.random, deployment: { left: false, right: false } };
 }
 

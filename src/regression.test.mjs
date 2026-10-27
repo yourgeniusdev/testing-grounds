@@ -8,6 +8,11 @@ assert.equal(shouldAutoEndActivation({ attackImplemented: false }), true, "бе�
 assert.equal(shouldDrawRoute({ targetId: "raptor" }), false, "выбранная цель атаки не должна отрисовываться как маршрут");
 assert.equal(shouldDrawRoute({ route: { path: [] } }), true, "выбранный маршрут должен отрисовываться");
 const state = createBattleState();
+const swift = state.units.find(candidate => candidate.id === "swift");
+const wasps = state.units.find(candidate => candidate.id === "wasps");
+assert.equal(swift.loadoutId, "swift", "сценарий должен сохранять ссылку на комплектацию");
+assert.equal(swift.reactor.currentEnergy, 4, "начальная энергия должна материализоваться из instance-данных сценария");
+assert.equal(wasps.callsign, "Осы", "позывной должен оставаться instance-данными сценария");
 const unit = activeUnit(state);
 assert.equal(useEvasiveManeuver(state), true, "манёвр уклонения должен включаться до подтверждения");
 assert.equal(unit.evasiveManeuver, true, "включённое действие должно учитываться в предпросмотре");

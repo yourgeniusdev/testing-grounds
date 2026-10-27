@@ -2,6 +2,7 @@ import { ARROWS, activeUnit, applyMovement, applyStationaryRotation, availableFi
 import { createSvgImage, iconMarkup } from "./icons.js";
 import { headingAngle, shouldDrawRoute } from "./ui-rules.js";
 import { attackAnimationPlan, attackArc, attackPreview, availableAttackTargets, resolveAttack, skipAttack } from "./battle.js";
+import { VISUALS } from "./config/index.js";
 
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
@@ -114,7 +115,8 @@ function renderInitiative() {
     const typeLabel = unit.kind === "capital" ? "Капитальный корабль" : "Эскадрилья";
     const energy = unit.reactor ? `Энергия ${unit.reactor.currentEnergy}/${unit.reactor.capacity}` : `Состав ${unit.stack} аппаратов`;
     const tooltip = `${unit.name} · ${typeLabel} · ${unit.sideId === "player" ? "Союзный" : "Вражеский"}\nСостояние: ${stateLabel}\nЩит ${unit.shield}/${unit.maxShield} · Броня ${unit.armor}/${unit.maxArmor} · Целостность ${unit.integrity}/${unit.maxIntegrity}\nСкорость ${unit.currentSpeed} · ${energy}`;
-    return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${stateLabel} · INI ${unit.initiative}</small></span></article>`;
+    const subtitle = unit.kind === "squadron" ? `Звено истребителей «${unit.squadronModelName}»` : `${stateLabel} · INI ${unit.initiative}`;
+    return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}" title="${tooltip}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${subtitle}</small></span></article>`;
   }).join("");
 }
 
@@ -326,7 +328,7 @@ function drawEntity(entity, glyph, color, heading = 0) {
   const { x, y } = axialToPixel(position);
   const image = imageFor(glyph, color);
   ctx.save(); ctx.translate(x, y); ctx.rotate(headingAngle(heading || 0)); ctx.shadowColor = color; ctx.shadowBlur = entity.id === state.activeUnitId ? 18 : 8;
-  const size = entity.kind === "object" ? 39 : entity.kind === "terrain" || entity.kind === "hazard" ? 35 : entity.kind === "squadron" ? 35 : 42;
+  const size = VISUALS[glyph].size;
   if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size); else image.onload = draw;
   ctx.restore();
   if (entity.id === state.activeUnitId || entity.id === ui.selected?.deploymentUnitId) { ctx.strokeStyle = color; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, 25, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
@@ -410,7 +412,7 @@ function startMovement() {
   const movingPath = path.filter((point, index) => index === 0 || point.q !== path[index - 1].q || point.r !== path[index - 1].r);
   const finalPoint = path[path.length - 1];
   const finalTurn = finalPoint.heading ?? movingPath[movingPath.length - 1].heading ?? unit.heading ?? 0;
-  ui.animation = { kind: "movement", unitId: unit.id, glyph: unit.glyph, color: unit.color, size: unit.kind === "squadron" ? 35 : 42, path, movingPath, started: performance.now(), x: origin.x, y: origin.y, heading: unit.heading || 0, finalTurn, route, finalHeading };
+  ui.animation = { kind: "movement", unitId: unit.id, glyph: unit.glyph, color: unit.color, size: VISUALS[unit.glyph].size, path, movingPath, started: performance.now(), x: origin.x, y: origin.y, heading: unit.heading || 0, finalTurn, route, finalHeading };
   document.body.classList.add("animating");
   renderHeader();
   requestAnimationFrame(animate);

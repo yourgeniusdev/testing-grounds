@@ -21,13 +21,14 @@ function targetDirection(attacker, target) {
 }
 
 function inArc(attacker, target, mount) {
-  if (mount === "turret" || mount === "squadron-front") return true;
+  if (mount === "turret" || mount === "squadronWeapon") return true;
   const direction = targetDirection(attacker, target);
   if (direction === null) return false;
   const relative = (direction - attacker.heading + 6) % 6;
   if (mount === "line") return relative === 0;
   if (mount === "battery-left") return relative === 1 || relative === 2;
-  return relative === 4 || relative === 5;
+  if (mount === "battery-right") return relative === 4 || relative === 5;
+  return false;
 }
 
 function readyWeapons(attacker) {

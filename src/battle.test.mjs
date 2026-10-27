@@ -93,6 +93,14 @@ function battleAt(attackerId, targetId) {
 }
 
 {
+  const { state, attacker, target } = battleAt("wasps", "mantis");
+  attacker.position = { q: 0, r: 0 };
+  target.position = { q: -1, r: 0 };
+  assert.equal(attacker.weapons[0].mount, "squadronWeapon");
+  assert.equal(attackPreview(state, target.id, "primary").included.length, 1);
+}
+
+{
   const state = createBattleState();
   const left = deploymentZone(state, "azure");
   assert.equal(left.length > 0, true);
