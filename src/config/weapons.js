@@ -32,7 +32,7 @@ export const WEAPONS = deepFreeze({
     weaponClass: "kinetic",
     accuracy: 70,
     effectiveRange: 1, // Справочная эффективная дальность: механика пока её не использует.
-    maxRange: 2,
+    maxRange: 1,
     shots: 5,
     damage: 1,
     critChance: 2,

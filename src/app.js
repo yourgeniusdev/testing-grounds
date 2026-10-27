@@ -1,6 +1,6 @@
 import { ARROWS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, destroyUnit, endActivation, inside, key, movementEvasion, planRoutes, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { headingAngle, shouldDrawRoute } from "./ui-rules.js";
+import { headingAngle, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
 import { attackAnimationPlan, attackArc, attackPreview, availableAttackTargets, resolveAttack, skipAttack } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 
@@ -311,7 +311,7 @@ function drawHex(position) {
     }
   }
   if (contents.some(content => content.kind !== "object")) { fill = "rgba(244,200,97,.10)"; stroke = "rgba(244,200,97,.45)"; }
-  if (contents.some(content => content.kind === "object") || occupant) { fill = "rgba(255,102,125,.09)"; stroke = "rgba(255,102,125,.42)"; }
+  if (contents.some(content => content.kind === "object") || (occupant && shouldHighlightOccupiedHex(state.lifecycle))) { fill = "rgba(255,102,125,.09)"; stroke = "rgba(255,102,125,.42)"; }
   if (ui.hovered && key(...Object.values(ui.hovered)) === key(position.q, position.r)) { stroke = route ? "#65f4b2" : "#8aa0b6"; width = 2; }
    if (state.stage === "attack" && ui.selectedWeapons.size && availableAttackTargets(state, ui.selectedWeapons).some(target => key(target.position.q, target.position.r) === key(position.q, position.r))) { fill = "rgba(255,102,125,.14)"; stroke = "#ff667d"; width = 2; }
   if (ui.selected?.position && key(ui.selected.position.q, ui.selected.position.r) === key(position.q, position.r)) { fill = "rgba(102,228,255,.14)"; stroke = "#66e4ff"; width = 2.5; }
@@ -331,7 +331,7 @@ function drawEntity(entity, glyph, color, heading = 0) {
   const size = VISUALS[glyph].size;
   if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size); else image.onload = draw;
   ctx.restore();
-  if (entity.id === state.activeUnitId || entity.id === ui.selected?.deploymentUnitId) { ctx.strokeStyle = color; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, 25, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
+  if (shouldOutlineUnit(entity.id, state.activeUnitId, ui.selected?.deploymentUnitId, state.lifecycle)) { ctx.strokeStyle = color; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, 25, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
 }
 
 function drawRoute() {
