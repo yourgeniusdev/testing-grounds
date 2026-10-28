@@ -10,8 +10,8 @@ export const VISUALS = deepFreeze({
     svg: '<path d="m50 7 15 28-15-7-15 7Z"/><path d="m19 50 15 28-15-7-15 7Z"/><path d="m81 50 15 28-15-7-15 7Z"/><circle class="detail-fill" cx="50" cy="52" r="7"/>',
     formationOffsets: {
       1: [{ x: 0, y: 0 }],
-      2: [{ x: -16, y: 8 }, { x: 16, y: 8 }],
-      3: [{ x: 0, y: -16 }, { x: -18, y: 14 }, { x: 18, y: 14 }]
+      2: [{ x: -19, y: 8 }, { x: 19, y: 8 }],
+      3: [{ x: 0, y: -19 }, { x: -21, y: 17 }, { x: 21, y: 17 }]
     }
   },
   asteroidField: { id: "asteroidField", size: 35, svg: '<path d="m20 30 12-15 22 4 10 17-8 19-25 4-17-11Z"/><path d="m60 57 12-13 18 8 3 19-15 15-20-8Z"/><circle class="detail-fill" cx="39" cy="37" r="5"/>' },

@@ -1,5 +1,12 @@
-const HARDPOINT_MOUNTS = ["turret", "battery-left", "battery-right", "line", "squadronWeapon"];
-const HARDPOINT_TYPES = ["turret", "battery", "spinal", "squadronWeapon"];
+const HARDPOINT_MOUNTS = ["turret", "battery-left", "battery-right", "line", "forward", "squadronWeapon"];
+const HARDPOINT_TYPES = ["turret", "battery", "spinal", "forward", "squadronWeapon"];
+const MOUNTS_BY_TYPE = {
+  turret: ["turret"],
+  battery: ["battery-left", "battery-right"],
+  spinal: ["line"],
+  forward: ["forward"],
+  squadronWeapon: ["squadronWeapon"]
+};
 
 const fail = (path, message) => {
   throw new Error(`Invalid config at ${path}: ${message}`);
@@ -57,6 +64,9 @@ const validateHardpoints = (owner, path) => {
     if (!HARDPOINT_MOUNTS.includes(hardpoint.mount) || !HARDPOINT_TYPES.includes(hardpoint.type)) {
       fail(`${hardpointPath}.${HARDPOINT_MOUNTS.includes(hardpoint.mount) ? "type" : "mount"}`, "hardpoint requires role, supported mount and supported type");
     }
+    if (!MOUNTS_BY_TYPE[hardpoint.type].includes(hardpoint.mount)) fail(`${hardpointPath}.mount`, `mount "${hardpoint.mount}" is incompatible with ${hardpoint.type} hardpoint type`);
+    if (hardpoint.type === "squadronWeapon" && owner.kind !== "squadron") fail(`${hardpointPath}.type`, "squadronWeapon hardpoints require a squadron owner");
+    if (hardpoint.type === "forward" && !["fore", "aft"].includes(hardpoint.orientation)) fail(`${hardpointPath}.orientation`, 'expected "fore" or "aft"');
   }
 };
 
@@ -169,7 +179,10 @@ export function validateConfig(config) {
     validateString(weapon.name, `${path}.name`);
     const compatibleTypes = validateArray(weapon.compatibleHardpointTypes, `${path}.compatibleHardpointTypes`);
     if (!compatibleTypes.length) fail(`${path}.compatibleHardpointTypes`, "expected a nonempty array");
-    compatibleTypes.forEach((type, index) => validateString(type, `${path}.compatibleHardpointTypes[${index}]`));
+    compatibleTypes.forEach((type, index) => {
+      validateString(type, `${path}.compatibleHardpointTypes[${index}]`);
+      if (!HARDPOINT_TYPES.includes(type)) fail(`${path}.compatibleHardpointTypes[${index}]`, `unknown hardpoint type "${type}"`);
+    });
     validateString(weapon.weaponClass, `${path}.weaponClass`);
     validateNumbers(weapon, path, ["accuracy", "effectiveRange", "maxRange", "shots", "damage", "critChance", "energyCost"]);
     if (!compatibleTypes.includes("squadronWeapon")) {

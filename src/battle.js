@@ -12,23 +12,32 @@ const CRITICALS = {
   explosive: ["Разрыв корпуса", "Деформация обшивки", "Повреждение отсека"]
 };
 
-function targetDirection(attacker, target) {
-  const q = target.position.q - attacker.position.q;
-  const r = target.position.r - attacker.position.r;
-  if (q === 0 && r === 0) return null;
-  const angle = Math.atan2(r * Math.sqrt(3) / 2, q + r / 2);
-  return (Math.round(-angle / (Math.PI / 3)) + 6) % 6;
+function rotatePosition(position, turns) {
+  let { q, r } = position;
+  for (let turn = 0; turn < turns; turn++) [q, r] = [q + r, -q];
+  return { q, r };
 }
 
-function inArc(attacker, target, mount) {
+export function isPositionInFiringArc(origin, heading, target, mount, orientation) {
+  const relative = { q: target.q - origin.q, r: target.r - origin.r };
+  if (relative.q === 0 && relative.r === 0) return false;
   if (mount === "turret" || mount === "squadronWeapon") return true;
-  const direction = targetDirection(attacker, target);
-  if (direction === null) return false;
-  const relative = (direction - attacker.heading + 6) % 6;
-  if (mount === "line") return relative === 0;
-  if (mount === "battery-left") return relative === 1 || relative === 2;
-  if (mount === "battery-right") return relative === 4 || relative === 5;
+  const local = rotatePosition(relative, (6 - heading) % 6);
+  if (mount === "line") return local.q > 0 && local.r === 0;
+  if (mount === "battery-left") return local.q >= 0 && local.r < 0 && local.q + local.r <= 0;
+  if (mount === "battery-right") return local.q <= 0 && local.r > 0 && local.q + local.r >= 0;
+  if (mount === "forward") {
+    if (orientation === "aft") {
+      const aft = rotatePosition(local, 3);
+      return aft.q >= 0 && aft.q + aft.r >= 0;
+    }
+    return orientation === "fore" && local.q >= 0 && local.q + local.r >= 0;
+  }
   return false;
+}
+
+function inArc(attacker, target, weapon) {
+  return isPositionInFiringArc(attacker.position, attacker.heading || 0, target.position, weapon.mount, weapon.orientation);
 }
 
 function readyWeapons(attacker) {
@@ -76,7 +85,7 @@ function lineBlocker(state, attacker, target) {
 }
 
 function validWeapon(attacker, target, weapon) {
-  return hexDistance(attacker.position, target.position) <= weapon.maxRange && inArc(attacker, target, weapon.mount);
+  return hexDistance(attacker.position, target.position) <= weapon.maxRange && inArc(attacker, target, weapon);
 }
 
 export function targetEvasion(target) {
@@ -102,7 +111,7 @@ export function activeLayer(target) {
 }
 
 function selectedReadyWeapons(attacker, selection) {
-  const ready = readyWeapons(attacker);
+  const ready = readyWeapons(attacker).map(weapon => weapon.mount === "squadronWeapon" ? { ...weapon, shots: weapon.shots * attacker.stack } : weapon);
   if (selection instanceof Set) return ready.filter(weapon => selection.has(weapon.id));
   if (selection === "auxiliary") return ready.filter(weapon => weapon.role === "auxiliary").slice(0, 1);
   if (selection === "primary") return ready.filter(weapon => weapon.role === "primary");
@@ -137,7 +146,7 @@ export function attackArc(state, selection) {
     for (let r = attacker.position.r - maxRange; r <= attacker.position.r + maxRange; r++) {
       const position = { q, r };
       if (!inside(state, position) || (q === attacker.position.q && r === attacker.position.r)) continue;
-      if (weapons.some(weapon => hexDistance(attacker.position, position) <= weapon.maxRange && inArc(attacker, { position }, weapon.mount))) positions.add(key(q, r));
+      if (weapons.some(weapon => hexDistance(attacker.position, position) <= weapon.maxRange && inArc(attacker, { position }, weapon))) positions.add(key(q, r));
     }
   }
   return positions;

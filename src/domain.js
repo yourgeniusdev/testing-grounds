@@ -153,6 +153,22 @@ export function destroyUnit(state, unit) {
   return { destroyed: true, unitId: unit.id, debris, winner: state.winner };
 }
 
+export function resolveHazardConsequences(state, unit, consequences, random = state.rng) {
+  const outcomes = [];
+  for (const consequence of consequences) {
+    if (random() > consequence.probability) {
+      outcomes.push({ consequence, hit: false, damage: 0, destroyed: false, winner: null });
+      continue;
+    }
+    const damage = Math.floor(random() * (consequence.max - consequence.min + 1)) + consequence.min;
+    applyDamage(state, unit, damage, `hazard:${consequence.sourceId}`, "integrity");
+    const destruction = unit.integrity === 0 ? destroyUnit(state, unit) : null;
+    outcomes.push({ consequence, hit: true, damage, destroyed: Boolean(destruction), winner: destruction?.winner || null });
+    if (destruction) break;
+  }
+  return outcomes;
+}
+
 export function unitById(state, id) {
   return state.units.find(unit => unit.id === id);
 }

@@ -7,7 +7,7 @@ const fighter = (id, displayName) => ({
   craftType: "fighter",
   baseSpeed: 6,
   initiative: 4,
-  stack: 5,
+  stack: 3,
   unitHealth: 5,
   shield: 0,
   armor: 0,

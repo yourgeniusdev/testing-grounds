@@ -32,6 +32,7 @@ const runtimeWeapon = (hardpoint, installation) => {
     name: installation.name || weapon.name,
     role: hardpoint.role,
     mount: hardpoint.mount,
+    ...(hardpoint.orientation ? { orientation: hardpoint.orientation } : {}),
     weaponClass: weapon.weaponClass,
     accuracy: weapon.accuracy,
     effectiveRange: weapon.effectiveRange,

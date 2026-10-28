@@ -57,8 +57,8 @@ test("capital builders preserve legacy flat combat profiles", () => {
 test("squadron builders preserve values and use squadronWeapon mount", () => {
   for (const id of ["wasps", "mantis"]) {
     const profile = buildSquadronProfile(id);
-    assert.deepEqual({ kind: profile.kind, baseSpeed: profile.baseSpeed, currentSpeed: profile.currentSpeed, initiative: profile.initiative, stack: profile.stack, unitHealth: profile.unitHealth, integrity: profile.integrity }, { kind: "squadron", baseSpeed: 6, currentSpeed: 6, initiative: 4, stack: 5, unitHealth: 5, integrity: 25 });
-    assert.deepEqual(weaponTuple(profile.weapons[0]), [`${id === "wasps" ? "wasps" : "mantis"}-front`, "Фронтальная кинетическая атака", "primary", "squadronWeapon", "kinetic", 70, 1, 2, 5, 1, 2, 0]);
+    assert.deepEqual({ kind: profile.kind, baseSpeed: profile.baseSpeed, currentSpeed: profile.currentSpeed, initiative: profile.initiative, stack: profile.stack, unitHealth: profile.unitHealth, integrity: profile.integrity }, { kind: "squadron", baseSpeed: 6, currentSpeed: 6, initiative: 4, stack: 3, unitHealth: 5, integrity: 15 });
+    assert.deepEqual(weaponTuple(profile.weapons[0]), [`${id === "wasps" ? "wasps" : "mantis"}-front`, "Фронтальная кинетическая атака", "primary", "squadronWeapon", "kinetic", 70, 1, 1, 1, 1, 2, 0]);
   }
 });
 
@@ -88,6 +88,31 @@ test("validator reports broken references and type incompatibility", () => {
   const unknownMount = cloneConfig();
   unknownMount.capitalHulls.atlasCruiser.hardpoints[0].mount = "typo";
   assert.throws(() => validateConfig(unknownMount), /hardpoint requires role, supported mount and supported type/);
+
+  const incompatibleForwardWeapon = cloneConfig();
+  incompatibleForwardWeapon.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "forward", type: "forward", orientation: "fore" };
+  assert.throws(() => validateConfig(incompatibleForwardWeapon), /incompatible with forward hardpoint "kinetic-turret"/);
+});
+
+test("forward hardpoints require fore or aft orientation", () => {
+  for (const orientation of ["fore", "aft"]) {
+    const config = cloneConfig();
+    config.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "forward", type: "forward", orientation };
+    config.weapons.swiftKineticTurret.compatibleHardpointTypes.push("forward");
+    assert.equal(validateConfig(config), true);
+  }
+
+  const missingOrientation = cloneConfig();
+  missingOrientation.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "forward", type: "forward" };
+  assert.throws(() => validateConfig(missingOrientation), /orientation: expected "fore" or "aft"/);
+
+  const mismatchedType = cloneConfig();
+  mismatchedType.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "turret", type: "forward", orientation: "fore" };
+  assert.throws(() => validateConfig(mismatchedType), /mount: mount "turret" is incompatible with forward hardpoint type/);
+
+  const capitalSquadronWeapon = cloneConfig();
+  capitalSquadronWeapon.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "squadronWeapon", type: "squadronWeapon" };
+  assert.throws(() => validateConfig(capitalSquadronWeapon), /squadronWeapon hardpoints require a squadron owner/);
 });
 
 test("validator reports paths for required builder and UI fields", () => {

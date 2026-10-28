@@ -97,7 +97,14 @@ function battleAt(attackerId, targetId) {
   attacker.position = { q: 0, r: 0 };
   target.position = { q: -1, r: 0 };
   assert.equal(attacker.weapons[0].mount, "squadronWeapon");
-  assert.equal(attackPreview(state, target.id, "primary").included.length, 1);
+  attacker.stack = 2;
+  const preview = attackPreview(state, target.id, "primary");
+  assert.equal(preview.included.length, 1);
+  assert.equal(preview.shots, 2);
+  assert.equal(preview.included[0].shots, 2);
+  const integrity = target.integrity;
+  resolveAttack(state, target.id, "primary", () => 1, () => 0);
+  assert.equal(target.integrity, integrity - 2);
 }
 
 {

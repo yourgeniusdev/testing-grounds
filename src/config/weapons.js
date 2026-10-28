@@ -33,7 +33,7 @@ export const WEAPONS = deepFreeze({
     accuracy: 70,
     effectiveRange: 1, // Справочная эффективная дальность: механика пока её не использует.
     maxRange: 1,
-    shots: 5,
+    shots: 1,
     damage: 1,
     critChance: 2,
     energyCost: 0

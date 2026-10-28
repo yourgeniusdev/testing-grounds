@@ -1,4 +1,4 @@
-import { ARROWS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, destroyUnit, endActivation, inside, key, movementEvasion, planRoutes, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
+import { ARROWS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, inside, key, movementEvasion, planRoutes, resolveHazardConsequences, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
 import { headingAngle, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
 import { attackAnimationPlan, attackArc, attackPreview, availableAttackTargets, resolveAttack, skipAttack } from "./battle.js";
@@ -116,7 +116,7 @@ function renderInitiative() {
     const energy = unit.reactor ? `Энергия ${unit.reactor.currentEnergy}/${unit.reactor.capacity}` : `Состав ${unit.stack} аппаратов`;
     const tooltip = `${unit.name} · ${typeLabel} · ${unit.sideId === "player" ? "Союзный" : "Вражеский"}\nСостояние: ${stateLabel}\nЩит ${unit.shield}/${unit.maxShield} · Броня ${unit.armor}/${unit.maxArmor} · Целостность ${unit.integrity}/${unit.maxIntegrity}\nСкорость ${unit.currentSpeed} · ${energy}`;
     const subtitle = unit.kind === "squadron" ? `Звено истребителей «${unit.squadronModelName}»` : `${stateLabel} · INI ${unit.initiative}`;
-    return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}" title="${tooltip}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${subtitle}</small></span></article>`;
+    return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}" title="${tooltip}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${subtitle}</small></span></article>`;
   }).join("");
 }
 
@@ -135,7 +135,7 @@ function renderUnitSummary() {
   el.unitClassBadge.textContent = unit.kind === "capital" ? "CAPITAL" : "SQUADRON";
   el.unitClassBadge.style.color = unit.color;
   const evasion = unit.evasionLocked ? 0 : (unit.baseEvasion || 0) + unit.movementEvasion;
-  el.unitSummary.innerHTML = `<div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name)}</div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")} ${healthBar("Броня", unit.armor, unit.maxArmor, "armor")} ${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}<div class="stat-grid"><div><span>Энергия</span><b>${unit.reactor ? `${unit.reactor.currentEnergy}/${unit.reactor.capacity}` : "—"}</b></div><div><span>Уклонение</span><b>${evasion}%</b></div><div><span>Криты</span><b>${unit.criticals.length}</b></div></div></div>`;
+  el.unitSummary.innerHTML = `<div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")} ${healthBar("Броня", unit.armor, unit.maxArmor, "armor")} ${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}<div class="stat-grid"><div><span>Энергия</span><b>${unit.reactor ? `${unit.reactor.currentEnergy}/${unit.reactor.capacity}` : "—"}</b></div><div><span>Уклонение</span><b>${evasion}%</b></div><div><span>Криты</span><b>${unit.criticals.length}</b></div></div></div>`;
 }
 
 function weaponMarkup(weapon) {
@@ -245,9 +245,10 @@ function renderLog() {
   el.combatLog.innerHTML = state.log.map(entry => `<li class="${entry.tone}"><time>R${entry.round}</time><span>${entry.message}</span></li>`).join("") || '<li class="empty-log">Журнал пуст</li>';
 }
 
-function imageFor(type, color) {
-  const cacheKey = `${type}:${color}`;
-  if (!entityImages.has(cacheKey)) entityImages.set(cacheKey, createSvgImage(type, color));
+function imageFor(type, color, stack) {
+  const displayCount = type === "squadron" ? Math.max(1, stack ?? 3) : "static";
+  const cacheKey = `${type}:${color}:${displayCount}`;
+  if (!entityImages.has(cacheKey)) entityImages.set(cacheKey, createSvgImage(type, color, stack));
   return entityImages.get(cacheKey);
 }
 
@@ -326,7 +327,7 @@ function drawEntity(entity, glyph, color, heading = 0) {
   const position = entity.position;
   if (!inside(state, position)) return;
   const { x, y } = axialToPixel(position);
-  const image = imageFor(glyph, color);
+  const image = imageFor(glyph, color, entity.stack);
   ctx.save(); ctx.translate(x, y); ctx.rotate(headingAngle(heading || 0)); ctx.shadowColor = color; ctx.shadowBlur = entity.id === state.activeUnitId ? 18 : 8;
   const size = VISUALS[glyph].size;
   if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size); else image.onload = draw;
@@ -376,7 +377,7 @@ function drawAttackAnimation() {
 
 function drawAnimatedEntity() {
   const animation = ui.animation;
-  const image = imageFor(animation.glyph, animation.color);
+  const image = imageFor(animation.glyph, animation.color, animation.stack);
   ctx.save(); ctx.translate(animation.x, animation.y); ctx.rotate(headingAngle(animation.heading)); ctx.shadowColor = animation.color; ctx.shadowBlur = 18;
   if (image.complete) ctx.drawImage(image, -animation.size / 2, -animation.size / 2, animation.size, animation.size);
   ctx.restore();
@@ -412,7 +413,7 @@ function startMovement() {
   const movingPath = path.filter((point, index) => index === 0 || point.q !== path[index - 1].q || point.r !== path[index - 1].r);
   const finalPoint = path[path.length - 1];
   const finalTurn = finalPoint.heading ?? movingPath[movingPath.length - 1].heading ?? unit.heading ?? 0;
-  ui.animation = { kind: "movement", unitId: unit.id, glyph: unit.glyph, color: unit.color, size: VISUALS[unit.glyph].size, path, movingPath, started: performance.now(), x: origin.x, y: origin.y, heading: unit.heading || 0, finalTurn, route, finalHeading };
+  ui.animation = { kind: "movement", unitId: unit.id, glyph: unit.glyph, color: unit.color, stack: unit.stack, size: VISUALS[unit.glyph].size, path, movingPath, started: performance.now(), x: origin.x, y: origin.y, heading: unit.heading || 0, finalTurn, route, finalHeading };
   document.body.classList.add("animating");
   renderHeader();
   requestAnimationFrame(animate);
@@ -451,19 +452,16 @@ function animate(now) {
 }
 
 function resolveConsequences(route, unit) {
-  for (const consequence of route.consequences) {
-    const roll = Math.random();
-    if (roll <= consequence.probability) {
-      const damage = Math.floor(Math.random() * (consequence.max - consequence.min + 1)) + consequence.min;
-      unit.integrity = Math.max(0, unit.integrity - damage);
-      addLog(`${unit.name}: ${consequence.sourceName} наносит ${damage} урона.`, "danger");
-      if (unit.integrity === 0) {
-        const result = destroyUnit(state, unit);
-        addLog(`${unit.name} уничтожен. На позиции появляется поле обломков.`, "danger");
-        if (result?.winner) addLog(`Победа флотилии ${result.winner}.`, "system");
-        break;
-      }
-    } else addLog(`${unit.name} избегает эффекта «${consequence.sourceName}».`, "safe");
+  for (const outcome of resolveHazardConsequences(state, unit, route.consequences)) {
+    if (!outcome.hit) {
+      addLog(`${unit.name} избегает эффекта «${outcome.consequence.sourceName}».`, "safe");
+      continue;
+    }
+    addLog(`${unit.name}: ${outcome.consequence.sourceName} наносит ${outcome.damage} урона.`, "danger");
+    if (outcome.destroyed) {
+      addLog(`${unit.name} уничтожен. На позиции появляется поле обломков.`, "danger");
+      if (outcome.winner) addLog(`Победа флотилии ${outcome.winner}.`, "system");
+    }
   }
 }
 
