@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { activeUnit, axialToOffset, createBattleState, useEvasiveManeuver } from "./domain.js";
-import { headingAngle, shouldAutoEndActivation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
+import { headingAngle, maneuverResourcePreview, shouldAutoEndActivation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
 
 assert.equal(headingAngle(0), Math.PI / 2, "курс 0 должен направлять нарисованный вверх нос вправо");
 assert.equal(headingAngle(3), -Math.PI / 2, "курс 3 должен направлять нос влево");
@@ -13,6 +13,9 @@ assert.equal(shouldHighlightOccupiedHex("WaitDecision"), true, "корабли �
 assert.equal(shouldOutlineUnit("atlas", "atlas", undefined, "DeploymentLeft"), false, "активный корабль не должен обводиться до окончания расстановки");
 assert.equal(shouldOutlineUnit("atlas", "atlas", "atlas", "DeploymentLeft"), true, "выбранный игроком корабль должен обводиться при расстановке");
 assert.equal(shouldOutlineUnit("atlas", "atlas", undefined, "WaitDecision"), true, "активный корабль должен обводиться после начала игрового цикла");
+assert.deepEqual(maneuverResourcePreview({ kind: "capital", heading: 0, speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, null, "system", () => 0), { speedSpent: 0, speedPreview: 0, maneuverSpent: 0, maneuverPreview: 0 }, "пустой выбор не должен ломать инспектор активного юнита");
+assert.deepEqual(maneuverResourcePreview({ kind: "capital", heading: 0, speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, { heading: 2, route: { heading: 0, movementCost: 0, turnsSpent: 0, steps: [] } }, "system", (from, to) => to - from), { speedSpent: 0, speedPreview: 0, maneuverSpent: 0, maneuverPreview: 2 }, "стационарный доворот должен показывать расход всех очков манёвренности");
+assert.deepEqual(maneuverResourcePreview({ kind: "squadron", speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, { route: { movementCost: 3, turnsSpent: 0, steps: [{}, {}, {}] } }, "system", () => 0), { speedSpent: 0, speedPreview: 3, maneuverSpent: 0, maneuverPreview: 0 }, "эскадрилья должна получать предпросмотр расхода скорости без манёвренности");
 const state = createBattleState();
 const swift = state.units.find(candidate => candidate.id === "swift");
 const wasps = state.units.find(candidate => candidate.id === "wasps");

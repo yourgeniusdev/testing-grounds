@@ -93,7 +93,7 @@ export function createBattleState() {
   const scenario = createScenario();
   const randomKeys = Object.fromEntries(scenario.units.map((unit, index) => [unit.id, ((index * 37 + 17) % 97) / 97]));
   const initiativeOrder = [...scenario.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || randomKeys[a.id] - randomKeys[b.id]).map(unit => unit.id);
-  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(initializeWeaponState), criticals: [], hasActivated: false, hasWaited: false, salvoCommitted: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
+  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(initializeWeaponState), criticals: [], hasActivated: false, hasWaited: false, canWait: true, activationStartedThisRound: false, salvoCommitted: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, speedSpent: 0, speedRemaining: unit.currentSpeed, maneuverSpent: 0, maneuverRemaining: unit.maneuver ?? 0, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
   return { scenario, units, roundNumber: 1, phase: "activation", lifecycle: "DeploymentLeft", stage: "system", initiativeOrder: [], activeUnitId: units[0]?.id || null, winner: null, log: [], events: [], sequence: 0, rng: Math.random, deployment: { left: false, right: false } };
 }
 
@@ -355,11 +355,19 @@ export function beginActivation(state) {
   state.lifecycle = "ActivationStart";
   const unit = activeUnit(state);
   if (!unit) return;
-  unit.evasionLocked = false;
-  unit.movementEvasion = 0;
-  unit.evasiveManeuver = false;
-  unit.salvoCommitted = false;
-  if (unit.reactor) unit.reactor.currentEnergy = Math.min(unit.reactor.capacity, unit.reactor.currentEnergy + unit.reactor.rechargeRate);
+  if (!unit.activationStartedThisRound) {
+    unit.activationStartedThisRound = true;
+    unit.canWait = true;
+    unit.evasionLocked = false;
+    unit.movementEvasion = 0;
+    unit.evasiveManeuver = false;
+    unit.salvoCommitted = false;
+    unit.speedSpent = 0;
+    unit.speedRemaining = unit.currentSpeed;
+    unit.maneuverSpent = 0;
+    unit.maneuverRemaining = unit.maneuver ?? 0;
+    if (unit.reactor) unit.reactor.currentEnergy = Math.min(unit.reactor.capacity, unit.reactor.currentEnergy + unit.reactor.rechargeRate);
+  }
   state.stage = "system";
   state.lifecycle = "SystemActions";
 }
@@ -368,13 +376,17 @@ export function useEvasiveManeuver(state) {
   const unit = activeUnit(state);
   if (unit?.kind !== "capital" || state.stage === "attack" || unit.maneuver < 1) return false;
   unit.evasiveManeuver = !unit.evasiveManeuver;
+  if (unit.evasiveManeuver) unit.canWait = false;
+  unit.maneuverSpent = unit.evasiveManeuver ? 1 : 0;
+  unit.maneuverRemaining = Math.max(0, unit.maneuver - unit.maneuverSpent);
   return true;
 }
 
 export function waitActiveUnit(state) {
   const unit = activeUnit(state);
-  if (!unit || unit.hasWaited || state.stage !== "system") return false;
+  if (!unit || unit.hasWaited || unit.canWait === false || state.stage !== "system") return false;
   unit.hasWaited = true;
+  unit.canWait = false;
   state.initiativeOrder = [...state.initiativeOrder.filter(id => id !== unit.id), unit.id];
   state.activeUnitId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated) || unit.id;
   beginActivation(state);
@@ -395,8 +407,14 @@ export function applyMovementStep(state, step) {
 export function applyMovement(state, route, finalHeading) {
   const unit = activeUnit(state);
   if (!unit || state.lifecycle === "Finished") return false;
+  const finalTurn = unit.kind === "capital" && finalHeading !== route.heading ? 1 : 0;
   unit.position = { ...route.position };
   if (unit.kind === "capital") unit.heading = finalHeading;
+  unit.canWait = false;
+  unit.speedSpent = route.movementCost;
+  unit.speedRemaining = Math.max(0, unit.currentSpeed - unit.speedSpent);
+  unit.maneuverSpent = unit.kind === "capital" ? route.turnsSpent + finalTurn + (unit.evasiveManeuver ? 1 : 0) : 0;
+  unit.maneuverRemaining = Math.max(0, (unit.maneuver ?? 0) - unit.maneuverSpent);
   unit.movementEvasion = unit.evasionLocked ? 0 : movementEvasion(route.steps.length, unit.evasiveManeuver);
   if (route.interception && unit.kind === "squadron") unit.engagedWith = [...new Set([...unit.engagedWith, route.interception])];
   state.stage = "attack";
@@ -405,8 +423,14 @@ export function applyMovement(state, route, finalHeading) {
 export function applyStationaryRotation(state, heading) {
   const unit = activeUnit(state);
   if (unit.kind !== "capital" || !availableStationaryHeadings(unit).has(heading)) return false;
+  const turnsSpent = Math.abs(signedTurn(unit.heading, heading));
   const rotated = heading !== unit.heading;
   unit.heading = heading;
+  unit.canWait = false;
+  unit.speedSpent = 0;
+  unit.speedRemaining = unit.currentSpeed;
+  unit.maneuverSpent = turnsSpent + (unit.evasiveManeuver ? 1 : 0);
+  unit.maneuverRemaining = Math.max(0, unit.maneuver - unit.maneuverSpent);
   unit.movementEvasion = 0;
   unit.evasionLocked = rotated;
   state.stage = "attack";
@@ -415,6 +439,11 @@ export function applyStationaryRotation(state, heading) {
 
 export function skipMovement(state) {
   const unit = activeUnit(state);
+  unit.canWait = false;
+  unit.speedSpent = 0;
+  unit.speedRemaining = unit.currentSpeed;
+  unit.maneuverSpent = unit.kind === "capital" && unit.evasiveManeuver ? 1 : 0;
+  unit.maneuverRemaining = Math.max(0, (unit.maneuver ?? 0) - unit.maneuverSpent);
   unit.movementEvasion = 0;
   state.stage = "attack";
 }
@@ -433,6 +462,8 @@ export function endActivation(state) {
   for (const candidate of state.units) {
     candidate.hasActivated = false;
     candidate.hasWaited = false;
+    candidate.canWait = true;
+    candidate.activationStartedThisRound = false;
     resetUnitWeaponsForNewRound(candidate);
   }
   state.initiativeOrder = [...state.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || a.id.localeCompare(b.id)).map(candidate => candidate.id);

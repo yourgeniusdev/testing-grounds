@@ -33,45 +33,51 @@
 
     <section class="workspace">
       <aside class="panel fleet-panel">
-        <div class="panel-heading"><div><p class="eyebrow">ОБЩАЯ ОЧЕРЕДЬ</p><h2>Инициатива</h2></div><span class="status-dot"></span></div>
-        <div id="initiativeList" class="ship-list"></div>
-        <div class="action-row"><button id="waitButton" class="button">Ждать</button><button id="endActivationButton" class="button">Завершить</button><button id="confirmDeploymentButton" class="button primary">Завершить расстановку</button></div>
-        <div class="mission-card"><div class="mission-icon">◎</div><div><strong>Уничтожение</strong><span>Победа, когда противник не способен двигаться или атаковать.</span></div></div>
+        <section class="initiative-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ОБЩАЯ ОЧЕРЕДЬ</p><h2>Инициатива</h2></div><span class="status-dot"></span></div>
+          <div id="initiativeList" class="ship-list"></div>
+        </section>
+        <section class="combat-log-panel"><div class="section-title"><span>Журнал боя</span><button id="clearLogButton" class="log-clear">Очистить</button></div><ol id="combatLog" class="combat-log" aria-live="polite"></ol></section>
       </aside>
 
-      <section class="battlefield-wrap">
-        <div class="canvas-toolbar"><div><span class="live-indicator"></span><span id="modeLabel">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
-        <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
-        <div id="tooltip" class="hex-tooltip" hidden></div>
-        <div id="maneuverPopup" class="maneuver-popup" hidden>
-          <div class="maneuver-popup-title"><span>План манёвра</span><span id="maneuverBadge">ГОТОВ</span></div>
-          <div id="maneuverDetails" class="maneuver-details"></div>
-          <div id="headingPicker" class="heading-picker" hidden><span>Конечный курс</span><div id="headingButtons" class="heading-buttons"></div></div>
-          <div class="maneuver-popup-actions"><button id="confirmManeuverButton" class="button primary icon-action" aria-label="Подтвердить манёвр" title="Подтвердить манёвр">✓</button><button id="cancelManeuverButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
-        </div>
-        <div id="attackPopup" class="maneuver-popup attack-popup" hidden>
-          <div class="maneuver-popup-title"><span id="actionTitle">План атаки</span><span id="routeBadge">ГОТОВ</span></div>
-          <div id="routeDetails" class="maneuver-details"></div>
-          <div class="maneuver-popup-actions"><button id="confirmButton" class="button primary icon-action" aria-label="Подтвердить атаку" title="Подтвердить атаку">✓</button><button id="cancelButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
-        </div>
+      <section class="battlefield-column">
+        <section class="battlefield-wrap">
+          <div class="canvas-toolbar"><div><span class="live-indicator"></span><span id="modeLabel">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
+          <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
+          <div id="tooltip" class="hex-tooltip" hidden></div>
+          <div id="maneuverPopup" class="maneuver-popup" hidden>
+            <div class="maneuver-popup-title"><span>План манёвра</span><span id="maneuverBadge">ГОТОВ</span></div>
+            <div id="maneuverDetails" class="maneuver-details"></div>
+            <div id="headingPicker" class="heading-picker" hidden><span>Конечный курс</span><div id="headingButtons" class="heading-buttons"></div></div>
+            <div class="maneuver-popup-actions"><button id="confirmManeuverButton" class="button primary icon-action" aria-label="Подтвердить манёвр" title="Подтвердить манёвр">✓</button><button id="cancelManeuverButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
+          </div>
+          <div id="attackPopup" class="maneuver-popup attack-popup" hidden>
+            <div class="maneuver-popup-title"><span id="actionTitle">План атаки</span><span id="routeBadge">ГОТОВ</span></div>
+            <div id="routeDetails" class="maneuver-details"></div>
+            <div class="maneuver-popup-actions"><button id="confirmButton" class="button primary icon-action" aria-label="Подтвердить атаку" title="Подтвердить атаку">✓</button><button id="cancelButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
+          </div>
+        </section>
+        <section class="command-deck" aria-label="Панель действий активного юнита">
+          <div id="energyResource" class="energy-resource"></div>
+          <div class="action-groups">
+            <section class="action-group"><div class="action-group-title">Активные действия</div><div class="action-group-scroll">
+              <button id="routePolicyButton" class="action-slot" type="button" aria-describedby="routePolicyTooltip"><span id="routePolicyIcon" class="action-icon">⚠</span><span id="routePolicyTooltip" class="action-tooltip" role="tooltip"><b>Рискованный маршрут</b><small>Допускает опасности. Нажмите, чтобы выбрать безопасный режим.</small></span></button>
+              <button id="evasionButton" class="action-slot" type="button" aria-describedby="evasionTooltip"><span id="evasionIcon" class="action-icon">◇</span><span id="evasionTooltip" class="action-tooltip" role="tooltip"><b>Манёвр уклонения</b><small>1 очко манёвренности · бонус движения ×1.5</small></span></button>
+              <div id="actionPlaceholders" class="action-placeholders" aria-hidden="true"></div>
+            </div></section>
+            <section class="action-group weapon-action-group"><div class="action-group-title">Орудия</div><div id="attackWeaponActions" class="attack-action-slots" aria-label="Орудия залпа"></div></section>
+            <section class="action-group turn-action-group"><div class="action-group-title">Ход</div><div class="turn-actions">
+              <button id="waitButton" class="action-slot" type="button"><span class="action-icon">◷</span><span class="action-tooltip"><b>Ждать</b><small>Перенести корабль в конец очереди.</small></span></button>
+              <button id="endActivationButton" class="action-slot" type="button"><span class="action-icon">■</span><span class="action-tooltip"><b>Завершить</b><small>Завершить текущую активацию.</small></span></button>
+              <button id="confirmDeploymentButton" class="action-slot deployment-action" type="button"><span class="action-icon">✓</span><span class="action-tooltip"><b>Готово</b><small>Подтвердить расстановку стороны.</small></span></button>
+              <div id="turnPlaceholders" class="action-placeholders" aria-hidden="true"></div>
+            </div></section>
+          </div>
+        </section>
       </section>
 
       <aside class="panel inspector-panel">
-        <div class="panel-heading"><div><p class="eyebrow">АКТИВАЦИЯ</p><h2>Командная панель</h2></div><span id="unitClassBadge" class="class-badge">CAPITAL</span></div>
         <section id="unitSummary" class="unit-summary"></section>
-        <section class="weapon-panel"><div class="section-title"><span>Действия и орудия</span></div><div class="action-dock" aria-label="Действия активного юнита">
-          <button id="routePolicyButton" class="action-slot" type="button" aria-describedby="routePolicyTooltip">
-            <span id="routePolicyIcon" class="action-icon">⚠</span>
-            <span id="routePolicyTooltip" class="action-tooltip" role="tooltip"><b>Рискованный маршрут</b><small>Допускает опасности. Нажмите, чтобы выбрать безопасный режим.</small></span>
-          </button>
-          <button id="evasionButton" class="action-slot" type="button" aria-describedby="evasionTooltip">
-            <span id="evasionIcon" class="action-icon">◇</span>
-            <span id="evasionTooltip" class="action-tooltip" role="tooltip"><b>Манёвр уклонения</b><small>1 очко манёвренности · бонус движения ×1.5</small></span>
-          </button>
-          <div id="attackWeaponActions" class="attack-action-slots" aria-label="Орудия залпа"></div>
-        </div></section>
-
-        <section class="combat-log-panel"><div class="section-title"><span>Журнал боя</span><button id="clearLogButton" class="log-clear">Очистить</button></div><ol id="combatLog" class="combat-log" aria-live="polite"></ol></section>
       </aside>
     </section>
   </main>
