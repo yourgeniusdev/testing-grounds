@@ -1,125 +1,255 @@
 import assert from "node:assert/strict";
 import {
-  attackPreview,
-  attackAnimationPlan,
+  applyAttackStep,
   attackArc,
+  attackPreview,
   availableAttackTargets,
+  planAttack,
   resolveAttack,
-  skipAttack
+  supercoverLine
 } from "./battle.js";
-import { confirmDeployment, createBattleState, deployUnit, deploymentZone, unitById } from "./domain.js";
+import {
+  advanceWeaponRound,
+  beginActivation,
+  beginWeaponCooldown,
+  createBattleState,
+  endActivation,
+  hexDistance,
+  initializeWeaponState,
+  resetUnitWeaponsForNewRound
+} from "./domain.js";
 
-function battleAt(attackerId, targetId) {
-  const state = createBattleState();
-  state.activeUnitId = attackerId;
-  state.stage = "attack";
-  const attacker = unitById(state, attackerId);
-  const target = unitById(state, targetId);
+function weapon(overrides = {}) {
+  return {
+    id: "slot-a",
+    weaponId: "catalog-a",
+    slotOrder: 0,
+    name: "Орудие A",
+    mount: "turret",
+    orientation: null,
+    weaponClass: "kinetic",
+    delivery: "projectile",
+    targetKinds: ["capital"],
+    accuracy: 80,
+    effectiveRange: 3,
+    maxRange: 6,
+    shots: 1,
+    damage: 4,
+    critChance: 0,
+    energyCost: 0,
+    cooldownRounds: 0,
+    firedThisRound: false,
+    cooldownRemaining: 0,
+    visual: { projectile: "tracer", color: "#fff", size: 0.1, speedHexesPerSecond: 5, launchIntervalMs: 100, trail: "short", impact: "spark", impactRadius: 0.1 },
+    ...overrides
+  };
+}
+
+function unit(overrides = {}) {
+  return {
+    id: "attacker",
+    name: "Атакующий",
+    sideId: "azure",
+    kind: "capital",
+    position: { q: 0, r: 0 },
+    heading: 0,
+    shield: 0,
+    armor: 0,
+    integrity: 20,
+    maxShield: 0,
+    maxArmor: 0,
+    maxIntegrity: 20,
+    baseEvasion: 0,
+    movementEvasion: 0,
+    criticals: [],
+    stack: 1,
+    weapons: [],
+    reactor: null,
+    ...overrides
+  };
+}
+
+function battle(weapons, targetOverrides = {}) {
+  const attacker = unit({ weapons });
+  const target = unit({ id: "target", name: "Цель", sideId: "crimson", position: { q: 2, r: 0 }, shield: 8, armor: 8, integrity: 12, maxShield: 8, maxArmor: 8, maxIntegrity: 12, ...targetOverrides });
+  const state = {
+    scenario: { id: "test", bounds: { minCol: -8, maxCol: 8, minRow: -8, maxRow: 8 }, contents: [] },
+    units: [attacker, target],
+    activeUnitId: attacker.id,
+    initiativeOrder: [attacker.id, target.id],
+    stage: "attack",
+    lifecycle: "Attack",
+    roundNumber: 1,
+    winner: null,
+    log: [],
+    events: [],
+    sequence: 0
+  };
   return { state, attacker, target };
 }
 
 {
-  const { state, attacker } = battleAt("atlas", "bastion");
-  attacker.position = { q: 0, r: 0 };
-  attacker.heading = 0;
-  const arc = attackArc(state, "primary");
-  assert.equal(arc.has("0,3"), true);
-  assert.equal(arc.has("3,0"), false);
-}
-
-{
-  const { state, attacker, target } = battleAt("swift", "raptor");
-  attacker.position = { q: 0, r: 0 };
-  target.position = { q: 1, r: 0 };
-  assert.deepEqual(attackAnimationPlan(state, target.id, "auxiliary").map(step => step.weaponClass), ["energy"]);
-}
-
-{
-  const { state, attacker, target } = battleAt("atlas", "bastion");
-  attacker.position = { q: 0, r: 0 };
-  attacker.heading = 0;
-  target.position = { q: 0, r: 3 };
-  const preview = attackPreview(state, target.id, "primary");
-  assert.deepEqual(preview.included.map(item => item.id), ["atlas-battery-right"]);
-  assert.equal(preview.hitChance, 73);
-}
-
-{
-  const { state, attacker, target } = battleAt("bastion", "atlas");
-  attacker.position = { q: 0, r: 0 };
-  attacker.heading = 0;
-  target.position = { q: 0, r: 2 };
-  target.shield = 5;
-  target.armor = 20;
-  const rolls = [1, 1];
-  resolveAttack(state, target.id, "primary", () => rolls.shift() ?? 100, () => 0);
-  assert.equal(target.shield, 0);
-  assert.equal(target.armor, 10);
-  assert.equal(attacker.primaryReady, false);
-}
-
-{
-  const { state, attacker, target } = battleAt("swift", "raptor");
-  attacker.position = { q: 0, r: 0 };
-  target.position = { q: 1, r: 0 };
-  attacker.reactor.currentEnergy = 2;
-  const primaryWasReady = attacker.primaryReady;
-  resolveAttack(state, target.id, "auxiliary", () => 1, () => 0);
-  assert.equal(attacker.reactor.currentEnergy, 0);
-  assert.equal(attacker.auxiliaryReady, false);
-  assert.equal(attacker.primaryReady, primaryWasReady);
-}
-
-{
-  const { state, attacker, target } = battleAt("swift", "raptor");
-  attacker.position = { q: 0, r: 0 };
-  target.position = { q: 1, r: 0 };
-  target.shield = 0;
-  target.armor = 0;
-  target.integrity = 1;
-  resolveAttack(state, target.id, "primary", () => 1, () => 0);
-  assert.equal(state.units.some(unit => unit.id === target.id), false);
-  assert.equal(state.initiativeOrder.includes(target.id), false);
-  assert.equal(state.scenario.contents.some(content => content.type === "debrisField" && content.position.q === 1), true);
-}
-
-{
-  const { state, attacker } = battleAt("atlas", "bastion");
-  attacker.position = { q: 0, r: 0 };
-  unitById(state, "bastion").position = { q: -3, r: 0 };
-  assert.equal(availableAttackTargets(state, "primary").some(unit => unit.id === "bastion"), false);
-  skipAttack(state);
-  assert.equal(attacker.primaryReady, true);
-}
-
-{
-  const { state, attacker, target } = battleAt("wasps", "mantis");
-  attacker.position = { q: 0, r: 0 };
-  target.position = { q: -1, r: 0 };
-  assert.equal(attacker.weapons[0].mount, "squadronWeapon");
-  attacker.stack = 2;
-  const preview = attackPreview(state, target.id, "primary");
-  assert.equal(preview.included.length, 1);
-  assert.equal(preview.shots, 2);
-  assert.equal(preview.included[0].shots, 2);
-  const integrity = target.integrity;
-  resolveAttack(state, target.id, "primary", () => 1, () => 0);
-  assert.equal(target.integrity, integrity - 2);
+  const slot = initializeWeaponState(weapon({ cooldownRounds: 1 }), 3);
+  assert.equal(slot.slotOrder, 0);
+  beginWeaponCooldown(slot);
+  assert.deepEqual({ fired: slot.firedThisRound, cooldown: slot.cooldownRemaining }, { fired: true, cooldown: 1 });
+  advanceWeaponRound(slot);
+  assert.deepEqual({ fired: slot.firedThisRound, cooldown: slot.cooldownRemaining }, { fired: false, cooldown: 1 });
+  advanceWeaponRound(slot);
+  assert.equal(slot.cooldownRemaining, 0);
+  const unused = initializeWeaponState(weapon({ cooldownRounds: 2 }));
+  resetUnitWeaponsForNewRound({ weapons: [unused] });
+  assert.deepEqual({ fired: unused.firedThisRound, cooldown: unused.cooldownRemaining }, { fired: false, cooldown: 0 });
 }
 
 {
   const state = createBattleState();
-  const left = deploymentZone(state, "azure");
-  assert.equal(left.length > 0, true);
-  for (const unit of state.units.filter(item => item.sideId === "azure")) assert.equal(deployUnit(state, unit.id, left.shift(), unit.heading), true);
-  assert.equal(confirmDeployment(state, "azure"), true);
-  assert.equal(state.lifecycle, "DeploymentRight");
-  const right = deploymentZone(state, "crimson");
-  for (const unit of state.units.filter(item => item.sideId === "crimson")) assert.equal(deployUnit(state, unit.id, right.shift(), unit.heading), true);
-  assert.equal(confirmDeployment(state, "crimson"), true);
-  assert.equal(state.lifecycle, "WaitDecision");
-  assert.equal(state.initiativeOrder.length, 6);
-  assert.equal(deployUnit(state, "atlas", { q: 0, r: 0 }), false);
+  for (const candidate of state.units) {
+    assert.equal("primaryReady" in candidate, false);
+    assert.equal("auxiliaryReady" in candidate, false);
+    candidate.weapons.forEach((slot, slotOrder) => {
+      assert.equal(slot.weaponId.length > 0, true);
+      assert.equal(slot.slotOrder, slotOrder);
+      assert.equal(slot.firedThisRound, false);
+      assert.equal(slot.cooldownRemaining, 0);
+      assert.equal("ready" in slot, false);
+    });
+  }
+}
+
+{
+  const antiCapital = weapon();
+  const antiAir = weapon({ id: "slot-aa", weaponId: "catalog-aa", slotOrder: 1, targetKinds: ["capital", "squadron"] });
+  const { state, target } = battle([antiCapital, antiAir], { kind: "squadron", stack: 3, unitHealth: 4 });
+  const selection = new Set([antiCapital.id, antiAir.id]);
+  const preview = attackPreview(state, target.id, selection);
+  assert.deepEqual(preview.included.map(item => item.id), [antiAir.id]);
+  assert.equal(preview.excluded.find(item => item.id === antiCapital.id).reason, "Недопустимый тип цели");
+  assert.equal(preview.canConfirm, false);
+  assert.deepEqual(availableAttackTargets(state, selection).map(item => item.id), [target.id]);
+  assert.equal(planAttack(state, target.id, selection, () => 1, () => 0), null);
+  assert.equal(planAttack(state, target.id, new Set([antiAir.id, "missing-slot"]), () => 1, () => 0), null);
+  assert.throws(() => attackPreview(state, target.id, "primary"), TypeError);
+}
+
+{
+  const costly = weapon({ energyCost: 3 });
+  const { state, attacker, target } = battle([costly]);
+  let preview = attackPreview(state, target.id, new Set([costly.id]));
+  assert.equal(preview.canConfirm, false);
+  assert.deepEqual({ required: preview.energyRequired, available: preview.energyAvailable }, { required: 3, available: 0 });
+  attacker.reactor = { capacity: 5, currentEnergy: 2, rechargeRate: 1 };
+  preview = attackPreview(state, target.id, new Set([costly.id]));
+  assert.equal(preview.canConfirm, false);
+  attacker.reactor.currentEnergy = 3;
+  assert.equal(attackPreview(state, target.id, new Set([costly.id])).canConfirm, true);
+}
+
+{
+  const guns = weapon({ mount: "squadronWeapon", targetKinds: ["capital", "squadron"], shots: 2, damage: 1 });
+  const { state, attacker, target } = battle([guns]);
+  attacker.kind = "squadron";
+  attacker.stack = 3;
+  const preview = attackPreview(state, target.id, new Set([guns.id]));
+  assert.equal(preview.included[0].shots, 6);
+  assert.equal(preview.shots, 6);
+  assert.equal(planAttack(state, target.id, new Set([guns.id]), () => 100, () => 0).steps.length, 6);
+}
+
+{
+  const explosive = weapon({ id: "slot-explosive", weaponId: "explosive", slotOrder: 0, weaponClass: "explosive", delivery: "missile", damage: 4 });
+  const kineticLater = weapon({ id: "slot-kinetic-later", weaponId: "kinetic-later", slotOrder: 2, damage: 8 });
+  const kineticFirst = weapon({ id: "slot-kinetic-first", weaponId: "kinetic-first", slotOrder: 1, damage: 8 });
+  const { state, target } = battle([explosive, kineticLater, kineticFirst], { shield: 1, armor: 20 });
+  const plan = planAttack(state, target.id, new Set([explosive.id, kineticLater.id, kineticFirst.id]), () => 1, () => 0);
+  assert.deepEqual(plan.weapons.map(item => item.slotId), [kineticFirst.id, explosive.id, kineticLater.id]);
+  assert.equal(plan.steps[0].layer, "shield");
+  assert.equal(plan.steps[1].layer, "armor");
+  assert.equal(Object.isFrozen(plan), true);
+  assert.equal(Object.isFrozen(plan.steps[0].endpoint), true);
+  assert.equal(target.shield, 1);
+  assert.equal(target.armor, 20);
+}
+
+{
+  const miss = weapon({ delivery: "beam", weaponClass: "energy", visual: { projectile: "beam", launchIntervalMs: 0 } });
+  const { state, target } = battle([miss]);
+  const plan = planAttack(state, target.id, new Set([miss.id]), () => 100, () => 0.25);
+  assert.equal(plan.steps[0].outcome, "miss");
+  assert.notDeepEqual(plan.steps[0].endpoint, target.position);
+  assert.deepEqual(plan.steps[0].targetAfter, plan.steps[0].targetBefore);
+  assert.equal(plan.steps[0].duration, Math.max(120, Math.round(hexDistance({ q: 0, r: 0 }, plan.steps[0].endpoint) / (miss.visual.speedHexesPerSecond || 1) * 1000)));
+}
+
+{
+  const burst = weapon({ shots: 3, visual: { projectile: "tracer", color: "#fff", size: 0.1, speedHexesPerSecond: 5, launchIntervalMs: 100, trail: "short", impact: "spark", impactRadius: 0.1 } });
+  const { state, target } = battle([burst]);
+  const plan = planAttack(state, target.id, new Set([burst.id]), () => 100, () => 0);
+  assert.deepEqual(plan.steps.map(step => step.launchTime), [0, 100, 200]);
+  assert.deepEqual(plan.steps.map(step => step.arrivalTime), plan.steps.map(step => step.launchTime + step.duration));
+  assert.equal(plan.steps[1].launchTime - plan.steps[0].launchTime, burst.visual.launchIntervalMs);
+  assert.equal(planAttack(state, target.id, new Set([burst.id]), () => 100, () => 0), null);
+  assert.equal(attackPreview(state, target.id, new Set([burst.id])).salvoAvailable, false);
+}
+
+{
+  const accurate = weapon({ id: "accurate", accuracy: 90 });
+  const inaccurate = weapon({ id: "inaccurate", accuracy: 50, slotOrder: 1 });
+  const { state, target } = battle([accurate, inaccurate], { baseEvasion: 10 });
+  const preview = attackPreview(state, target.id, new Set([accurate.id, inaccurate.id]));
+  assert.deepEqual(preview.hitChances, { accurate: 80, inaccurate: 40 });
+}
+
+{
+  const killer = weapon({ id: "slot-killer", weaponId: "killer", slotOrder: 0, weaponClass: "explosive", damage: 20, energyCost: 2, cooldownRounds: 1 });
+  const unused = weapon({ id: "slot-unused", weaponId: "unused", slotOrder: 1, energyCost: 3, cooldownRounds: 1 });
+  const { state, attacker, target } = battle([killer, unused], { shield: 0, armor: 0, integrity: 1 });
+  attacker.reactor = { capacity: 8, currentEnergy: 5, rechargeRate: 1 };
+  const plan = planAttack(state, target.id, new Set([killer.id, unused.id]), () => 1, () => 0);
+  assert.deepEqual(plan.weapons.map(item => item.slotId), [killer.id]);
+  assert.equal(applyAttackStep(state, plan, 0).status, "applied");
+  assert.equal(attacker.reactor.currentEnergy, 3);
+  assert.equal(killer.firedThisRound, true);
+  assert.equal(killer.cooldownRemaining, 1);
+  assert.equal(unused.firedThisRound, false);
+  assert.equal(state.units.includes(target), false);
+  assert.equal(state.scenario.contents.some(item => item.type === "debrisField"), true);
+}
+
+{
+  const gun = weapon();
+  const { state, attacker } = battle([gun]);
+  assert.equal(planAttack(state, attacker.id, new Set([gun.id]), () => 1, () => 0), null);
+}
+
+{
+  const gun = weapon();
+  const { state, target } = battle([gun]);
+  assert.equal(resolveAttack(state, target.id, new Set([gun.id]), () => 1, () => 0), true);
+  assert.equal(gun.firedThisRound, true);
+  assert.equal(target.shield < 8, true);
+  assert.equal(resolveAttack(state, target.id, new Set([gun.id]), () => 1, () => 0), false);
+}
+
+{
+  const gun = weapon();
+  const { state, attacker, target } = battle([gun]);
+  attacker.salvoCommitted = true;
+  beginActivation(state);
+  assert.equal(attacker.salvoCommitted, false);
+  attacker.salvoCommitted = true;
+  target.hasActivated = true;
+  endActivation(state);
+  assert.equal(attacker.salvoCommitted, false);
+}
+
+{
+  const gun = weapon({ mount: "battery-left" });
+  const { state } = battle([gun]);
+  const arc = attackArc(state, new Set([gun.id]));
+  assert.equal(arc.has("0,-2"), true);
+  assert.equal(arc.has("2,0"), false);
+  assert.deepEqual(supercoverLine({ q: 0, r: 0 }, { q: 2, r: -1 }), [{ q: 0, r: 0 }, { q: 1, r: -1 }, { q: 1, r: 0 }, { q: 2, r: -1 }]);
 }
 
 console.log("battle checks passed");

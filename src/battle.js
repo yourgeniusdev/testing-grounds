@@ -1,4 +1,4 @@
-import { DIRECTIONS, activeUnit, applyDamage, destroyUnit, hexDistance, inside, key, unitById } from "./domain.js";
+import { activeUnit, applyDamage, beginWeaponCooldown, destroyUnit, hexDistance, inside, key, unitById } from "./domain.js";
 
 const MULTIPLIERS = {
   kinetic: { shield: 1.5, armor: 0.75, integrity: 1 },
@@ -11,6 +11,11 @@ const CRITICALS = {
   energy: ["Термическое повреждение", "Ионизация системы", "Оплавление контура"],
   explosive: ["Разрыв корпуса", "Деформация обшивки", "Повреждение отсека"]
 };
+
+const COVER_MODIFIERS = { nebula: 15, debrisField: 10, asteroidField: 20 };
+const BLOCKER_COVER = { small: 25, medium: 50, large: 100 };
+const NO_REACTOR = "Требуется реактор";
+const INVALID_TARGET = "Недопустимый тип цели";
 
 function rotatePosition(position, turns) {
   let { q, r } = position;
@@ -27,11 +32,8 @@ export function isPositionInFiringArc(origin, heading, target, mount, orientatio
   if (mount === "battery-left") return local.q >= 0 && local.r < 0 && local.q + local.r <= 0;
   if (mount === "battery-right") return local.q <= 0 && local.r > 0 && local.q + local.r >= 0;
   if (mount === "forward") {
-    if (orientation === "aft") {
-      const aft = rotatePosition(local, 3);
-      return aft.q >= 0 && aft.q + aft.r >= 0;
-    }
-    return orientation === "fore" && local.q >= 0 && local.q + local.r >= 0;
+    const oriented = orientation === "aft" ? rotatePosition(local, 3) : local;
+    return ["fore", "aft"].includes(orientation) && oriented.q > 0 && oriented.q + oriented.r > 0;
   }
   return false;
 }
@@ -40,18 +42,32 @@ function inArc(attacker, target, weapon) {
   return isPositionInFiringArc(attacker.position, attacker.heading || 0, target.position, weapon.mount, weapon.orientation);
 }
 
-function readyWeapons(attacker) {
-  return attacker.weapons.filter(weapon => {
-    if (weapon.role === "primary") return attacker.primaryReady;
-    return attacker.auxiliaryReady && attacker.reactor?.currentEnergy >= weapon.energyCost;
-  });
+function assertSelection(selection) {
+  if (!(selection instanceof Set)) throw new TypeError("Weapon selection must be a Set of installed slot IDs");
 }
 
-const COVER_MODIFIERS = { nebula: 15, debrisField: 10, asteroidField: 20 };
-const BLOCKER_COVER = { small: 25, medium: 50, large: 100 };
+function effectiveWeapon(attacker, weapon) {
+  return weapon.mount === "squadronWeapon" ? { ...weapon, shots: weapon.shots * attacker.stack } : { ...weapon };
+}
+
+function selectedWeapons(attacker, selection) {
+  assertSelection(selection);
+  return attacker.weapons.filter(weapon => selection.has(weapon.id)).map(weapon => effectiveWeapon(attacker, weapon));
+}
+
+function unavailableReason(attacker, target, weapon) {
+  if (weapon.firedThisRound) return "Уже стреляло в этом раунде";
+  if (weapon.cooldownRemaining > 0) return `Перезарядка: ${weapon.cooldownRemaining}`;
+  if (weapon.energyCost > 0 && !attacker.reactor) return NO_REACTOR;
+  if (!target) return "Цель отсутствует";
+  if (target.sideId === attacker.sideId) return "Союзная цель";
+  if (!weapon.targetKinds.includes(target.kind)) return INVALID_TARGET;
+  if (hexDistance(attacker.position, target.position) > weapon.maxRange) return "Вне дальности";
+  if (!inArc(attacker, target, weapon)) return "Вне сектора";
+  return null;
+}
 
 function cube(position) { return { x: position.q, z: position.r, y: -position.q - position.r }; }
-function axial(c) { return { q: c.x, r: c.z }; }
 function cubeRound(c) {
   let x = Math.round(c.x), y = Math.round(c.y), z = Math.round(c.z);
   const dx = Math.abs(x - c.x), dy = Math.abs(y - c.y), dz = Math.abs(z - c.z);
@@ -64,7 +80,7 @@ function cubeRound(c) {
 export function supercoverLine(from, to) {
   const a = cube(from), b = cube(to), distance = hexDistance(from, to);
   const cells = new Map();
-  const add = c => cells.set(key(c.x, c.z), { q: c.x, r: c.z });
+  const add = c => cells.set(key(c.x, c.z), { q: c.x || 0, r: c.z || 0 });
   for (let i = 0; i <= distance * 100; i++) {
     const t = distance ? i / (distance * 100) : 0;
     const c = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
@@ -78,14 +94,10 @@ function endpointCover(state, target) {
   const content = state.scenario.contents.find(item => item.position.q === target.position.q && item.position.r === target.position.r && COVER_MODIFIERS[item.type]);
   return content ? COVER_MODIFIERS[content.type] : 0;
 }
-function lineBlocker(state, attacker, target) {
+function lineBlocker(state, attacker, target, excludedIds = new Set()) {
   const cells = supercoverLine(attacker.position, target.position).slice(1, -1);
-  const candidates = state.units.filter(unit => unit.id !== attacker.id && unit.id !== target.id && unit.kind !== "squadron" && cells.some(cell => cell.q === unit.position.q && cell.r === unit.position.r));
+  const candidates = state.units.filter(unit => unit.id !== attacker.id && unit.id !== target.id && !excludedIds.has(unit.id) && unit.kind !== "squadron" && cells.some(cell => cell.q === unit.position.q && cell.r === unit.position.r));
   return candidates.sort((a, b) => hexDistance(attacker.position, a.position) - hexDistance(attacker.position, b.position) || String(a.id).localeCompare(String(b.id)))[0] || null;
-}
-
-function validWeapon(attacker, target, weapon) {
-  return hexDistance(attacker.position, target.position) <= weapon.maxRange && inArc(attacker, target, weapon);
 }
 
 export function targetEvasion(target) {
@@ -96,9 +108,9 @@ export function hitChance(weapon, target, cover = 0) {
   return Math.max(0, Math.min(100, weapon.accuracy - targetEvasion(target) - cover));
 }
 
-export function attackGeometry(state, targetId, weapon) {
+export function attackGeometry(state, targetId, excludedBlockerIds = new Set()) {
   const attacker = activeUnit(state), target = unitById(state, targetId);
-  const blocker = target ? lineBlocker(state, attacker, target) : null;
+  const blocker = target ? lineBlocker(state, attacker, target, excludedBlockerIds) : null;
   const cover = blocker ? Math.min(100, BLOCKER_COVER[blockerSize(blocker)]) : 0;
   const endpoint = target ? endpointCover(state, target) : 0;
   return { line: target ? supercoverLine(attacker.position, target.position) : [], blocker, cover, endpointCover: endpoint };
@@ -110,36 +122,45 @@ export function activeLayer(target) {
   return "integrity";
 }
 
-function selectedReadyWeapons(attacker, selection) {
-  const ready = readyWeapons(attacker).map(weapon => weapon.mount === "squadronWeapon" ? { ...weapon, shots: weapon.shots * attacker.stack } : weapon);
-  if (selection instanceof Set) return ready.filter(weapon => selection.has(weapon.id));
-  if (selection === "auxiliary") return ready.filter(weapon => weapon.role === "auxiliary").slice(0, 1);
-  if (selection === "primary") return ready.filter(weapon => weapon.role === "primary");
-  return ready;
+function effectiveness(weapon, layer) {
+  return MULTIPLIERS[weapon.weaponClass][layer];
+}
+
+function compareForLayer(layer) {
+  return (a, b) => effectiveness(b, layer) - effectiveness(a, layer) || a.slotOrder - b.slotOrder;
 }
 
 export function attackPreview(state, targetId, selection) {
   const attacker = activeUnit(state);
   const target = unitById(state, targetId);
-  const all = selectedReadyWeapons(attacker, selection);
-  const included = target ? all.filter(weapon => validWeapon(attacker, target, weapon)) : [];
-  const excluded = target ? all.filter(weapon => !included.includes(weapon)).map(weapon => ({ ...weapon, reason: hexDistance(attacker.position, target.position) > weapon.maxRange ? "Вне дальности" : "Вне сектора" })) : all.map(weapon => ({ ...weapon, reason: "Цель отсутствует" }));
+  if (!attacker) throw new Error("No active unit");
+  const selected = selectedWeapons(attacker, selection);
+  const selectedIds = new Set(selected.map(weapon => weapon.id));
+  const missingSlotIds = [...selection].filter(id => !selectedIds.has(id));
+  const included = [];
+  const excluded = [];
+  for (const weapon of selected) {
+    const reason = unavailableReason(attacker, target, weapon);
+    if (reason) excluded.push({ ...weapon, reason });
+    else included.push(weapon);
+  }
   const geometry = target ? attackGeometry(state, targetId) : { blocker: null, cover: 0, endpointCover: 0 };
   const layer = target ? activeLayer(target) : null;
-  const ordered = [...included].sort((a, b) => MULTIPLIERS[b.weaponClass][layer] - MULTIPLIERS[a.weaponClass][layer] || a.id.localeCompare(b.id));
+  const ordered = layer ? [...included].sort(compareForLayer(layer)) : [];
   const shots = ordered.reduce((total, weapon) => total + weapon.shots, 0);
-  const potentialDamage = layer ? ordered.reduce((total, weapon) => total + weapon.shots * Math.max(1, Math.floor(weapon.damage * MULTIPLIERS[weapon.weaponClass][layer])), 0) : 0;
-  return { attacker, target, included, excluded, ordered, layer, shots, potentialDamage, blocker: geometry.blocker, cover: geometry.cover, endpointCover: geometry.endpointCover, hitChance: ordered[0] ? hitChance(ordered[0], target, geometry.cover + geometry.endpointCover) : null };
-}
-
-export function attackAnimationPlan(state, targetId, selection) {
-  const preview = attackPreview(state, targetId, selection);
-  return preview.ordered.map((weapon, index) => ({ weaponId: weapon.id, weaponClass: weapon.weaponClass, shots: weapon.shots, delay: index * 420, duration: weapon.weaponClass === "energy" ? 360 : 520 }));
+  const potentialDamage = layer ? ordered.reduce((total, weapon) => total + weapon.shots * Math.max(1, Math.floor(weapon.damage * effectiveness(weapon, layer))), 0) : 0;
+  const energyRequired = selected.reduce((total, weapon) => total + weapon.energyCost, 0);
+  const energyAvailable = attacker.reactor?.currentEnergy || 0;
+  const enoughEnergy = energyRequired <= energyAvailable;
+  const salvoAvailable = !attacker.salvoCommitted;
+  const hitChances = Object.fromEntries(ordered.map(weapon => [weapon.id, hitChance(weapon, target, geometry.cover + geometry.endpointCover)]));
+  const canConfirm = Boolean(target && selected.length && !missingSlotIds.length && included.length === selected.length && enoughEnergy && salvoAvailable);
+  return { attacker, target, selected, missingSlotIds, included, excluded, ordered, layer, shots, potentialDamage, energyRequired, energyAvailable, enoughEnergy, salvoAvailable, canConfirm, blocker: geometry.blocker, cover: geometry.cover, endpointCover: geometry.endpointCover, hitChances };
 }
 
 export function attackArc(state, selection) {
   const attacker = activeUnit(state);
-  const weapons = selectedReadyWeapons(attacker, selection);
+  const weapons = selectedWeapons(attacker, selection).filter(weapon => !unavailableReason(attacker, null, weapon) || unavailableReason(attacker, null, weapon) === "Цель отсутствует");
   const positions = new Set();
   const maxRange = Math.max(0, ...weapons.map(weapon => weapon.maxRange));
   for (let q = attacker.position.q - maxRange; q <= attacker.position.q + maxRange; q++) {
@@ -153,8 +174,126 @@ export function attackArc(state, selection) {
 }
 
 export function availableAttackTargets(state, selection) {
+  assertSelection(selection);
   const attacker = activeUnit(state);
-  return state.units.filter(target => target.sideId !== attacker.sideId && attackPreview(state, target.id, selection).included.length);
+  return state.units.filter(target => target.sideId !== attacker.sideId && attackPreview(state, target.id, selection).included.length > 0);
+}
+
+function cloneCombatant(unit) {
+  return { id: unit.id, kind: unit.kind, shield: unit.shield || 0, armor: unit.armor || 0, integrity: unit.integrity || 0, stack: unit.stack, unitHealth: unit.unitHealth };
+}
+
+function snapshot(unit) {
+  return Object.freeze({ shield: unit.shield, armor: unit.armor, integrity: unit.integrity, stack: unit.stack });
+}
+
+function simulatedDamage(unit, damage, layer) {
+  unit[layer] = Math.max(0, unit[layer] - damage);
+  if (unit.kind === "squadron" && unit.unitHealth) unit.stack = unit.integrity ? Math.ceil(unit.integrity / unit.unitHealth) : 0;
+}
+
+function missEndpoint(target, random) {
+  const angle = random() * Math.PI * 2;
+  const radius = 0.2 + random() * 0.55;
+  return { q: target.position.q + Math.cos(angle) * radius, r: target.position.r + Math.sin(angle) * radius };
+}
+
+function deepFreeze(value) {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+}
+
+function plannedCritical(attacker, weapon, rollD100, random, shot) {
+  const roll = rollD100();
+  if (roll > weapon.critChance) return { roll, critical: null };
+  const pool = CRITICALS[weapon.weaponClass];
+  const type = pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
+  return { roll, critical: { id: `critical-${attacker.id}-${weapon.id}-${shot}`, type, weaponClass: weapon.weaponClass, attackerId: attacker.id, weaponId: weapon.id } };
+}
+
+export function planAttack(state, targetId, selection, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random) {
+  if (state.stage !== "attack" || state.winner) return null;
+  const preview = attackPreview(state, targetId, selection);
+  if (!preview.canConfirm) return null;
+  const { attacker, target } = preview;
+  const simulatedTarget = cloneCombatant(target);
+  const simulatedBlockers = new Map();
+  const destroyedBlockerIds = new Set();
+  const remaining = [...preview.included];
+  const weapons = [];
+  const steps = [];
+  let elapsedMs = 0;
+  while (remaining.length && simulatedTarget.integrity > 0) {
+    const layer = activeLayer(simulatedTarget);
+    remaining.sort(compareForLayer(layer));
+    const weapon = remaining.shift();
+    const weaponPlan = { slotId: weapon.id, weaponId: weapon.weaponId, slotOrder: weapon.slotOrder, energyCost: weapon.energyCost, cooldownRounds: weapon.cooldownRounds, firstStepIndex: steps.length, shotCount: 0 };
+    weapons.push(weaponPlan);
+    const weaponLaunchTime = elapsedMs;
+    let weaponEndTime = weaponLaunchTime;
+    for (let shot = 1; shot <= weapon.shots && simulatedTarget.integrity > 0; shot++) {
+      const geometry = attackGeometry(state, targetId, destroyedBlockerIds);
+      const chance = hitChance(weapon, target, geometry.cover + geometry.endpointCover);
+      const roll = rollD100();
+      const targetBefore = snapshot(simulatedTarget);
+      let outcome = "miss";
+      let hitUnitId = null;
+      let hitLayer = null;
+      let damage = 0;
+      let multiplier = null;
+      let critical = null;
+      let criticalRoll = null;
+      let destroyed = false;
+      let layerDestroyed = false;
+      let targetAfter = targetBefore;
+      if (geometry.blocker && roll <= geometry.cover) {
+        outcome = "blocked";
+        hitUnitId = geometry.blocker.id;
+        const simulatedBlocker = simulatedBlockers.get(hitUnitId) || cloneCombatant(geometry.blocker);
+        simulatedBlockers.set(hitUnitId, simulatedBlocker);
+        hitLayer = activeLayer(simulatedBlocker);
+        multiplier = effectiveness(weapon, hitLayer);
+        damage = Math.max(1, Math.floor(weapon.damage * multiplier));
+        simulatedDamage(simulatedBlocker, damage, hitLayer);
+        destroyed = simulatedBlocker.integrity === 0;
+        if (destroyed) destroyedBlockerIds.add(hitUnitId);
+      } else if (roll <= geometry.cover + chance) {
+        outcome = "hit";
+        hitUnitId = target.id;
+        hitLayer = activeLayer(simulatedTarget);
+        multiplier = effectiveness(weapon, hitLayer);
+        damage = Math.max(1, Math.floor(weapon.damage * multiplier));
+        const beforeLayer = simulatedTarget[hitLayer];
+        simulatedDamage(simulatedTarget, damage, hitLayer);
+        layerDestroyed = beforeLayer > 0 && simulatedTarget[hitLayer] === 0 && hitLayer !== "integrity";
+        destroyed = simulatedTarget.integrity === 0;
+        if (hitLayer === "integrity" && damage > 0) {
+          const planned = plannedCritical(attacker, weapon, rollD100, random, shot);
+          criticalRoll = planned.roll;
+          critical = planned.critical;
+        }
+        targetAfter = snapshot(simulatedTarget);
+      }
+      const endpoint = outcome === "hit" ? { ...target.position } : outcome === "blocked" ? { ...geometry.blocker.position } : missEndpoint(target, random);
+      const distance = hexDistance(attacker.position, endpoint);
+      const speed = weapon.visual?.speedHexesPerSecond || 1;
+      const duration = Math.max(120, Math.round(distance / speed * 1000));
+      const launchTime = weaponLaunchTime + (shot - 1) * (weapon.visual?.launchIntervalMs || 0);
+      const arrivalTime = launchTime + duration;
+      steps.push({ index: steps.length, slotId: weapon.id, weaponId: weapon.weaponId, weaponName: weapon.name, weaponClass: weapon.weaponClass, delivery: weapon.delivery, visual: weapon.visual, shot, roll, chance, cover: geometry.cover, endpointCover: geometry.endpointCover, outcome, hitUnitId, layer: hitLayer, multiplier, damage, criticalRoll, critical: critical ? { ...critical, round: state.roundNumber } : null, layerDestroyed, destroyed, targetBefore, targetAfter, endpoint, launchTime, arrivalTime, duration });
+      weaponPlan.shotCount++;
+      weaponEndTime = Math.max(weaponEndTime, arrivalTime);
+    }
+    elapsedMs = weaponEndTime;
+  }
+  const plan = deepFreeze({ id: `${state.scenario.id}:${state.roundNumber}:${attacker.id}:${target.id}:${state.sequence || 0}`, attackerId: attacker.id, targetId: target.id, round: state.roundNumber, selection: [...selection], energyRequired: weapons.reduce((total, item) => total + item.energyCost, 0), weapons, steps, duration: Math.max(0, ...steps.map(step => step.arrivalTime)), predictedDestruction: simulatedTarget.integrity === 0, targetAfter: snapshot(simulatedTarget) });
+  attacker.salvoCommitted = true;
+  return plan;
+}
+
+export function attackAnimationPlan(state, targetId, selection, rollD100, random) {
+  return planAttack(state, targetId, selection, rollD100, random)?.steps || [];
 }
 
 function log(state, message, tone = "neutral") {
@@ -168,55 +307,50 @@ function destroyTarget(state, target) {
   if (result.winner) log(state, `Победа флотилии ${result.winner}.`, "system");
 }
 
-export function resolveAttack(state, targetId, selection, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random) {
-  if (state.stage !== "attack" || state.winner) return false;
-  const preview = attackPreview(state, targetId, selection);
-  const { attacker, target } = preview;
-  if (!preview.included.length) return false;
-  const auxiliaryCost = preview.included.filter(weapon => weapon.role === "auxiliary").reduce((total, weapon) => total + weapon.energyCost, 0);
-  if (attacker.reactor && attacker.reactor.currentEnergy < auxiliaryCost) return false;
-  if (attacker.reactor) attacker.reactor.currentEnergy -= auxiliaryCost;
-  if (preview.included.some(weapon => weapon.role === "primary")) attacker.primaryReady = false;
-  if (preview.included.some(weapon => weapon.role === "auxiliary")) attacker.auxiliaryReady = false;
-  log(state, `${attacker.name} объявляет залп по цели ${target.name}.`, attacker.sideId);
-  const unused = [...preview.included];
-  while (unused.length && state.units.includes(target)) {
-    const layer = activeLayer(target);
-    unused.sort((a, b) => MULTIPLIERS[b.weaponClass][layer] - MULTIPLIERS[a.weaponClass][layer] || a.id.localeCompare(b.id));
-    const weapon = unused.shift();
-    log(state, `${weapon.name}: выбран против слоя «${layer}».`, attacker.sideId);
-    for (let shot = 1; shot <= weapon.shots && state.units.includes(target); shot++) {
-      const geometry = attackGeometry(state, targetId, weapon);
-      const chance = hitChance(weapon, target, geometry.cover + geometry.endpointCover);
-      const roll = rollD100();
-      if (geometry.blocker && roll <= geometry.cover) {
-        const blocker = unitById(state, geometry.blocker.id);
-        if (blocker) {
-          const layer = activeLayer(blocker);
-          blocker[layer] = Math.max(0, blocker[layer] - Math.max(1, Math.floor(weapon.damage * MULTIPLIERS[weapon.weaponClass][layer])));
-          if (blocker.integrity === 0) destroyTarget(state, blocker);
-        }
-        continue;
-      }
-      if (roll > geometry.cover + chance) { log(state, `${weapon.name}, выстрел ${shot}: ${roll}/${chance}, промах.`); continue; }
-      const currentLayer = activeLayer(target);
-      const multiplier = MULTIPLIERS[weapon.weaponClass][currentLayer];
-      const damage = Math.max(1, Math.floor(weapon.damage * multiplier));
-      const before = target[currentLayer];
-      applyDamage(state, target, damage, `weapon:${weapon.id}`, currentLayer);
-      log(state, `${weapon.name} [${weapon.weaponClass}], выстрел ${shot}: ${roll}/${chance}, попадание; ${weapon.damage} × ${multiplier} = ${damage} урона по ${currentLayer}.`, attacker.sideId);
-      if (before > 0 && target[currentLayer] === 0 && currentLayer !== "integrity") log(state, `${target.name}: слой «${currentLayer}» разрушен.`, "danger");
-      if (currentLayer === "integrity" && damage > 0) {
-        const critRoll = rollD100();
-        if (critRoll <= weapon.critChance) {
-          const pool = CRITICALS[weapon.weaponClass];
-          const type = pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
-          target.criticals.push({ id: globalThis.crypto?.randomUUID?.() || `critical-${Date.now()}-${shot}`, type, weaponClass: weapon.weaponClass, attackerId: attacker.id, weaponId: weapon.id, round: state.roundNumber });
-          log(state, `Крит ${critRoll}/${weapon.critChance}: ${type}.`, "danger");
-        } else log(state, `Проверка крита ${critRoll}/${weapon.critChance}: без крита.`);
-      }
-      if (target.integrity === 0) destroyTarget(state, target);
+function progressFor(state, plan) {
+  if (!state.attackApplication || state.attackApplication.planId !== plan.id) state.attackApplication = { planId: plan.id, nextStep: 0, startedSlots: [] };
+  return state.attackApplication;
+}
+
+export function applyAttackStep(state, plan, stepIndex) {
+  const step = plan?.steps?.[stepIndex];
+  if (!plan || plan.round !== state.roundNumber || plan.attackerId !== activeUnit(state)?.id) return { status: "invalid" };
+  const progress = progressFor(state, plan);
+  if (!step || progress.nextStep !== stepIndex) return { status: "invalid" };
+  const attacker = unitById(state, plan.attackerId);
+  const target = unitById(state, plan.targetId);
+  if (!attacker || (!target && step.hitUnitId === plan.targetId)) return { status: "stopped" };
+  if (!progress.startedSlots.includes(step.slotId)) {
+    const weapon = attacker.weapons.find(item => item.id === step.slotId);
+    if (!weapon || weapon.firedThisRound || weapon.cooldownRemaining > 0 || (weapon.energyCost > 0 && (!attacker.reactor || attacker.reactor.currentEnergy < weapon.energyCost))) return { status: "invalid" };
+    if (weapon.energyCost > 0) attacker.reactor.currentEnergy -= weapon.energyCost;
+    beginWeaponCooldown(weapon);
+    progress.startedSlots.push(step.slotId);
+    log(state, `${weapon.name}: открыт огонь.`, attacker.sideId);
+  }
+  const hitUnit = step.hitUnitId ? unitById(state, step.hitUnitId) : null;
+  if (step.outcome === "miss") log(state, `${step.weaponName}, выстрел ${step.shot}: ${step.roll}/${step.chance}, промах.`);
+  else if (hitUnit) {
+    applyDamage(state, hitUnit, step.damage, `weapon:${step.slotId}`, step.layer);
+    log(state, `${step.weaponName} [${step.weaponClass}], выстрел ${step.shot}: ${step.roll}/${step.chance}, попадание; ${step.damage} урона по ${step.layer}.`, attacker.sideId);
+    if (step.critical) {
+      hitUnit.criticals.push({ ...step.critical });
+      log(state, `Крит ${step.criticalRoll}: ${step.critical.type}.`, "danger");
     }
+    if (step.layerDestroyed) log(state, `${hitUnit.name}: слой «${step.layer}» разрушен.`, "danger");
+    if (hitUnit.integrity === 0) destroyTarget(state, hitUnit);
+  }
+  progress.nextStep++;
+  return { status: "applied", step, destroyed: step.destroyed };
+}
+
+export function resolveAttack(state, targetId, selection, rollD100, random) {
+  const plan = planAttack(state, targetId, selection, rollD100, random);
+  if (!plan) return false;
+  log(state, `${activeUnit(state).name} объявляет залп по цели ${unitById(state, targetId).name}.`, activeUnit(state).sideId);
+  for (let index = 0; index < plan.steps.length; index++) {
+    const result = applyAttackStep(state, plan, index);
+    if (result.status !== "applied") break;
   }
   return true;
 }

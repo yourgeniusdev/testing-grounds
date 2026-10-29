@@ -62,11 +62,38 @@ export function createScenario() {
   return { id: "movement-playtest-1", bounds: { minCol: -6, maxCol: 6, minRow: -5, maxRow: 5 }, units, contents };
 }
 
+export function initializeWeaponState(weapon, fallbackSlotOrder = 0) {
+  const runtimeWeapon = { ...weapon, weaponId: weapon.weaponId ?? weapon.catalogWeaponId };
+  delete runtimeWeapon.ready;
+  delete runtimeWeapon.catalogWeaponId;
+  return {
+    ...runtimeWeapon,
+    slotOrder: Number.isInteger(weapon.slotOrder) ? weapon.slotOrder : fallbackSlotOrder,
+    firedThisRound: false,
+    cooldownRemaining: 0
+  };
+}
+
+export function beginWeaponCooldown(weapon) {
+  weapon.firedThisRound = true;
+  weapon.cooldownRemaining = weapon.cooldownRounds || 0;
+}
+
+export function advanceWeaponRound(weapon) {
+  if (weapon.firedThisRound) weapon.firedThisRound = false;
+  else if (weapon.cooldownRemaining > 0) weapon.cooldownRemaining--;
+  return weapon;
+}
+
+export function resetUnitWeaponsForNewRound(unit) {
+  for (const weapon of unit.weapons) advanceWeaponRound(weapon);
+}
+
 export function createBattleState() {
   const scenario = createScenario();
   const randomKeys = Object.fromEntries(scenario.units.map((unit, index) => [unit.id, ((index * 37 + 17) % 97) / 97]));
   const initiativeOrder = [...scenario.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || randomKeys[a.id] - randomKeys[b.id]).map(unit => unit.id);
-  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(weapon => ({ ...weapon })), criticals: [], primaryReady: true, auxiliaryReady: true, hasActivated: false, hasWaited: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
+  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(initializeWeaponState), criticals: [], hasActivated: false, hasWaited: false, salvoCommitted: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
   return { scenario, units, roundNumber: 1, phase: "activation", lifecycle: "DeploymentLeft", stage: "system", initiativeOrder: [], activeUnitId: units[0]?.id || null, winner: null, log: [], events: [], sequence: 0, rng: Math.random, deployment: { left: false, right: false } };
 }
 
@@ -331,6 +358,7 @@ export function beginActivation(state) {
   unit.evasionLocked = false;
   unit.movementEvasion = 0;
   unit.evasiveManeuver = false;
+  unit.salvoCommitted = false;
   if (unit.reactor) unit.reactor.currentEnergy = Math.min(unit.reactor.capacity, unit.reactor.currentEnergy + unit.reactor.rechargeRate);
   state.stage = "system";
   state.lifecycle = "SystemActions";
@@ -393,6 +421,7 @@ export function skipMovement(state) {
 
 export function endActivation(state) {
   const unit = activeUnit(state);
+  unit.salvoCommitted = false;
   unit.hasActivated = true;
   const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated);
   if (nextId) {
@@ -404,8 +433,7 @@ export function endActivation(state) {
   for (const candidate of state.units) {
     candidate.hasActivated = false;
     candidate.hasWaited = false;
-    candidate.primaryReady = true;
-    candidate.auxiliaryReady = true;
+    resetUnitWeaponsForNewRound(candidate);
   }
   state.initiativeOrder = [...state.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || a.id.localeCompare(b.id)).map(candidate => candidate.id);
   state.activeUnitId = state.initiativeOrder[0];

@@ -20,11 +20,11 @@ export const CAPITAL_HULLS = deepFreeze({
       { id: "reactor", type: "reactor", required: true }
     ],
     hardpoints: [
-      { id: "battery-left", role: "primary", mount: "battery-left", type: "battery" },
-      { id: "battery-right", role: "primary", mount: "battery-right", type: "battery" },
-      { id: "plasma-turret", role: "auxiliary", mount: "turret", type: "turret" }
+      { id: "battery-left", mount: "battery-left", type: "battery" },
+      { id: "battery-right", mount: "battery-right", type: "battery" },
+      { id: "forward-emitter", mount: "forward", type: "forward", orientation: "fore" }
     ],
-    future: { massUnits: 64 } // Будущая масса корпуса без оснащения.
+    future: { massUnits: 64 }
   },
   swiftFrigate: {
     id: "swiftFrigate",
@@ -45,10 +45,10 @@ export const CAPITAL_HULLS = deepFreeze({
       { id: "reactor", type: "reactor", required: true }
     ],
     hardpoints: [
-      { id: "kinetic-turret", role: "primary", mount: "turret", type: "turret" },
-      { id: "pulse-turret", role: "auxiliary", mount: "turret", type: "turret" }
+      { id: "autocannon-turret", mount: "turret", type: "turret" },
+      { id: "laser-turret", mount: "turret", type: "turret" }
     ],
-    future: { massUnits: 31 } // Будущая масса корпуса без оснащения.
+    future: { massUnits: 31 }
   },
   bastionBattleship: {
     id: "bastionBattleship",
@@ -69,12 +69,12 @@ export const CAPITAL_HULLS = deepFreeze({
       { id: "reactor", type: "reactor", required: true }
     ],
     hardpoints: [
-      { id: "line", role: "primary", mount: "line", type: "spinal" },
-      { id: "battery-left", role: "primary", mount: "battery-left", type: "battery" },
-      { id: "battery-right", role: "primary", mount: "battery-right", type: "battery" },
-      { id: "pulse-turret", role: "auxiliary", mount: "turret", type: "turret" }
+      { id: "line", mount: "line", type: "spinal" },
+      { id: "battery-left", mount: "battery-left", type: "battery" },
+      { id: "battery-right", mount: "battery-right", type: "battery" },
+      { id: "plasma-turret", mount: "turret", type: "turret" }
     ],
-    future: { massUnits: 135 } // Будущая масса корпуса без оснащения.
+    future: { massUnits: 135 }
   },
   raptorDestroyer: {
     id: "raptorDestroyer",
@@ -95,9 +95,9 @@ export const CAPITAL_HULLS = deepFreeze({
       { id: "reactor", type: "reactor", required: true }
     ],
     hardpoints: [
-      { id: "battery-right", role: "primary", mount: "battery-right", type: "battery" },
-      { id: "beam-turret", role: "auxiliary", mount: "turret", type: "turret" }
+      { id: "battery-right", mount: "battery-right", type: "battery" },
+      { id: "impulse-turret", mount: "turret", type: "turret" }
     ],
-    future: { massUnits: 53 } // Будущая масса корпуса без оснащения.
+    future: { massUnits: 53 }
   }
 });

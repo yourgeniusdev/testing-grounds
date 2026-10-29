@@ -1,12 +1,12 @@
 import { ARROWS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, inside, key, movementEvasion, planRoutes, resolveHazardConsequences, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
 import { headingAngle, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
-import { attackAnimationPlan, attackArc, attackPreview, availableAttackTargets, resolveAttack, skipAttack } from "./battle.js";
+import { applyAttackStep, attackArc, attackPreview, availableAttackTargets, planAttack, skipAttack } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
-const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "stageLabel", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "maneuverPopup", "maneuverBadge", "maneuverDetails", "attackPopup", "unitClassBadge", "unitSummary", "weaponSummary", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "attackWeaponActions", "actionTitle", "routeBadge", "routeDetails", "headingPicker", "headingButtons", "confirmManeuverButton", "cancelManeuverButton", "confirmButton", "cancelButton", "combatLog", "clearLogButton"];
+const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "stageLabel", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "maneuverPopup", "maneuverBadge", "maneuverDetails", "attackPopup", "unitClassBadge", "unitSummary", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "attackWeaponActions", "actionTitle", "routeBadge", "routeDetails", "headingPicker", "headingButtons", "confirmManeuverButton", "cancelManeuverButton", "confirmButton", "cancelButton", "combatLog", "clearLogButton"];
 const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 const stageNames = { system: "СИСТЕМЫ", movement: "МАНЁВР", attack: "АТАКА", deployment: "РАССТАНОВКА" };
 const entityImages = new Map();
@@ -100,10 +100,9 @@ function renderHeader() {
   el.stageLabel.textContent = deploying ? "РАССТАНОВКА" : stageNames[state.stage];
   const attacking = state.stage === "attack";
   el.confirmDeploymentButton.hidden = !deploying;
-  el.confirmDeploymentButton.disabled = false;
-  el.routePolicyButton.hidden = attacking || deploying;
-  el.evasionButton.hidden = attacking;
-  el.evasionButton.disabled = isSquadron || attacking || Boolean(ui.animation) || unit.maneuver < 1;
+  el.confirmDeploymentButton.disabled = Boolean(ui.animation);
+  el.routePolicyButton.disabled = attacking || deploying || Boolean(ui.animation);
+  el.evasionButton.disabled = isSquadron || attacking || deploying || Boolean(ui.animation) || unit.maneuver < 1;
   el.evasionButton.classList.toggle("active", unit.evasiveManeuver);
 }
 
@@ -115,7 +114,7 @@ function renderInitiative() {
     const typeLabel = unit.kind === "capital" ? "Капитальный корабль" : "Эскадрилья";
     const energy = unit.reactor ? `Энергия ${unit.reactor.currentEnergy}/${unit.reactor.capacity}` : `Состав ${unit.stack} аппаратов`;
     const tooltip = `${unit.name} · ${typeLabel} · ${unit.sideId === "player" ? "Союзный" : "Вражеский"}\nСостояние: ${stateLabel}\nЩит ${unit.shield}/${unit.maxShield} · Броня ${unit.armor}/${unit.maxArmor} · Целостность ${unit.integrity}/${unit.maxIntegrity}\nСкорость ${unit.currentSpeed} · ${energy}`;
-    const subtitle = unit.kind === "squadron" ? `Звено истребителей «${unit.squadronModelName}»` : `${stateLabel} · INI ${unit.initiative}`;
+    const subtitle = unit.kind === "squadron" ? `${unit.craftType === "bomber" ? "Звено бомбардировщиков" : "Звено истребителей"} «${unit.squadronModelName}»` : `${stateLabel} · INI ${unit.initiative}`;
     return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}" title="${tooltip}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${subtitle}</small></span></article>`;
   }).join("");
 }
@@ -138,15 +137,23 @@ function renderUnitSummary() {
   el.unitSummary.innerHTML = `<div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")} ${healthBar("Броня", unit.armor, unit.maxArmor, "armor")} ${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}<div class="stat-grid"><div><span>Энергия</span><b>${unit.reactor ? `${unit.reactor.currentEnergy}/${unit.reactor.capacity}` : "—"}</b></div><div><span>Уклонение</span><b>${evasion}%</b></div><div><span>Криты</span><b>${unit.criticals.length}</b></div></div></div>`;
 }
 
-function weaponMarkup(weapon) {
-  return `<article><b>${weapon.name}</b><span>${weapon.mount} · ${weapon.weaponClass}</span><span>${weapon.accuracy}% · ${weapon.shots}×${weapon.damage} · дальность ${weapon.effectiveRange}/${weapon.maxRange}${weapon.role === "auxiliary" ? ` · ${weapon.energyCost} энергии` : ""}</span></article>`;
+const deliveryNames = { beam: "луч", projectile: "снаряд", missile: "ракета", torpedo: "торпеда" };
+
+function effectiveShots(unit, weapon) {
+  return weapon.mount === "squadronWeapon" ? weapon.shots * unit.stack : weapon.shots;
 }
 
 function renderWeaponSummary() {
   const unit = activeUnit(state);
-  el.weaponSummary.innerHTML = "";
-  const readyWeapons = unit.weapons.filter(weapon => weapon.role === "primary" ? unit.primaryReady : unit.auxiliaryReady && unit.reactor?.currentEnergy >= weapon.energyCost);
-  el.attackWeaponActions.innerHTML = state.stage === "attack" ? readyWeapons.map(weapon => `<button type="button" class="action-slot weapon-action ${ui.selectedWeapons.has(weapon.id) ? "active" : ""}" data-weapon-id="${weapon.id}" aria-label="${weapon.name}" title="${weapon.name}"><span class="action-icon">${weapon.role === "primary" ? "◈" : "✦"}</span><span class="action-tooltip"><b>${weapon.name}</b><small>${weapon.role === "primary" ? "Основное орудие" : `Вспомогательное орудие · ${weapon.energyCost} энергии`}<br>${weapon.weaponClass} · ${weapon.mount}<br>${weapon.accuracy}% точность · ${weapon.shots}×${weapon.damage} урон<br>${weapon.effectiveRange}/${weapon.maxRange} гекс. · крит ${weapon.critChance}%</small></span></button>`).join("") : "";
+  const attacking = state.stage === "attack";
+  el.attackWeaponActions.innerHTML = unit.weapons.map(weapon => {
+    const cooldown = weapon.cooldownRemaining > 0;
+    const unavailable = !attacking || Boolean(ui.animation) || cooldown || weapon.firedThisRound || (weapon.energyCost > 0 && !unit.reactor);
+    const status = !attacking ? "Доступно в фазе атаки" : cooldown ? `Перезарядка: ${weapon.cooldownRemaining}` : weapon.firedThisRound ? "Уже стреляло в этом раунде" : weapon.energyCost > 0 && !unit.reactor ? "Требуется реактор" : "Готово";
+    const aa = unit.kind === "capital" && weapon.targetKinds.includes("squadron") ? " · ПВО" : "";
+    const icon = cooldown ? weapon.cooldownRemaining : weapon.visual.projectile === "beam" ? "━" : weapon.visual.projectile === "torpedo" ? "◆" : weapon.visual.projectile === "missile" ? "➤" : "•";
+    return `<button type="button" class="action-slot weapon-action ${ui.selectedWeapons.has(weapon.id) ? "active" : ""} ${cooldown ? "cooldown" : ""}" data-weapon-id="${weapon.id}" aria-label="${weapon.name}" title="${weapon.name}" ${unavailable ? "disabled" : ""}><span class="action-icon">${icon}</span><span class="action-tooltip"><b>${weapon.name}</b><small>${deliveryNames[weapon.delivery]} · ${weapon.weaponClass} · ${weapon.mount}${aa}<br>${weapon.accuracy}% точность · ${effectiveShots(unit, weapon)}×${weapon.damage} урон<br>${weapon.effectiveRange}/${weapon.maxRange} гекс. · крит ${weapon.critChance}%${weapon.energyCost ? `<br>${weapon.energyCost} энергии` : ""}<br>${status}</small></span></button>`;
+  }).join("");
   el.attackWeaponActions.querySelectorAll("[data-weapon-id]").forEach(button => {
     button.addEventListener("mouseenter", () => { ui.hoveredWeapon = button.dataset.weaponId; draw(); });
     button.addEventListener("mouseleave", () => { ui.hoveredWeapon = null; draw(); });
@@ -206,9 +213,11 @@ function renderRouteInspector() {
     el.cancelButton.disabled = false;
       if (!selected) return;
       const preview = attackPreview(state, selected.targetId, ui.selectedWeapons);
-    el.routeBadge.textContent = preview.included.length ? "ГОТОВ" : "НЕДОСТУПНО";
-      el.routeDetails.innerHTML = `<div class="attack-vitals">${healthBar("Щит", preview.target.shield, preview.target.maxShield, "shield", preview.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", preview.target.armor, preview.target.maxArmor, "armor", preview.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", preview.target.integrity, preview.target.maxIntegrity, "integrity", preview.layer === "integrity" ? preview.potentialDamage : 0)}</div><div class="maneuver-metrics"><span><b>${preview.included.length}</b> ОРУД.</span><span><b>${preview.shots}</b> ВЫСТР.</span><span><b>${preview.potentialDamage}</b> УРОН</span></div><div class="attack-weapons">${preview.ordered.map(weapon => `<span><strong>${weapon.name}</strong><small>${weapon.weaponClass} · ${weapon.shots}×${weapon.damage} · ${Math.max(5, Math.min(95, weapon.accuracy - ((preview.target.baseEvasion || 0) + preview.target.movementEvasion)))}% попадание · крит ${weapon.critChance}%</small></span>`).join("")}</div><p class="attack-summary">Слой: <b>${preview.layer}</b> · уклонение цели: <b>${preview.target.baseEvasion + preview.target.movementEvasion}%</b></p>${preview.target.criticals.length ? `<p class="route-warning">Криты: ${preview.target.criticals.map(critical => critical.type).join(", ")}</p>` : ""}${preview.excluded.length ? `<p class="route-warning">Исключено: ${preview.excluded.length}</p>` : ""}`;
-     el.confirmButton.disabled = !preview.included.length || preview.included.length !== ui.selectedWeapons.size;
+    el.routeBadge.textContent = preview.canConfirm ? "ГОТОВ" : "НЕДОСТУПНО";
+      const exclusions = preview.excluded.map(weapon => `<li>${weapon.name}: ${weapon.reason}</li>`).join("");
+      const energy = preview.energyRequired ? `<p class="attack-summary">Энергия: <b>${preview.energyRequired}/${preview.energyAvailable}</b></p>` : "";
+      el.routeDetails.innerHTML = `<div class="attack-vitals">${healthBar("Щит", preview.target.shield, preview.target.maxShield, "shield", preview.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", preview.target.armor, preview.target.maxArmor, "armor", preview.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", preview.target.integrity, preview.target.maxIntegrity, "integrity", preview.layer === "integrity" ? preview.potentialDamage : 0)}</div><div class="maneuver-metrics"><span><b>${preview.included.length}</b> ОРУД.</span><span><b>${preview.shots}</b> ВЫСТР.</span><span><b>${preview.potentialDamage}</b> УРОН</span></div><div class="attack-weapons">${preview.ordered.map(weapon => `<span><strong>${weapon.name}</strong><small>${weapon.weaponClass} · ${weapon.shots}×${weapon.damage} · ${preview.hitChances[weapon.id]}% попадание · крит ${weapon.critChance}%</small></span>`).join("")}</div><p class="attack-summary">Слой: <b>${preview.layer}</b> · уклонение цели: <b>${preview.target.baseEvasion + preview.target.movementEvasion}%</b></p>${energy}${preview.target.criticals.length ? `<p class="route-warning">Криты: ${preview.target.criticals.map(critical => critical.type).join(", ")}</p>` : ""}${exclusions ? `<ul class="route-warning attack-exclusions">${exclusions}</ul>` : ""}${!preview.enoughEnergy ? '<p class="route-warning">Недостаточно энергии для залпа</p>' : ""}${!preview.salvoAvailable ? '<p class="route-warning">Залп уже выполнен в этой активации</p>' : ""}`;
+     el.confirmButton.disabled = !preview.canConfirm;
     positionAttackPopup();
     return;
   }
@@ -345,34 +354,42 @@ function drawRoute() {
 function drawAttackAnimation() {
   const animation = ui.animation;
   const elapsed = performance.now() - animation.started;
-  const step = animation.plan.find(item => elapsed >= item.delay && elapsed <= item.delay + item.duration) || animation.plan[animation.plan.length - 1];
-  if (!step) return;
-  const progress = Math.max(0, Math.min(1, (elapsed - step.delay) / step.duration));
   const from = axialToPixel(animation.from);
-  const to = axialToPixel(animation.to);
-  ctx.save();
-  if (step.weaponClass === "energy") {
-    ctx.strokeStyle = `rgba(102,228,255,${Math.sin(progress * Math.PI)})`;
-    ctx.lineWidth = 3;
-    ctx.shadowColor = "#66e4ff";
-    ctx.shadowBlur = 18;
-    ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
-  } else {
-    const shotCount = Math.min(step.shots, 6);
-    for (let shot = 0; shot < shotCount; shot++) {
-      const shotProgress = Math.max(0, Math.min(1, progress * 1.35 - shot * .08));
-      const x = from.x + (to.x - from.x) * shotProgress;
-      const y = from.y + (to.y - from.y) * shotProgress;
-      ctx.fillStyle = step.weaponClass === "explosive" ? "#ff9e5e" : "#f4c861";
-      ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10;
-      ctx.beginPath(); ctx.arc(x, y, step.weaponClass === "explosive" ? 4 : 2, 0, Math.PI * 2); ctx.fill();
+  for (const step of animation.plan.steps.filter(candidate => elapsed >= candidate.launchTime && elapsed <= candidate.arrivalTime + 160)) {
+    const progress = Math.max(0, Math.min(1, (elapsed - step.launchTime) / step.duration));
+    const to = axialToPixel(step.endpoint);
+    const color = step.visual.color;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = step.visual.projectile === "torpedo" ? 18 : 12;
+    if (step.visual.projectile === "beam") {
+      ctx.globalAlpha = Math.max(.12, Math.sin(progress * Math.PI));
+      ctx.lineWidth = Math.max(1, step.visual.size * ui.geometry.size);
+      ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+    } else if (progress < 1) {
+      const x = from.x + (to.x - from.x) * progress;
+      const y = from.y + (to.y - from.y) * progress;
+      if (step.visual.trail !== "none") {
+        const trail = step.visual.trail === "smoke" ? .22 : .1;
+        ctx.globalAlpha = step.visual.trail === "smoke" ? .38 : .7;
+        ctx.lineWidth = Math.max(1, step.visual.size * ui.geometry.size * .6);
+        ctx.beginPath(); ctx.moveTo(from.x + (to.x - from.x) * Math.max(0, progress - trail), from.y + (to.y - from.y) * Math.max(0, progress - trail)); ctx.lineTo(x, y); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      ctx.beginPath(); ctx.arc(x, y, Math.max(1.5, step.visual.size * ui.geometry.size), 0, Math.PI * 2); ctx.fill();
     }
-    if (step.weaponClass === "explosive" && progress > .82) {
-      ctx.strokeStyle = `rgba(255,158,94,${1 - progress})`; ctx.lineWidth = 5;
-      ctx.beginPath(); ctx.arc(to.x, to.y, 8 + progress * 18, 0, Math.PI * 2); ctx.stroke();
+      if (progress >= 1 && step.visual.impact !== "none") {
+      const impactProgress = Math.min(1, (elapsed - step.arrivalTime) / 160);
+      const impactScale = step.outcome === "miss" ? .45 : 1;
+      const radius = step.visual.impactRadius * impactScale * ui.geometry.size * (1 + impactProgress);
+      ctx.globalAlpha = 1 - impactProgress;
+      ctx.lineWidth = step.visual.impact === "largeExplosion" ? 4 : 2;
+      ctx.beginPath(); ctx.arc(to.x, to.y, radius, 0, Math.PI * 2); ctx.stroke();
     }
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 function drawAnimatedEntity() {
@@ -520,7 +537,7 @@ canvas.addEventListener("pointermove", event => {
   const contents = contentsAt(state, position);
   if (state.stage === "attack" && occupant && occupant.sideId !== activeUnit(state).sideId) {
     const preview = attackPreview(state, occupant.id, ui.selectedWeapons);
-    const weapons = preview.ordered.map(weapon => `${weapon.name}: ${weapon.shots}×${weapon.damage}, ${Math.max(5, Math.min(95, weapon.accuracy - ((occupant.baseEvasion || 0) + occupant.movementEvasion)))}%`).join("<br>");
+    const weapons = preview.ordered.map(weapon => `${weapon.name}: ${weapon.shots}×${weapon.damage}, ${preview.hitChances[weapon.id]}%`).join("<br>");
     const selectionHint = ui.selectedWeapons.size ? "" : "<br><em>Сначала выберите плитки орудий</em>";
     const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor", preview.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview.layer === "integrity" ? preview.potentialDamage : 0)}</div>`;
     el.tooltip.innerHTML = preview.included.length ? `<b>${occupant.name}</b>${vitals}<em>${weapons}</em><br>До ${preview.potentialDamage} урона по слою «${preview.layer}» · ${preview.shots} выстр.` : `<b>${occupant.name}</b>${vitals}${selectionHint || "<br><em>Недопустимая цель: вне сектора или дальности</em>"}`;
@@ -545,13 +562,13 @@ canvas.addEventListener("pointermove", event => {
 canvas.addEventListener("pointerleave", () => { ui.hovered = null; el.tooltip.hidden = true; el.coordinates.textContent = "HEX —"; draw(); });
 canvas.addEventListener("click", event => { if (!ui.animation) selectHex(pointerHex(event)); });
 
-el.routePolicyButton.addEventListener("click", () => { ui.policy = ui.policy === "safe" ? "risky" : "safe"; refresh(); });
+el.routePolicyButton.addEventListener("click", () => { if (ui.animation) return; ui.policy = ui.policy === "safe" ? "risky" : "safe"; refresh(); });
 el.startBattleButton.addEventListener("click", () => { el.menuScreen.hidden = true; el.battleScreen.hidden = false; resetBattle(); requestAnimationFrame(resizeCanvas); });
-el.menuButton.addEventListener("click", () => { el.battleScreen.hidden = true; el.menuScreen.hidden = false; });
+el.menuButton.addEventListener("click", () => { if (ui.animation) return; el.battleScreen.hidden = true; el.menuScreen.hidden = false; });
 el.rulesButton.addEventListener("click", () => el.rulesDialog.showModal());
 el.closeRules.addEventListener("click", () => el.rulesDialog.close());
 el.dialogOkay.addEventListener("click", () => el.rulesDialog.close());
-el.resetButton.addEventListener("click", resetBattle);
+el.resetButton.addEventListener("click", () => { if (!ui.animation) resetBattle(); });
 el.confirmDeploymentButton.addEventListener("click", () => {
   const side = state.lifecycle === "DeploymentLeft" ? "azure" : "crimson";
   if (confirmDeployment(state, side)) { ui.selected = null; if (side === "azure") state.units.forEach(unit => { unit.deployed = true; }); else beginActivation(state); refresh(); }
@@ -559,39 +576,47 @@ el.confirmDeploymentButton.addEventListener("click", () => {
 
 el.evasionButton.addEventListener("click", () => { if (useEvasiveManeuver(state)) refresh(); });
 el.waitButton.addEventListener("click", () => { const name = activeUnit(state).name; if (waitActiveUnit(state)) { addLog(`${name} ждёт и переносится в конец очереди.`, "system"); addLog(`${activeUnit(state).name} начинает активацию.`, activeUnit(state).sideId); refresh(); } });
-el.endActivationButton.addEventListener("click", () => { const name = activeUnit(state).name; if (state.stage === "attack") skipAttack(state); const result = endActivation(state); addLog(`${name} завершает активацию.`, "system"); if (result.newRound) addLog(`Начинается раунд ${state.roundNumber}.`, "system"); addLog(`${activeUnit(state).name} начинает активацию.`, activeUnit(state).sideId); refresh(); });
+el.endActivationButton.addEventListener("click", () => { if (ui.animation) return; const name = activeUnit(state).name; if (state.stage === "attack") skipAttack(state); const result = endActivation(state); addLog(`${name} завершает активацию.`, "system"); if (result.newRound) addLog(`Начинается раунд ${state.roundNumber}.`, "system"); addLog(`${activeUnit(state).name} начинает активацию.`, activeUnit(state).sideId); refresh(); });
 
 el.confirmManeuverButton.addEventListener("click", startMovement);
 el.cancelManeuverButton.addEventListener("click", () => { ui.selected = null; renderRouteInspector(); draw(); });
 el.confirmButton.addEventListener("click", () => {
   if (!ui.selected || ui.animation) return;
   const target = unitById(state, ui.selected.targetId);
-  const plan = attackAnimationPlan(state, target.id, ui.selectedWeapons);
-   if (!plan.length) return;
-   const targetId = target.id;
-   const selection = new Set(ui.selectedWeapons);
-  const duration = Math.max(...plan.map(step => step.delay + step.duration));
+  const plan = planAttack(state, target.id, ui.selectedWeapons);
+  if (!plan?.steps.length) return;
   el.attackPopup.hidden = true;
-  ui.animation = { kind: "attack", plan, from: { ...activeUnit(state).position }, to: { ...target.position }, started: performance.now() };
+  const started = performance.now();
+  ui.animation = { kind: "attack", plan, from: { ...activeUnit(state).position }, stepIndex: 0, started };
   document.body.classList.add("animating");
-  el.modeLabel.textContent = "ВЕДЕНИЕ ОГНЯ";
-  const frame = () => {
-    if (!ui.animation || ui.animation.kind !== "attack") return;
-    if (performance.now() - ui.animation.started < duration) { draw(); requestAnimationFrame(frame); return; }
+  renderAll();
+  const frame = now => {
+    const animation = ui.animation;
+    if (!animation || animation.kind !== "attack") return;
+    const elapsed = now - animation.started;
+    while (animation.stepIndex < animation.plan.steps.length && elapsed >= animation.plan.steps[animation.stepIndex].arrivalTime) {
+      const result = applyAttackStep(state, animation.plan, animation.stepIndex);
+      if (result.status !== "applied") { ui.animation = null; document.body.classList.remove("animating"); refresh(); return; }
+      animation.stepIndex++;
+      renderUnitSummary();
+      renderLog();
+    }
+    draw();
+    if (animation.stepIndex < animation.plan.steps.length) { requestAnimationFrame(frame); return; }
     ui.animation = null;
     document.body.classList.remove("animating");
-     if (!resolveAttack(state, targetId, selection)) { refresh(); return; }
     if (!state.winner) {
       const result = endActivation(state);
       if (result.newRound) addLog(`Начинается раунд ${state.roundNumber}.`, "system");
       addLog(`${activeUnit(state).name} начинает активацию.`, activeUnit(state).sideId);
     }
     ui.selected = null;
+    ui.selectedWeapons = new Set();
     refresh();
   };
   requestAnimationFrame(frame);
 });
-el.cancelButton.addEventListener("click", () => { ui.selected = null; renderRouteInspector(); draw(); });
+el.cancelButton.addEventListener("click", () => { if (ui.animation) return; ui.selected = null; renderRouteInspector(); draw(); });
 el.clearLogButton.addEventListener("click", () => { state.log = []; renderLog(); });
 window.addEventListener("resize", resizeCanvas);
 window.addEventListener("keydown", event => { if (event.key === "Escape" && !el.rulesDialog.open) { ui.selected = null; renderRouteInspector(); draw(); } });

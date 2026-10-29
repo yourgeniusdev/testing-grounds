@@ -1,15 +1,16 @@
 import { CAPITAL_HULLS } from "./capital-hulls.js";
+import { deepFreeze } from "./deep-freeze.js";
 import { PRIMARY_SYSTEMS } from "./primary-systems.js";
 import { SHIP_LOADOUTS } from "./ship-loadouts.js";
 import { SQUADRON_LOADOUTS } from "./squadron-loadouts.js";
 import { SQUADRON_MODELS } from "./squadron-models.js";
 import { validateConfig } from "./validate-config.js";
 import { VISUALS } from "./visuals.js";
-import { WEAPONS } from "./weapons.js";
+import { WEAPONS, weapon, weaponVariant } from "./weapons.js";
 
-export { CAPITAL_HULLS, PRIMARY_SYSTEMS, SHIP_LOADOUTS, SQUADRON_LOADOUTS, SQUADRON_MODELS, validateConfig, VISUALS, WEAPONS };
+export { CAPITAL_HULLS, PRIMARY_SYSTEMS, SHIP_LOADOUTS, SQUADRON_LOADOUTS, SQUADRON_MODELS, validateConfig, VISUALS, WEAPONS, weapon, weaponVariant };
 
-export const CONFIG = Object.freeze({
+export const CONFIG = deepFreeze({
   capitalHulls: CAPITAL_HULLS,
   squadronModels: SQUADRON_MODELS,
   primarySystems: PRIMARY_SYSTEMS,
@@ -26,22 +27,31 @@ const equippedMass = (hull, loadout) => {
 };
 
 const runtimeWeapon = (hardpoint, installation) => {
-  const weapon = WEAPONS[installation.weaponId];
-  return {
+  const catalogWeapon = WEAPONS[installation.weaponId];
+  return deepFreeze({
     id: installation.id,
-    name: installation.name || weapon.name,
-    role: hardpoint.role,
+    catalogWeaponId: catalogWeapon.id,
+    name: installation.name || catalogWeapon.name,
     mount: hardpoint.mount,
+    hardpointType: hardpoint.type,
     ...(hardpoint.orientation ? { orientation: hardpoint.orientation } : {}),
-    weaponClass: weapon.weaponClass,
-    accuracy: weapon.accuracy,
-    effectiveRange: weapon.effectiveRange,
-    maxRange: weapon.maxRange,
-    shots: weapon.shots,
-    damage: weapon.damage,
-    critChance: weapon.critChance,
-    energyCost: weapon.energyCost
-  };
+    weaponClass: catalogWeapon.weaponClass,
+    delivery: catalogWeapon.delivery,
+    targetKinds: [...catalogWeapon.targetKinds],
+    accuracy: catalogWeapon.accuracy,
+    effectiveRange: catalogWeapon.effectiveRange,
+    maxRange: catalogWeapon.maxRange,
+    shots: catalogWeapon.shots,
+    damage: catalogWeapon.damage,
+    critChance: catalogWeapon.critChance,
+    energyCost: catalogWeapon.energyCost,
+    cooldownRounds: catalogWeapon.cooldownRounds,
+    ready: true,
+    firedThisRound: false,
+    cooldownRemaining: 0,
+    visual: structuredClone(catalogWeapon.visual),
+    ...(catalogWeapon.variantOf ? { variantOf: catalogWeapon.variantOf } : {})
+  });
 };
 
 export function buildCapitalProfile(loadoutId) {
@@ -96,6 +106,7 @@ export function buildSquadronProfile(loadoutId) {
     maxArmor: model.armor,
     integrity,
     maxIntegrity: integrity,
+    baseEvasion: model.baseEvasion,
     engagedWith: [],
     weapons: model.hardpoints.flatMap(hardpoint => loadout.weapons[hardpoint.id] ? [runtimeWeapon(hardpoint, loadout.weapons[hardpoint.id])] : []),
     glyph: model.visualId

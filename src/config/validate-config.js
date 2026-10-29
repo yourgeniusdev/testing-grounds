@@ -7,6 +7,12 @@ const MOUNTS_BY_TYPE = {
   forward: ["forward"],
   squadronWeapon: ["squadronWeapon"]
 };
+const WEAPON_CLASSES = ["kinetic", "energy", "explosive"];
+const DELIVERIES = ["beam", "projectile", "missile", "torpedo"];
+const TARGET_KINDS = ["capital", "squadron"];
+const PROJECTILES = ["beam", "tracer", "missile", "torpedo"];
+const TRAILS = ["none", "short", "smoke"];
+const IMPACTS = ["none", "spark", "smallExplosion", "largeExplosion"];
 
 const fail = (path, message) => {
   throw new Error(`Invalid config at ${path}: ${message}`);
@@ -58,15 +64,16 @@ const validateHardpoints = (owner, path) => {
   for (const [index, hardpoint] of hardpoints.entries()) {
     const hardpointPath = `${path}.hardpoints[${index}]`;
     validateObject(hardpoint, hardpointPath);
-    for (const field of ["id", "role", "mount", "type"]) validateString(hardpoint[field], `${hardpointPath}.${field}`);
+    for (const field of ["id", "mount", "type"]) validateString(hardpoint[field], `${hardpointPath}.${field}`);
+    if ("role" in hardpoint) fail(`${hardpointPath}.role`, "weapon roles are not supported");
     if (ids.has(hardpoint.id)) fail(`${hardpointPath}.id`, `duplicate hardpoint ID "${hardpoint.id}"`);
     ids.add(hardpoint.id);
-    if (!HARDPOINT_MOUNTS.includes(hardpoint.mount) || !HARDPOINT_TYPES.includes(hardpoint.type)) {
-      fail(`${hardpointPath}.${HARDPOINT_MOUNTS.includes(hardpoint.mount) ? "type" : "mount"}`, "hardpoint requires role, supported mount and supported type");
-    }
+    if (!HARDPOINT_MOUNTS.includes(hardpoint.mount)) fail(`${hardpointPath}.mount`, `unknown hardpoint mount "${hardpoint.mount}"`);
+    if (!HARDPOINT_TYPES.includes(hardpoint.type)) fail(`${hardpointPath}.type`, `unknown hardpoint type "${hardpoint.type}"`);
     if (!MOUNTS_BY_TYPE[hardpoint.type].includes(hardpoint.mount)) fail(`${hardpointPath}.mount`, `mount "${hardpoint.mount}" is incompatible with ${hardpoint.type} hardpoint type`);
     if (hardpoint.type === "squadronWeapon" && owner.kind !== "squadron") fail(`${hardpointPath}.type`, "squadronWeapon hardpoints require a squadron owner");
     if (hardpoint.type === "forward" && !["fore", "aft"].includes(hardpoint.orientation)) fail(`${hardpointPath}.orientation`, 'expected "fore" or "aft"');
+    if (hardpoint.type !== "forward" && "orientation" in hardpoint) fail(`${hardpointPath}.orientation`, "orientation is only valid on forward hardpoints");
   }
 };
 
@@ -83,9 +90,7 @@ const validateSystemSlots = (hull, path) => {
     ids.add(slot.id);
   }
   for (const requiredType of ["engine", "reactor"]) {
-    if (!slots.some(slot => slot.required && slot.type === requiredType)) {
-      fail(`${path}.systemSlots`, `missing required ${requiredType} slot`);
-    }
+    if (!slots.some(slot => slot.required && slot.type === requiredType)) fail(`${path}.systemSlots`, `missing required ${requiredType} slot`);
   }
 };
 
@@ -97,6 +102,7 @@ const validateInstallations = (assignments, path) => {
     validateObject(installation, installationPath);
     validateString(installation.id, `${installationPath}.id`);
     validateString(installation.weaponId, `${installationPath}.weaponId`);
+    if ("role" in installation) fail(`${installationPath}.role`, "weapon roles are not supported");
     if (ids.has(installation.id)) fail(`${installationPath}.id`, `duplicate installation ID "${installation.id}"`);
     ids.add(installation.id);
   }
@@ -109,11 +115,79 @@ const validateWeapons = (owner, assignments, weapons, path) => {
     const installationPath = `${path}.weapons.${hardpointId}`;
     const hardpoint = hardpoints[hardpointId];
     if (!hardpoint) fail(installationPath, `unknown hardpoint ID "${hardpointId}"`);
-    const weapon = requiredReference(weapons, installation.weaponId, `${installationPath}.weaponId`, "weapon");
-    if (!weapon.compatibleHardpointTypes.includes(hardpoint.type)) {
-      fail(`${installationPath}.weaponId`, `weapon "${weapon.id}" is incompatible with ${hardpoint.type} hardpoint "${hardpointId}"`);
-    }
+    const catalogWeapon = requiredReference(weapons, installation.weaponId, `${installationPath}.weaponId`, "weapon");
+    if (!catalogWeapon.compatibleHardpointTypes.includes(hardpoint.type)) fail(`${installationPath}.weaponId`, `weapon "${catalogWeapon.id}" is incompatible with ${hardpoint.type} hardpoint "${hardpointId}"`);
   }
+};
+
+const validateWeaponVisual = (entry, path) => {
+  const visual = validateObject(entry.visual, `${path}.visual`);
+  validateString(visual.projectile, `${path}.visual.projectile`);
+  if (!PROJECTILES.includes(visual.projectile)) fail(`${path}.visual.projectile`, `unknown projectile "${visual.projectile}"`);
+  validateString(visual.color, `${path}.visual.color`);
+  validateString(visual.trail, `${path}.visual.trail`);
+  if (!TRAILS.includes(visual.trail)) fail(`${path}.visual.trail`, `unknown trail "${visual.trail}"`);
+  validateString(visual.impact, `${path}.visual.impact`);
+  if (!IMPACTS.includes(visual.impact)) fail(`${path}.visual.impact`, `unknown impact "${visual.impact}"`);
+  validateNumbers(visual, `${path}.visual`, ["size", "speedHexesPerSecond", "launchIntervalMs", "impactRadius"]);
+  if (visual.size <= 0 || visual.size > 1) fail(`${path}.visual.size`, "expected a value greater than 0 and at most 1 hex");
+  if (visual.speedHexesPerSecond <= 0 || visual.speedHexesPerSecond > 100) fail(`${path}.visual.speedHexesPerSecond`, "expected a value greater than 0 and at most 100");
+  if (visual.launchIntervalMs < 0 || visual.launchIntervalMs > 5000) fail(`${path}.visual.launchIntervalMs`, "expected a value from 0 to 5000");
+  if (visual.impactRadius < 0 || visual.impactRadius >= 1) fail(`${path}.visual.impactRadius`, "expected a value from 0 to less than 1 hex");
+  if (visual.projectile !== entry.delivery && !(entry.delivery === "projectile" && visual.projectile === "tracer")) fail(`${path}.visual.projectile`, `projectile "${visual.projectile}" does not represent ${entry.delivery} delivery`);
+};
+
+const validateCatalogWeapon = (entry, path, weapons) => {
+  validateString(entry.name, `${path}.name`);
+  const compatibleTypes = validateArray(entry.compatibleHardpointTypes, `${path}.compatibleHardpointTypes`);
+  if (!compatibleTypes.length) fail(`${path}.compatibleHardpointTypes`, "expected a nonempty array");
+  const seenTypes = new Set();
+  compatibleTypes.forEach((type, index) => {
+    validateString(type, `${path}.compatibleHardpointTypes[${index}]`);
+    if (!HARDPOINT_TYPES.includes(type)) fail(`${path}.compatibleHardpointTypes[${index}]`, `unknown hardpoint type "${type}"`);
+    if (seenTypes.has(type)) fail(`${path}.compatibleHardpointTypes[${index}]`, `duplicate hardpoint type "${type}"`);
+    seenTypes.add(type);
+  });
+  validateString(entry.weaponClass, `${path}.weaponClass`);
+  if (!WEAPON_CLASSES.includes(entry.weaponClass)) fail(`${path}.weaponClass`, `unknown weapon class "${entry.weaponClass}"`);
+  validateString(entry.delivery, `${path}.delivery`);
+  if (!DELIVERIES.includes(entry.delivery)) fail(`${path}.delivery`, `unknown delivery "${entry.delivery}"`);
+  if (entry.delivery === "beam" && entry.weaponClass !== "energy") fail(`${path}.delivery`, "beam delivery requires energy weapon class");
+  if (entry.weaponClass === "kinetic" && entry.delivery !== "projectile") fail(`${path}.delivery`, "kinetic weapons require projectile delivery");
+  if (["missile", "torpedo"].includes(entry.delivery) && entry.weaponClass !== "explosive") fail(`${path}.delivery`, `${entry.delivery} delivery requires explosive weapon class`);
+  if (entry.weaponClass === "energy" && !["beam", "projectile"].includes(entry.delivery)) fail(`${path}.delivery`, "energy weapons require beam or projectile delivery");
+  if (entry.weaponClass === "explosive" && !["projectile", "missile", "torpedo"].includes(entry.delivery)) fail(`${path}.delivery`, "explosive weapons require projectile, missile or torpedo delivery");
+  const targetKinds = validateArray(entry.targetKinds, `${path}.targetKinds`);
+  if (!targetKinds.length) fail(`${path}.targetKinds`, "expected a nonempty array");
+  targetKinds.forEach((kind, index) => {
+    if (!TARGET_KINDS.includes(kind)) fail(`${path}.targetKinds[${index}]`, `unknown target kind "${kind}"`);
+  });
+  if (targetKinds.includes("squadron") && compatibleTypes.some(type => !["turret", "squadronWeapon"].includes(type))) fail(`${path}.targetKinds`, "AA targeting is only valid on turret and squadronWeapon hardpoints");
+  validateNumbers(entry, path, ["accuracy", "effectiveRange", "maxRange", "shots", "damage", "critChance", "energyCost", "cooldownRounds"]);
+  if (entry.accuracy < 0 || entry.accuracy > 100) fail(`${path}.accuracy`, "expected a value from 0 to 100");
+  if (entry.critChance < 0 || entry.critChance > 100) fail(`${path}.critChance`, "expected a value from 0 to 100");
+  if (!Number.isInteger(entry.shots) || entry.shots <= 0) fail(`${path}.shots`, "expected a positive integer");
+  if (!Number.isInteger(entry.damage) || entry.damage <= 0) fail(`${path}.damage`, "expected a positive integer");
+  if (!Number.isInteger(entry.effectiveRange) || entry.effectiveRange <= 0) fail(`${path}.effectiveRange`, "expected a positive integer");
+  if (!Number.isInteger(entry.maxRange) || entry.maxRange <= 0) fail(`${path}.maxRange`, "expected a positive integer");
+  if (entry.effectiveRange > entry.maxRange) fail(`${path}.effectiveRange`, "cannot exceed maxRange");
+  if (entry.energyCost < 0) fail(`${path}.energyCost`, "expected a nonnegative number");
+  if (!Number.isInteger(entry.cooldownRounds) || entry.cooldownRounds < 0) fail(`${path}.cooldownRounds`, "expected a nonnegative integer");
+  if (entry.variantOf !== undefined) {
+    validateString(entry.variantOf, `${path}.variantOf`);
+    const parent = requiredReference(weapons, entry.variantOf, `${path}.variantOf`, "weapon parent");
+    if (parent === entry) fail(`${path}.variantOf`, "variant cannot reference itself");
+    if (parent.variantOf) fail(`${path}.variantOf`, "variant chains deeper than one level are not supported");
+    if (entry.weaponClass !== parent.weaponClass) fail(`${path}.weaponClass`, "variant cannot change weaponClass");
+    if (entry.delivery !== parent.delivery) fail(`${path}.delivery`, "variant cannot change delivery");
+    if (JSON.stringify(entry.compatibleHardpointTypes) !== JSON.stringify(parent.compatibleHardpointTypes)) fail(`${path}.compatibleHardpointTypes`, "variant cannot change compatibleHardpointTypes");
+    if (entry.id === parent.id || entry.name === parent.name) fail(path, "variant requires unique id and name");
+  }
+  if (!compatibleTypes.includes("squadronWeapon")) {
+    validateObject(entry.future, `${path}.future`);
+    validateNumber(entry.future.massUnits, `${path}.future.massUnits`);
+  }
+  validateWeaponVisual(entry, path);
 };
 
 const validateVisuals = visuals => {
@@ -139,9 +213,7 @@ const validateVisuals = visuals => {
 export function validateConfig(config) {
   validateObject(config, "config");
   const { capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, visuals } = config;
-  for (const [name, dictionary] of Object.entries({ capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, visuals })) {
-    validateDictionary(name, dictionary);
-  }
+  for (const [name, dictionary] of Object.entries({ capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, visuals })) validateDictionary(name, dictionary);
 
   for (const [hullId, hull] of Object.entries(capitalHulls)) {
     const path = `capitalHulls.${hullId}`;
@@ -174,23 +246,7 @@ export function validateConfig(config) {
     }
   }
 
-  for (const [weaponId, weapon] of Object.entries(weapons)) {
-    const path = `weapons.${weaponId}`;
-    validateString(weapon.name, `${path}.name`);
-    const compatibleTypes = validateArray(weapon.compatibleHardpointTypes, `${path}.compatibleHardpointTypes`);
-    if (!compatibleTypes.length) fail(`${path}.compatibleHardpointTypes`, "expected a nonempty array");
-    compatibleTypes.forEach((type, index) => {
-      validateString(type, `${path}.compatibleHardpointTypes[${index}]`);
-      if (!HARDPOINT_TYPES.includes(type)) fail(`${path}.compatibleHardpointTypes[${index}]`, `unknown hardpoint type "${type}"`);
-    });
-    validateString(weapon.weaponClass, `${path}.weaponClass`);
-    validateNumbers(weapon, path, ["accuracy", "effectiveRange", "maxRange", "shots", "damage", "critChance", "energyCost"]);
-    if (!compatibleTypes.includes("squadronWeapon")) {
-      validateObject(weapon.future, `${path}.future`);
-      validateNumber(weapon.future.massUnits, `${path}.future.massUnits`);
-    }
-  }
-
+  for (const [weaponId, entry] of Object.entries(weapons)) validateCatalogWeapon(entry, `weapons.${weaponId}`, weapons);
   validateVisuals(visuals);
 
   for (const [loadoutId, loadout] of Object.entries(shipLoadouts)) {
@@ -204,9 +260,7 @@ export function validateConfig(config) {
       const system = requiredReference(primarySystems, systemId, `${path}.systems.${slot.id}`, "primary system");
       if (system.type !== slot.type) fail(`${path}.systems.${slot.id}`, `system "${system.id}" has type "${system.type}", expected "${slot.type}"`);
     }
-    for (const slotId of Object.keys(loadout.systems)) {
-      if (!hull.systemSlots.some(slot => slot.id === slotId)) fail(`${path}.systems.${slotId}`, `unknown system slot ID "${slotId}"`);
-    }
+    for (const slotId of Object.keys(loadout.systems)) if (!hull.systemSlots.some(slot => slot.id === slotId)) fail(`${path}.systems.${slotId}`, `unknown system slot ID "${slotId}"`);
     validateWeapons(hull, loadout.weapons, weapons, path);
   }
 

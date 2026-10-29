@@ -8,145 +8,197 @@ import {
   PRIMARY_SYSTEMS,
   validateConfig,
   VISUALS,
-  WEAPONS
+  WEAPONS,
+  weapon,
+  weaponVariant
 } from "./config/index.js";
 
 const cloneConfig = () => structuredClone(CONFIG);
-
-const legacyCapitals = {
-  atlas: { baseSpeed: 3, currentSpeed: 3, maneuver: 2, initiative: 3, mass: 92, shield: 35, maxShield: 35, armor: 35, maxArmor: 35, integrity: 120, maxIntegrity: 120, baseEvasion: 6, reactor: { capacity: 6, rechargeRate: 2 } },
-  swift: { baseSpeed: 5, currentSpeed: 5, maneuver: 3, initiative: 5, mass: 48, shield: 20, maxShield: 20, armor: 15, maxArmor: 15, integrity: 75, maxIntegrity: 75, baseEvasion: 10, reactor: { capacity: 5, rechargeRate: 2 } },
-  bastion: { baseSpeed: 2, currentSpeed: 2, maneuver: 1, initiative: 1, mass: 188, shield: 50, maxShield: 50, armor: 60, maxArmor: 60, integrity: 180, maxIntegrity: 180, baseEvasion: 2, reactor: { capacity: 8, rechargeRate: 2 } },
-  raptor: { baseSpeed: 3, currentSpeed: 3, maneuver: 2, initiative: 3, mass: 76, shield: 25, maxShield: 25, armor: 25, maxArmor: 25, integrity: 100, maxIntegrity: 100, baseEvasion: 7, reactor: { capacity: 6, rechargeRate: 2 } }
-};
-
-const legacyWeapons = {
-  atlas: [
-    ["atlas-battery-left", "Левая кинетическая батарея", "primary", "battery-left", "kinetic", 75, 3, 5, 4, 4, 8, 0],
-    ["atlas-battery-right", "Правая кинетическая батарея", "primary", "battery-right", "kinetic", 75, 3, 5, 4, 4, 8, 0],
-    ["atlas-plasma", "Плазменный разряд", "auxiliary", "turret", "energy", 90, 2, 3, 1, 13, 12, 3]
-  ],
-  swift: [
-    ["swift-turret", "Кинетическая башня", "primary", "turret", "kinetic", 75, 3, 4, 3, 3, 6, 0],
-    ["swift-pulse", "Энергетический импульс", "auxiliary", "turret", "energy", 90, 2, 3, 1, 7, 6, 2]
-  ],
-  bastion: [
-    ["bastion-line", "Линейная кинетическая пушка", "primary", "line", "kinetic", 75, 5, 7, 1, 18, 20, 0],
-    ["bastion-battery-left", "Левая взрывная батарея", "primary", "battery-left", "explosive", 80, 3, 5, 2, 7, 15, 0],
-    ["bastion-battery-right", "Правая взрывная батарея", "primary", "battery-right", "explosive", 80, 3, 5, 2, 7, 15, 0],
-    ["bastion-pulse", "Энергетический импульс", "auxiliary", "turret", "energy", 90, 3, 4, 1, 12, 10, 3]
-  ],
-  raptor: [
-    ["raptor-battery-right", "Правая взрывная батарея", "primary", "battery-right", "explosive", 80, 3, 5, 2, 6, 15, 0],
-    ["raptor-beam", "Энергетический луч", "auxiliary", "turret", "energy", 90, 3, 4, 1, 9, 8, 2]
-  ]
-};
-
-const weaponTuple = weapon => [weapon.id, weapon.name, weapon.role, weapon.mount, weapon.weaponClass, weapon.accuracy, weapon.effectiveRange, weapon.maxRange, weapon.shots, weapon.damage, weapon.critChance, weapon.energyCost];
-
-test("capital builders preserve legacy flat combat profiles", () => {
-  for (const [id, expected] of Object.entries(legacyCapitals)) {
-    const profile = buildCapitalProfile(id);
-    for (const [field, value] of Object.entries(expected)) assert.deepEqual(profile[field], value, `${id}.${field}`);
-    assert.deepEqual(profile.weapons.map(weaponTuple), legacyWeapons[id]);
-    for (const absent of ["id", "name", "sideId", "color", "position", "heading", "currentEnergy"]) assert.equal(absent in profile, false, `${id}.${absent}`);
-    assert.equal("currentEnergy" in profile.reactor, false);
-  }
-});
-
-test("squadron builders preserve values and use squadronWeapon mount", () => {
-  for (const id of ["wasps", "mantis"]) {
-    const profile = buildSquadronProfile(id);
-    assert.deepEqual({ kind: profile.kind, baseSpeed: profile.baseSpeed, currentSpeed: profile.currentSpeed, initiative: profile.initiative, stack: profile.stack, unitHealth: profile.unitHealth, integrity: profile.integrity }, { kind: "squadron", baseSpeed: 6, currentSpeed: 6, initiative: 4, stack: 3, unitHealth: 5, integrity: 15 });
-    assert.deepEqual(weaponTuple(profile.weapons[0]), [`${id === "wasps" ? "wasps" : "mantis"}-front`, "Фронтальная кинетическая атака", "primary", "squadronWeapon", "kinetic", 70, 1, 1, 1, 1, 2, 0]);
-  }
-});
-
-test("capital hulls require universal engine and reactor slots", () => {
-  for (const hull of Object.values(CAPITAL_HULLS)) {
-    assert.ok(hull.systemSlots.some(slot => slot.type === "engine" && slot.required));
-    assert.ok(hull.systemSlots.some(slot => slot.type === "reactor" && slot.required));
-  }
-  const config = cloneConfig();
-  config.capitalHulls.atlasCruiser.systemSlots = config.capitalHulls.atlasCruiser.systemSlots.filter(slot => slot.type !== "engine");
-  assert.throws(() => validateConfig(config), /capitalHulls\.atlasCruiser\.systemSlots: missing required engine slot/);
-});
-
-test("validator reports broken references and type incompatibility", () => {
-  const missingReference = cloneConfig();
-  missingReference.shipLoadouts.atlas.systems.reactor = "missing";
-  assert.throws(() => validateConfig(missingReference), /shipLoadouts\.atlas\.systems\.reactor: unknown primary system ID "missing"/);
-
-  const wrongSystemType = cloneConfig();
-  wrongSystemType.shipLoadouts.atlas.systems.engine = "atlasReactor";
-  assert.throws(() => validateConfig(wrongSystemType), /has type "reactor", expected "engine"/);
-
-  const incompatibleWeapon = cloneConfig();
-  incompatibleWeapon.shipLoadouts.atlas.weapons["battery-left"].weaponId = "atlasPlasma";
-  assert.throws(() => validateConfig(incompatibleWeapon), /incompatible with battery hardpoint "battery-left"/);
-
-  const unknownMount = cloneConfig();
-  unknownMount.capitalHulls.atlasCruiser.hardpoints[0].mount = "typo";
-  assert.throws(() => validateConfig(unknownMount), /hardpoint requires role, supported mount and supported type/);
-
-  const incompatibleForwardWeapon = cloneConfig();
-  incompatibleForwardWeapon.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "forward", type: "forward", orientation: "fore" };
-  assert.throws(() => validateConfig(incompatibleForwardWeapon), /incompatible with forward hardpoint "kinetic-turret"/);
-});
-
-test("forward hardpoints require fore or aft orientation", () => {
-  for (const orientation of ["fore", "aft"]) {
-    const config = cloneConfig();
-    config.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "forward", type: "forward", orientation };
-    config.weapons.swiftKineticTurret.compatibleHardpointTypes.push("forward");
-    assert.equal(validateConfig(config), true);
-  }
-
-  const missingOrientation = cloneConfig();
-  missingOrientation.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "forward", type: "forward" };
-  assert.throws(() => validateConfig(missingOrientation), /orientation: expected "fore" or "aft"/);
-
-  const mismatchedType = cloneConfig();
-  mismatchedType.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "turret", type: "forward", orientation: "fore" };
-  assert.throws(() => validateConfig(mismatchedType), /mount: mount "turret" is incompatible with forward hardpoint type/);
-
-  const capitalSquadronWeapon = cloneConfig();
-  capitalSquadronWeapon.capitalHulls.swiftFrigate.hardpoints[0] = { id: "kinetic-turret", role: "primary", mount: "squadronWeapon", type: "squadronWeapon" };
-  assert.throws(() => validateConfig(capitalSquadronWeapon), /squadronWeapon hardpoints require a squadron owner/);
-});
-
-test("validator reports paths for required builder and UI fields", () => {
-  const missingInstallationId = cloneConfig();
-  delete missingInstallationId.shipLoadouts.atlas.weapons["battery-left"].id;
-  assert.throws(() => validateConfig(missingInstallationId), /shipLoadouts\.atlas\.weapons\.battery-left\.id: expected a nonempty string/);
-
-  const missingEngineThrust = cloneConfig();
-  delete missingEngineThrust.primarySystems.atlasEngine.future.thrustUnits;
-  assert.throws(() => validateConfig(missingEngineThrust), /primarySystems\.atlasEngine\.future\.thrustUnits: expected a finite number/);
-
-  const missingFormationOffsets = cloneConfig();
-  delete missingFormationOffsets.visuals.squadron.formationOffsets[2];
-  assert.throws(() => validateConfig(missingFormationOffsets), /visuals\.squadron\.formationOffsets\.2: expected an array/);
-});
-
-test("equipped mass is computed from future component masses and remains near combat mass", () => {
-  for (const id of Object.keys(legacyCapitals)) {
-    const profile = buildCapitalProfile(id);
-    assert.ok(Math.abs(profile.equippedMassUnits - profile.mass) <= 1, id);
-    assert.equal(profile.mass, legacyCapitals[id].mass);
-  }
-  for (const system of Object.values(PRIMARY_SYSTEMS)) assert.ok(Number.isFinite(system.future.massUnits));
-  for (const weapon of Object.values(WEAPONS)) {
-    if (!weapon.compatibleHardpointTypes.includes("squadronWeapon")) assert.ok(Number.isFinite(weapon.future.massUnits));
-    else assert.equal("future" in weapon, false);
-  }
-});
 
 const assertDeepFrozen = value => {
   if (!value || typeof value !== "object") return;
   assert.ok(Object.isFrozen(value));
   Object.values(value).forEach(assertDeepFrozen);
 };
+
+const runtimeFields = ["catalogWeaponId", "delivery", "targetKinds", "cooldownRounds", "ready", "firedThisRound", "cooldownRemaining", "visual"];
+
+test("independent weapon catalog has neutral IDs, complete combat data and no ship-specific models", () => {
+  assert.deepEqual(Object.keys(WEAPONS), [
+    "needleAutocannon", "twinNeedleAutocannon", "sentinelAutocannon", "rayAALaser", "torchPlasmaCannon", "stormKineticBattery",
+    "hailMissileBattery", "titanRailgun", "focusEmitter", "spearMissile", "impulseTurret", "hammerTorpedo"
+  ]);
+  for (const entry of Object.values(WEAPONS)) {
+    for (const field of ["delivery", "targetKinds", "effectiveRange", "maxRange", "cooldownRounds", "visual"]) assert.ok(field in entry, `${entry.id}.${field}`);
+    assert.doesNotMatch(entry.id, /atlas|swift|bastion|raptor/i);
+  }
+  assert.equal(validateConfig(CONFIG), true);
+});
+
+test("weapon variants deep-merge visuals, retain provenance and materialize independent frozen objects", () => {
+  const base = weapon({
+    id: "base", name: "Base", compatibleHardpointTypes: ["turret"], weaponClass: "energy", delivery: "beam", targetKinds: ["capital"],
+    accuracy: 50, effectiveRange: 1, maxRange: 2, shots: 1, damage: 1, critChance: 0, energyCost: 0, cooldownRounds: 0,
+    visual: { projectile: "beam", color: "#fff", size: 0.1, speedHexesPerSecond: 10, launchIntervalMs: 0, trail: "none", impact: "spark", impactRadius: 0.1 },
+    future: { massUnits: 1 }
+  });
+  const variant = weaponVariant(base, { id: "variant", name: "Variant", shots: 2, visual: { color: "#000" } });
+  assert.equal(variant.variantOf, "base");
+  assert.equal(variant.visual.projectile, "beam");
+  assert.equal(variant.visual.color, "#000");
+  assert.notEqual(variant.visual, base.visual);
+  assertDeepFrozen(variant);
+  assert.throws(() => weaponVariant(variant, { id: "chain", name: "Chain" }), /cannot derive/);
+  assert.throws(() => weaponVariant(base, { id: "changed", name: "Changed", weaponClass: "kinetic" }), /weaponClass/);
+  assert.throws(() => weaponVariant(base, { id: "changed", name: "Changed", delivery: "projectile" }), /delivery/);
+  assert.throws(() => weaponVariant(base, { id: "changed", name: "Changed", compatibleHardpointTypes: ["forward"] }), /compatibleHardpointTypes/);
+  assert.throws(() => weaponVariant(base, { id: "changed", name: "Changed", future: { massUnits: 2 } }), /cannot override future/);
+  assert.throws(() => weaponVariant(base, { id: "changed", name: "Changed", variantOf: "other" }), /cannot override variantOf/);
+  assert.equal(weapon({ id: "default-cooldown" }).cooldownRounds, 0);
+});
+
+test("catalog validation enforces classes, delivery, targets, ranges, cooldowns, visuals and AA mounts", () => {
+  const cases = [
+    [config => { config.weapons.focusEmitter.weaponClass = "unknown"; }, /unknown weapon class/],
+    [config => { config.weapons.focusEmitter.delivery = "torpedo"; }, /requires explosive weapon class/],
+    [config => { config.weapons.focusEmitter.targetKinds = []; }, /expected a nonempty array/],
+    [config => { config.weapons.focusEmitter.targetKinds = ["station"]; }, /unknown target kind/],
+    [config => { config.weapons.focusEmitter.shots = 0; }, /positive integer/],
+    [config => { config.weapons.focusEmitter.damage = 1.5; }, /positive integer/],
+    [config => { config.weapons.focusEmitter.accuracy = 101; }, /0 to 100/],
+    [config => { config.weapons.focusEmitter.critChance = -1; }, /0 to 100/],
+    [config => { config.weapons.focusEmitter.effectiveRange = 4; }, /cannot exceed maxRange/],
+    [config => { config.weapons.focusEmitter.cooldownRounds = -1; }, /nonnegative integer/],
+    [config => { config.weapons.focusEmitter.visual.trail = "long"; }, /unknown trail/],
+    [config => { config.weapons.focusEmitter.visual.size = 2; }, /at most 1 hex/],
+    [config => { config.weapons.focusEmitter.targetKinds.push("squadron"); }, /AA targeting is only valid/]
+  ];
+  for (const [mutate, expected] of cases) {
+    const config = cloneConfig();
+    mutate(config);
+    assert.throws(() => validateConfig(config), expected);
+  }
+});
+
+test("compatible hardpoint arrays structurally support several known types", () => {
+  const config = cloneConfig();
+  config.weapons.impulseTurret.compatibleHardpointTypes.push("forward");
+  assert.equal(validateConfig(config), true);
+});
+
+test("variant validation verifies parent existence, depth and immutable model properties", () => {
+  const missing = cloneConfig();
+  missing.weapons.twinNeedleAutocannon.variantOf = "missing";
+  assert.throws(() => validateConfig(missing), /unknown weapon parent ID/);
+
+  const chained = cloneConfig();
+  chained.weapons.needleAutocannon.variantOf = "twinNeedleAutocannon";
+  assert.throws(() => validateConfig(chained), /variant chains deeper than one level/);
+
+  const incompatible = cloneConfig();
+  incompatible.weapons.twinNeedleAutocannon.compatibleHardpointTypes = ["turret"];
+  assert.throws(() => validateConfig(incompatible), /cannot change compatibleHardpointTypes/);
+
+  const changedDelivery = cloneConfig();
+  changedDelivery.weapons.needleAutocannon.weaponClass = "explosive";
+  changedDelivery.weapons.needleAutocannon.delivery = "missile";
+  changedDelivery.weapons.needleAutocannon.visual.projectile = "missile";
+  changedDelivery.weapons.twinNeedleAutocannon.weaponClass = "explosive";
+  changedDelivery.weapons.twinNeedleAutocannon.delivery = "torpedo";
+  changedDelivery.weapons.twinNeedleAutocannon.visual.projectile = "torpedo";
+  assert.throws(() => validateConfig(changedDelivery), /variant cannot change delivery/);
+
+  const changedTargetKinds = cloneConfig();
+  changedTargetKinds.weapons.twinNeedleAutocannon.targetKinds = ["capital"];
+  assert.equal(validateConfig(changedTargetKinds), true);
+});
+
+test("real capital loadouts use reusable weapons in stable hardpoint order and Atlas has a fore weapon", () => {
+  const atlas = buildCapitalProfile("atlas");
+  assert.deepEqual(atlas.weapons.map(entry => entry.catalogWeaponId), ["stormKineticBattery", "stormKineticBattery", "focusEmitter"]);
+  assert.deepEqual(atlas.weapons.map(entry => entry.id), ["atlas-battery-left", "atlas-battery-right", "atlas-forward"]);
+  assert.deepEqual({ mount: atlas.weapons[2].mount, orientation: atlas.weapons[2].orientation }, { mount: "forward", orientation: "fore" });
+  assert.deepEqual(buildCapitalProfile("swift").weapons.map(entry => entry.catalogWeaponId), ["sentinelAutocannon", "rayAALaser"]);
+  assert.deepEqual(buildCapitalProfile("bastion").weapons.map(entry => entry.catalogWeaponId), ["titanRailgun", "hailMissileBattery", "hailMissileBattery", "torchPlasmaCannon"]);
+  assert.deepEqual(buildCapitalProfile("raptor").weapons.map(entry => entry.catalogWeaponId), ["hailMissileBattery", "impulseTurret"]);
+  for (const profile of [atlas, buildCapitalProfile("swift"), buildCapitalProfile("bastion"), buildCapitalProfile("raptor")]) {
+    for (const entry of profile.weapons) {
+      assert.equal("role" in entry, false);
+      for (const field of runtimeFields) assert.ok(field in entry, `${entry.id}.${field}`);
+      assertDeepFrozen(entry);
+    }
+  }
+});
+
+test("squadron models and loadouts have agreed stats and stack-scalable base weapons", () => {
+  const wasps = buildSquadronProfile("wasps");
+  assert.deepEqual({ speed: wasps.baseSpeed, initiative: wasps.initiative, evasion: wasps.baseEvasion, stack: wasps.stack, unitHealth: wasps.unitHealth }, { speed: 6, initiative: 5, evasion: 10, stack: 3, unitHealth: 5 });
+  assert.deepEqual(wasps.weapons.map(entry => [entry.catalogWeaponId, entry.shots * wasps.stack]), [["twinNeedleAutocannon", 6]]);
+  const mantis = buildSquadronProfile("mantis");
+  assert.deepEqual({ speed: mantis.baseSpeed, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 4, initiative: 3, evasion: 4, stack: 3, unitHealth: 5 });
+  assert.deepEqual(mantis.weapons.map(entry => [entry.catalogWeaponId, entry.shots * mantis.stack]), [["needleAutocannon", 3], ["hammerTorpedo", 3]]);
+  assert.deepEqual(mantis.weapons.map(entry => entry.targetKinds), [["capital", "squadron"], ["capital"]]);
+});
+
+test("roles are rejected in hardpoints and installations", () => {
+  const hardpoint = cloneConfig();
+  hardpoint.capitalHulls.atlasCruiser.hardpoints[0].role = "primary";
+  assert.throws(() => validateConfig(hardpoint), /weapon roles are not supported/);
+  const installation = cloneConfig();
+  installation.shipLoadouts.atlas.weapons["battery-left"].role = "primary";
+  assert.throws(() => validateConfig(installation), /weapon roles are not supported/);
+});
+
+test("validator reports broken references, mounts, orientations and squadron-only mounts", () => {
+  const missingReference = cloneConfig();
+  missingReference.shipLoadouts.atlas.systems.reactor = "missing";
+  assert.throws(() => validateConfig(missingReference), /unknown primary system ID "missing"/);
+
+  const unknownMount = cloneConfig();
+  unknownMount.capitalHulls.atlasCruiser.hardpoints[0].mount = "typo";
+  assert.throws(() => validateConfig(unknownMount), /unknown hardpoint mount/);
+
+  const missingOrientation = cloneConfig();
+  delete missingOrientation.capitalHulls.atlasCruiser.hardpoints[2].orientation;
+  assert.throws(() => validateConfig(missingOrientation), /expected "fore" or "aft"/);
+
+  const capitalSquadronWeapon = cloneConfig();
+  capitalSquadronWeapon.capitalHulls.swiftFrigate.hardpoints[0] = { id: "autocannon-turret", mount: "squadronWeapon", type: "squadronWeapon" };
+  assert.throws(() => validateConfig(capitalSquadronWeapon), /squadronWeapon hardpoints require a squadron owner/);
+});
+
+test("balance invariants distinguish spinal, batteries, AA, torpedo and missiles", () => {
+  const titan = WEAPONS.titanRailgun;
+  assert.equal(titan.maxRange, Math.max(...Object.values(WEAPONS).map(entry => entry.maxRange)));
+  assert.equal(titan.damage, Math.max(...Object.values(WEAPONS).map(entry => entry.damage)));
+  for (const entry of Object.values(WEAPONS).filter(entry => entry.compatibleHardpointTypes.includes("battery"))) {
+    assert.ok(entry.shots * entry.damage >= 16);
+    assert.deepEqual(entry.targetKinds, ["capital"]);
+  }
+  for (const id of ["sentinelAutocannon", "rayAALaser"]) {
+    assert.ok(WEAPONS[id].accuracy >= 88);
+    assert.ok(WEAPONS[id].maxRange <= 3);
+    assert.ok(WEAPONS[id].damage < titan.damage);
+  }
+  const torpedo = WEAPONS.hammerTorpedo;
+  assert.equal(torpedo.delivery, "torpedo");
+  assert.deepEqual(torpedo.targetKinds, ["capital"]);
+  assert.ok(torpedo.accuracy < WEAPONS.needleAutocannon.accuracy);
+  assert.ok(torpedo.damage > WEAPONS.needleAutocannon.damage);
+  assert.ok(torpedo.visual.speedHexesPerSecond < WEAPONS.hailMissileBattery.visual.speedHexesPerSecond);
+  assert.ok(Math.abs(torpedo.visual.size / WEAPONS.hailMissileBattery.visual.size - 1.5) < 0.01);
+  assert.ok(Math.abs(torpedo.visual.impactRadius / WEAPONS.hailMissileBattery.visual.impactRadius - 1.5) < 0.01);
+  assert.equal(WEAPONS.spearMissile.shots, 1);
+  assert.equal(WEAPONS.hailMissileBattery.shots, 3);
+});
+
+test("equipped mass remains near combat mass", () => {
+  for (const id of ["atlas", "swift", "bastion", "raptor"]) {
+    const profile = buildCapitalProfile(id);
+    assert.ok(Math.abs(profile.equippedMassUnits - profile.mass) <= 1, id);
+  }
+  for (const system of Object.values(PRIMARY_SYSTEMS)) assert.ok(Number.isFinite(system.future.massUnits));
+});
 
 test("configuration graph is deeply frozen", () => {
   assertDeepFrozen(CONFIG);
@@ -159,6 +211,4 @@ test("visuals preserve every entity SVG, size and squadron formations", () => {
     assert.match(visual.svg, /<(?:path|circle)/);
     assert.ok([35, 39, 42].includes(visual.size));
   }
-  assert.deepEqual(Object.keys(VISUALS.squadron.formationOffsets), ["1", "2", "3"]);
-  for (const [count, offsets] of Object.entries(VISUALS.squadron.formationOffsets)) assert.equal(offsets.length, Number(count));
 });

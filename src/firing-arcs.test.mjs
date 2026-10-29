@@ -14,7 +14,7 @@ const canonical = {
   "battery-left": ["1,-1", "0,-1", "2,-2", "1,-2", "0,-2", "3,-3", "2,-3", "1,-3", "0,-3", "4,-4", "3,-4", "2,-4", "1,-4", "0,-4", "5,-5", "4,-5", "3,-5", "2,-5", "1,-5", "0,-5"],
   "battery-right": ["-1,1", "0,1", "-2,2", "-1,2", "0,2", "-3,3", "-2,3", "-1,3", "0,3", "-4,4", "-3,4", "-2,4", "-1,4", "0,4", "-5,5", "-4,5", "-3,5", "-2,5", "-1,5", "0,5"],
   line: ["1,0", "2,0", "3,0", "4,0", "5,0", "6,0", "7,0"],
-  "forward-fore": ["0,1", "1,0", "1,-1", "0,2", "1,1", "2,0", "2,-1", "2,-2", "0,3", "1,2", "2,1", "3,0", "3,-1", "3,-2", "3,-3"]
+  "forward-fore": ["1,0", "2,0", "2,-1", "1,1", "3,0", "3,-1", "3,-2", "2,1", "1,2"]
 };
 
 function rotate(position, times) {
@@ -61,17 +61,18 @@ test("turret and squadron weapon cover every direction", () => {
   }
 });
 
-test("attack preview carries forward hardpoint orientation into runtime geometry", () => {
+test("real Atlas forward hardpoint carries orientation into runtime geometry", () => {
   const state = createBattleState();
-  const attacker = unitById(state, "swift");
+  const attacker = unitById(state, "atlas");
   const target = unitById(state, "raptor");
+  const forward = attacker.weapons.find(weapon => weapon.mount === "forward");
   state.activeUnitId = attacker.id;
   state.stage = "attack";
   attacker.position = { q: 0, r: 0 };
   attacker.heading = 0;
-  attacker.weapons = [{ ...attacker.weapons[0], mount: "forward", orientation: "aft", maxRange: 3 }];
-  target.position = { q: -2, r: 0 };
-  assert.equal(attackPreview(state, target.id, "primary").included.length, 1);
   target.position = { q: 2, r: 0 };
-  assert.equal(attackPreview(state, target.id, "primary").included.length, 0);
+  assert.equal(forward.orientation, "fore");
+  assert.equal(attackPreview(state, target.id, new Set([forward.id])).included.length, 1);
+  target.position = { q: -2, r: 0 };
+  assert.equal(attackPreview(state, target.id, new Set([forward.id])).included.length, 0);
 });
