@@ -1,5 +1,5 @@
 import { activeLayer, attackGeometry, hitChance, isPositionInFiringArc, weaponDamage } from "./battle.js";
-import { hexDistance } from "./domain.js";
+import { hexDistance, weaponReadiness } from "./domain.js";
 
 export function isKnownTo(entity, sideId) {
   if (!entity || entity.hidden === true || entity.known === false) return false;
@@ -54,7 +54,7 @@ export function aaPreviewDescriptors(state, target, position) {
   for (const owner of candidates) {
     const weapons = [...(owner.weapons || [])].sort((left, right) => (left.slotOrder || 0) - (right.slotOrder || 0) || String(left.id).localeCompare(String(right.id)));
     for (const weapon of weapons) {
-      if (!isKnownTo(weapon, target.sideId) || !weapon.overwatch || weapon.firedThisRound || weapon.cooldownRemaining > 0 || !weapon.targetKinds?.includes("squadron")) continue;
+      if (!isKnownTo(weapon, target.sideId) || !weapon.overwatch || !weaponReadiness(weapon).ready || !weapon.targetKinds?.includes("squadron")) continue;
       if (weapon.energyCost > 0 && (!owner.reactor || owner.reactor.currentEnergy < weapon.energyCost)) continue;
       if (hexDistance(owner.position, position) > weapon.maxRange || !isPositionInFiringArc(owner.position, owner.heading || 0, position, weapon.firingArc ?? weapon.mount, weapon.orientation)) continue;
       const geometry = attackGeometry({ ...state, units: state.units.map(unit => unit.id === target.id ? previewTarget : unit) }, target.id, new Set(), owner);

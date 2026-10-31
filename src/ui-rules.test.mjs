@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildManeuverOptions, maneuverPreviewHeading, maneuverResourcePreview, routeConsequenceRows } from "./ui-rules.js";
+import { buildManeuverOptions, canSelectWeaponAttackTarget, maneuverPreviewHeading, maneuverResourcePreview, routeConsequenceRows } from "./ui-rules.js";
 
 const signedTurn = (from, to) => {
   let delta = (to - from + 6) % 6;
@@ -154,6 +154,13 @@ test("maneuverResourcePreview uses the hovered preview option before the selecte
     maneuverSpent: 1,
     maneuverPreview: 2
   });
+});
+
+test("selected weapon permits any enemy target so domain preview can explain invalid attacks", () => {
+  const attacker = { id: "attacker", sideId: "azure" };
+  assert.equal(canSelectWeaponAttackTarget(attacker, { id: "enemy", sideId: "crimson" }, "slot-a"), true);
+  assert.equal(canSelectWeaponAttackTarget(attacker, { id: "ally", sideId: "azure" }, "slot-a"), false);
+  assert.equal(canSelectWeaponAttackTarget(attacker, { id: "enemy", sideId: "crimson" }, null), false);
 });
 
 test("maneuverResourcePreview keeps legacy route selections and suppresses attack previews", () => {

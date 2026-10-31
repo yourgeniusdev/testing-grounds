@@ -14,6 +14,10 @@ export function shouldDrawRoute(selected) {
   return Boolean(selected?.route?.path);
 }
 
+export function canSelectWeaponAttackTarget(attacker, target, selectedWeaponId) {
+  return Boolean(selectedWeaponId && attacker && target && target.id !== attacker.id && target.sideId !== attacker.sideId);
+}
+
 function resourceState(spent, capacity) {
   return { spent, remaining: Math.max(0, capacity - spent), capacity };
 }

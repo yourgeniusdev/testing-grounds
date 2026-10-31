@@ -1,4 +1,4 @@
-import { activeUnit, applyDamage, beginWeaponCooldown, destroyUnit, hexDistance, inside, key, recordEvent, unitById } from "./domain.js";
+import { activeUnit, applyDamage, beginWeaponCooldown, destroyUnit, hexDistance, inside, key, recordEvent, unitById, weaponReadiness } from "./domain.js";
 
 const MULTIPLIERS = {
   kinetic: { shield: 1.5, armor: 0.75, integrity: 1 },
@@ -43,23 +43,15 @@ function inArc(attacker, target, weapon) {
   return isPositionInFiringArc(attacker.position, attacker.heading || 0, target.position, weapon.firingArc ?? weapon.mount, weapon.orientation);
 }
 
-function assertSelection(selection) {
-  if (!(selection instanceof Set)) throw new TypeError("Weapon selection must be a Set of installed slot IDs");
-}
-
 function effectiveWeapon(attacker, weapon) {
   return attacker.kind === "squadron" ? { ...weapon, shots: weapon.shots * attacker.stack } : { ...weapon };
 }
 
-function selectedWeapons(attacker, selection) {
-  assertSelection(selection);
-  return attacker.weapons.filter(weapon => selection.has(weapon.id)).map(weapon => effectiveWeapon(attacker, weapon));
-}
-
 function unavailableReason(attacker, target, weapon) {
-  if (weapon.firedThisRound) return "Уже стреляло в этом раунде";
-  if (weapon.cooldownRemaining > 0) return `Перезарядка: ${weapon.cooldownRemaining}`;
+  const readiness = weaponReadiness(weapon);
+  if (!readiness.ready) return readiness.reason;
   if (weapon.energyCost > 0 && !attacker.reactor) return NO_REACTOR;
+  if (weapon.energyCost > (attacker.reactor?.currentEnergy || 0)) return `Недостаточно энергии: требуется ${weapon.energyCost}, доступно ${attacker.reactor?.currentEnergy || 0}`;
   if (!target) return "Цель отсутствует";
   if (target.sideId === attacker.sideId) return "Союзная цель";
   if (!weapon.targetKinds.includes(target.kind)) return INVALID_TARGET;
@@ -131,57 +123,62 @@ function effectiveness(weapon, layer) {
   return MULTIPLIERS[weapon.weaponClass][layer];
 }
 
-function compareForLayer(layer) {
-  return (a, b) => effectiveness(b, layer) - effectiveness(a, layer) || a.slotOrder - b.slotOrder;
-}
-
-export function attackPreview(state, targetId, selection, explicitAttacker = null, options = {}) {
-  const attacker = explicitAttacker || activeUnit(state);
+export function previewWeaponAttack(state, attackerId, slotId, targetId) {
+  const attacker = unitById(state, attackerId);
   const target = unitById(state, targetId);
-  if (!attacker) throw new Error("No active unit");
-  const selected = selectedWeapons(attacker, selection);
-  const selectedIds = new Set(selected.map(weapon => weapon.id));
-  const missingSlotIds = [...selection].filter(id => !selectedIds.has(id));
-  const included = [];
-  const excluded = [];
-  for (const weapon of selected) {
+  const weapon = attacker?.weapons.find(candidate => candidate.id === slotId);
+  const reasons = [];
+  if (!attacker) reasons.push("Атакующий отсутствует");
+  else if (!weapon) reasons.push("Оружейный слот отсутствует");
+  else {
     const reason = unavailableReason(attacker, target, weapon);
-    if (reason) excluded.push({ ...weapon, reason });
-    else included.push(weapon);
+    if (reason) reasons.push(reason);
   }
-  const geometry = target ? attackGeometry(state, targetId, new Set(), attacker) : { blocker: null, cover: 0, endpointCover: 0 };
+  if (attacker && weapon && !target && !reasons.includes("Цель отсутствует")) reasons.push("Цель отсутствует");
+  const effective = attacker && weapon ? effectiveWeapon(attacker, weapon) : null;
+  const geometry = attacker && target ? attackGeometry(state, targetId, new Set(), attacker) : { blocker: null, cover: 0, endpointCover: 0 };
   const layer = target ? activeLayer(target) : null;
-  const ordered = layer ? [...included].sort(compareForLayer(layer)) : [];
-  const shots = ordered.reduce((total, weapon) => total + weapon.shots, 0);
-  const potentialDamage = layer ? ordered.reduce((total, weapon) => total + weapon.shots * weaponDamage(weapon, layer), 0) : 0;
-  const energyRequired = selected.reduce((total, weapon) => total + weapon.energyCost, 0);
-  const energyAvailable = attacker.reactor?.currentEnergy || 0;
-  const enoughEnergy = energyRequired <= energyAvailable;
-  const salvoAvailable = options.reaction || !attacker.salvoCommitted;
-  const hitChances = Object.fromEntries(ordered.map(weapon => [weapon.id, hitChance(weapon, target, geometry.cover + geometry.endpointCover)]));
-  const canConfirm = Boolean(target && selected.length && !missingSlotIds.length && included.length === selected.length && enoughEnergy && salvoAvailable);
-  return { attacker, target, selected, missingSlotIds, included, excluded, ordered, layer, shots, potentialDamage, energyRequired, energyAvailable, enoughEnergy, salvoAvailable, canConfirm, blocker: geometry.blocker, cover: geometry.cover, endpointCover: geometry.endpointCover, hitChances };
+  const chance = effective && target ? hitChance(effective, target, geometry.cover + geometry.endpointCover) : 0;
+  return deepFreeze({
+    attackerId,
+    slotId,
+    targetId,
+    canConfirm: reasons.length === 0,
+    reasons,
+    shots: effective?.shots || 0,
+    damage: effective?.damage || 0,
+    effectiveRange: effective?.effectiveRange ?? null,
+    maxRange: effective?.maxRange ?? null,
+    energyRequired: effective?.energyCost || 0,
+    energyAvailable: attacker?.reactor?.currentEnergy || 0,
+    layer,
+    potentialDamage: effective && layer ? effective.shots * weaponDamage(effective, layer) : 0,
+    hitChance: chance,
+    blocker: geometry.blocker ? { id: geometry.blocker.id, name: geometry.blocker.name, position: { ...geometry.blocker.position } } : null,
+    cover: geometry.cover,
+    endpointCover: geometry.endpointCover
+  });
 }
 
-export function attackArc(state, selection, explicitAttacker = null) {
-  const attacker = explicitAttacker || activeUnit(state);
-  const weapons = selectedWeapons(attacker, selection).filter(weapon => !unavailableReason(attacker, null, weapon) || unavailableReason(attacker, null, weapon) === "Цель отсутствует");
+export function weaponAttackArc(state, attackerId, slotId) {
+  const attacker = unitById(state, attackerId);
+  const weapon = attacker?.weapons.find(candidate => candidate.id === slotId);
   const positions = new Set();
-  const maxRange = Math.max(0, ...weapons.map(weapon => weapon.maxRange));
-  for (let q = attacker.position.q - maxRange; q <= attacker.position.q + maxRange; q++) {
-    for (let r = attacker.position.r - maxRange; r <= attacker.position.r + maxRange; r++) {
+  if (!attacker || !weapon || !weaponReadiness(weapon).ready) return positions;
+  for (let q = attacker.position.q - weapon.maxRange; q <= attacker.position.q + weapon.maxRange; q++) {
+    for (let r = attacker.position.r - weapon.maxRange; r <= attacker.position.r + weapon.maxRange; r++) {
       const position = { q, r };
       if (!inside(state, position) || (q === attacker.position.q && r === attacker.position.r)) continue;
-      if (weapons.some(weapon => hexDistance(attacker.position, position) <= weapon.maxRange && inArc(attacker, { position }, weapon))) positions.add(key(q, r));
+      if (hexDistance(attacker.position, position) <= weapon.maxRange && inArc(attacker, { position }, weapon)) positions.add(key(q, r));
     }
   }
   return positions;
 }
 
-export function availableAttackTargets(state, selection, explicitAttacker = null) {
-  assertSelection(selection);
-  const attacker = explicitAttacker || activeUnit(state);
-  return state.units.filter(target => target.sideId !== attacker.sideId && attackPreview(state, target.id, selection, attacker).included.length > 0);
+export function availableWeaponAttackTargets(state, attackerId, slotId) {
+  const attacker = unitById(state, attackerId);
+  if (!attacker) return [];
+  return state.units.filter(target => target.sideId !== attacker.sideId && previewWeaponAttack(state, attackerId, slotId, target.id).canConfirm);
 }
 
 function cloneCombatant(unit) {
@@ -217,28 +214,15 @@ function plannedCritical(attacker, weapon, rollD100, random, shot) {
   return { roll, critical: { id: `critical-${attacker.id}-${weapon.id}-${shot}`, type, weaponClass: weapon.weaponClass, attackerId: attacker.id, weaponId: weapon.id } };
 }
 
-export function planAttack(state, targetId, selection, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random, explicitAttacker = null, options = {}) {
-  if ((!options.reaction && state.stage !== "attack") || explicitAttacker && !options.reaction || state.winner) return null;
-  const preview = attackPreview(state, targetId, selection, explicitAttacker, options);
-  if (!preview.canConfirm) return null;
-  const { attacker, target } = preview;
+function planWeaponAttack(state, attacker, installedWeapon, target, rollD100, random, options = {}) {
+  const weapon = effectiveWeapon(attacker, installedWeapon);
   const simulatedTarget = cloneCombatant(target);
   const simulatedBlockers = new Map();
   const destroyedBlockerIds = new Set();
-  const remaining = [...preview.included];
-  const weapons = [];
   const steps = [];
-  let elapsedMs = 0;
-  while (remaining.length && simulatedTarget.integrity > 0) {
-    const layer = activeLayer(simulatedTarget);
-    remaining.sort(compareForLayer(layer));
-    const weapon = remaining.shift();
-    const weaponPlan = { slotId: weapon.id, weaponId: weapon.weaponId, slotOrder: weapon.slotOrder, energyCost: weapon.energyCost, cooldownRounds: weapon.cooldownRounds, firstStepIndex: steps.length, shotCount: 0 };
-    weapons.push(weaponPlan);
-    const weaponLaunchTime = elapsedMs;
-    let weaponEndTime = weaponLaunchTime;
-    for (let shot = 1; shot <= weapon.shots && simulatedTarget.integrity > 0; shot++) {
-      const geometry = attackGeometry(state, targetId, destroyedBlockerIds, attacker);
+  let weaponEndTime = 0;
+  for (let shot = 1; shot <= weapon.shots && simulatedTarget.integrity > 0; shot++) {
+      const geometry = attackGeometry(state, target.id, destroyedBlockerIds, attacker);
       const chance = hitChance(weapon, target, geometry.cover + geometry.endpointCover);
       const roll = rollD100();
       const targetBefore = snapshot(simulatedTarget);
@@ -284,21 +268,42 @@ export function planAttack(state, targetId, selection, rollD100 = () => Math.flo
       const distance = hexDistance(attacker.position, endpoint);
       const speed = weapon.visual?.speedHexesPerSecond || 1;
       const duration = Math.max(120, Math.round(distance / speed * 1000));
-      const launchTime = weaponLaunchTime + (shot - 1) * (weapon.visual?.launchIntervalMs || 0);
+      const launchTime = (shot - 1) * (weapon.visual?.launchIntervalMs || 0);
       const arrivalTime = launchTime + duration;
       steps.push({ index: steps.length, slotId: weapon.id, weaponId: weapon.weaponId, weaponName: weapon.name, weaponClass: weapon.weaponClass, delivery: weapon.delivery, visual: weapon.visual, shot, roll, chance, cover: geometry.cover, endpointCover: geometry.endpointCover, outcome, hitUnitId, layer: hitLayer, multiplier, damage, criticalRoll, critical: critical ? { ...critical, round: state.roundNumber } : null, layerDestroyed, destroyed, targetBefore, targetAfter, endpoint, launchTime, arrivalTime, duration });
-      weaponPlan.shotCount++;
       weaponEndTime = Math.max(weaponEndTime, arrivalTime);
-    }
-    elapsedMs = weaponEndTime;
   }
-  const plan = deepFreeze({ id: `${state.scenario.id}:${state.roundNumber}:${attacker.id}:${target.id}:${state.sequence || 0}`, attackerId: attacker.id, targetId: target.id, round: state.roundNumber, selection: [...selection], energyRequired: weapons.reduce((total, item) => total + item.energyCost, 0), weapons, steps, duration: Math.max(0, ...steps.map(step => step.arrivalTime)), predictedDestruction: simulatedTarget.integrity === 0, targetAfter: snapshot(simulatedTarget), explicitAttacker: Boolean(explicitAttacker), reaction: Boolean(options.reaction), context: options.context || null });
-  if (!options.reaction) attacker.salvoCommitted = true;
-  return plan;
+  return deepFreeze({
+    id: `${state.scenario.id}:${state.roundNumber}:${attacker.id}:${target.id}:${options.actionId || state.sequence || 0}`,
+    actionId: options.actionId || null,
+    attackerId: attacker.id,
+    targetId: target.id,
+    round: state.roundNumber,
+    slotId: weapon.id,
+    weapon: { slotId: weapon.id, weaponId: weapon.weaponId, slotOrder: weapon.slotOrder, energyCost: weapon.energyCost, cooldownRounds: weapon.cooldownRounds, shotCount: steps.length },
+    steps,
+    duration: weaponEndTime,
+    predictedDestruction: simulatedTarget.integrity === 0,
+    targetAfter: snapshot(simulatedTarget),
+    reaction: Boolean(options.reaction),
+    context: options.context || null
+  });
 }
 
-export function attackAnimationPlan(state, targetId, selection, rollD100, random) {
-  return planAttack(state, targetId, selection, rollD100, random)?.steps || [];
+export function confirmWeaponAttack(state, attackerId, slotId, targetId, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random) {
+  if (state.stage !== "attack" || state.winner || attackerId !== activeUnit(state)?.id || state.attackApplication) return null;
+  const preview = previewWeaponAttack(state, attackerId, slotId, targetId);
+  if (!preview.canConfirm) return null;
+  const declaration = recordEvent(state, "weapon-attack-confirm", { actorId: attackerId, subjectIds: [targetId], slotId, targetId });
+  const attacker = unitById(state, attackerId);
+  const target = unitById(state, targetId);
+  const weapon = attacker.weapons.find(candidate => candidate.id === slotId);
+  const plan = planWeaponAttack(state, attacker, weapon, target, rollD100, random, { actionId: declaration.eventId });
+  if (weapon.energyCost > 0) attacker.reactor.currentEnergy -= weapon.energyCost;
+  beginWeaponCooldown(weapon);
+    state.attackApplication = { plan, planId: plan.id, nextStep: 0, actionId: declaration.eventId };
+  log(state, `${weapon.name}: открыта атака оружием.`, attacker.sideId);
+  return plan;
 }
 
 function log(state, message, tone = "neutral") {
@@ -312,31 +317,20 @@ function destroyTarget(state, target, context = {}) {
   if (result.winner) log(state, `Победа флотилии ${result.winner}.`, "system");
 }
 
-function progressFor(state, plan) {
-  if (!state.attackApplication || state.attackApplication.planId !== plan.id) state.attackApplication = { planId: plan.id, nextStep: 0, startedSlots: [] };
-  return state.attackApplication;
-}
-
 export function applyAttackStep(state, plan, stepIndex) {
+  const progress = state.attackApplication;
   const step = plan?.steps?.[stepIndex];
-  if (!plan || plan.round !== state.roundNumber || !plan.reaction && (plan.explicitAttacker || plan.attackerId !== activeUnit(state)?.id)) return { status: "invalid" };
-  const progress = progressFor(state, plan);
+  if (!plan || !progress || progress.plan !== plan || progress.planId !== plan.id || plan.round !== state.roundNumber || !plan.reaction && plan.attackerId !== activeUnit(state)?.id) return { status: "invalid" };
   if (!step || progress.nextStep !== stepIndex) return { status: "invalid" };
   const attacker = unitById(state, plan.attackerId);
   const target = unitById(state, plan.targetId);
   if (!attacker || (!target && step.hitUnitId === plan.targetId)) return { status: "stopped" };
-  if (!progress.startedSlots.includes(step.slotId) && !plan.reaction) {
-    const weapon = attacker.weapons.find(item => item.id === step.slotId);
-    if (!weapon || weapon.firedThisRound || weapon.cooldownRemaining > 0 || (weapon.energyCost > 0 && (!attacker.reactor || attacker.reactor.currentEnergy < weapon.energyCost))) return { status: "invalid" };
-    if (weapon.energyCost > 0) attacker.reactor.currentEnergy -= weapon.energyCost;
-    beginWeaponCooldown(weapon);
-    progress.startedSlots.push(step.slotId);
-    log(state, `${weapon.name}: открыт огонь.`, attacker.sideId);
-  }
   const hitUnit = step.hitUnitId ? unitById(state, step.hitUnitId) : null;
   if (step.outcome === "miss") log(state, `${step.weaponName}, выстрел ${step.shot}: ${step.roll}/${step.chance}, промах.`);
   else if (hitUnit) {
-    const context = plan.context ? { planId: plan.context.planId, elementIndex: plan.context.elementIndex, causeEventId: progress.declarationEventId || plan.context.declarationEventId || plan.context.causeEventId } : {};
+    const context = plan.reaction
+      ? { planId: plan.context?.planId, actionId: plan.actionId, elementIndex: plan.context?.elementIndex, causeEventId: progress.actionId || plan.context?.causeEventId }
+      : { planId: plan.id, actionId: plan.actionId, causeEventId: progress.actionId };
     applyDamage(state, hitUnit, step.damage, `weapon:${step.slotId}`, step.layer, context);
     log(state, `${step.weaponName} [${step.weaponClass}], выстрел ${step.shot}: ${step.roll}/${step.chance}, попадание; ${step.damage} урона по ${step.layer}.`, attacker.sideId);
     if (step.critical) {
@@ -344,22 +338,11 @@ export function applyAttackStep(state, plan, stepIndex) {
       log(state, `Крит ${step.criticalRoll}: ${step.critical.type}.`, "danger");
     }
     if (step.layerDestroyed) log(state, `${hitUnit.name}: слой «${step.layer}» разрушен.`, "danger");
-    if (hitUnit.integrity === 0) destroyTarget(state, hitUnit, plan.context ? { planId: plan.context.planId, elementIndex: plan.context.elementIndex, causeEventId: state.events.at(-1)?.eventId } : {});
+    if (hitUnit.integrity === 0) destroyTarget(state, hitUnit, { ...context, causeEventId: state.events.at(-1)?.eventId });
   }
   progress.nextStep++;
+  if (progress.nextStep === plan.steps.length) state.attackApplication = null;
   return { status: "applied", step, destroyed: step.destroyed };
-}
-
-export function resolveAttack(state, targetId, selection, rollD100, random, explicitAttacker = null, options = {}) {
-  const plan = planAttack(state, targetId, selection, rollD100, random, explicitAttacker, options);
-  if (!plan) return false;
-  const attacker = explicitAttacker || activeUnit(state);
-  log(state, `${attacker.name} объявляет залп по цели ${unitById(state, targetId).name}.`, attacker.sideId);
-  for (let index = 0; index < plan.steps.length; index++) {
-    const result = applyAttackStep(state, plan, index);
-    if (result.status !== "applied") break;
-  }
-  return true;
 }
 
 function reactionCandidates(state, target) {
@@ -369,7 +352,7 @@ function reactionCandidates(state, target) {
     .filter(owner => owner.id !== target.id && owner.sideId !== target.sideId && owner.integrity > 0)
     .sort((left, right) => (initiative.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (initiative.get(right.id) ?? Number.MAX_SAFE_INTEGER) || String(left.id).localeCompare(String(right.id)))
     .flatMap(owner => owner.weapons
-      .filter(slot => slot.overwatch && slot.targetKinds.includes("squadron") && !slot.firedThisRound && slot.cooldownRemaining <= 0)
+      .filter(slot => slot.overwatch && slot.targetKinds.includes("squadron") && weaponReadiness(slot).ready)
       .sort((left, right) => left.slotOrder - right.slotOrder || String(left.id).localeCompare(String(right.id)))
       .map(slot => ({ owner, slot })));
 }
@@ -380,11 +363,8 @@ export function resolvePostEntryAA(state, target, context = {}, rollD100 = () =>
   for (const candidate of reactionCandidates(state, target)) {
     if (!state.units.includes(target)) break;
     const { owner, slot } = candidate;
-    const selection = new Set([slot.id]);
-    const preview = attackPreview(state, target.id, selection, owner, { reaction: true });
-    if (!preview.canConfirm || preview.included.length !== 1) continue;
-    const plan = planAttack(state, target.id, selection, rollD100, random, owner, { reaction: true, context });
-    if (!plan) continue;
+    const preview = previewWeaponAttack(state, owner.id, slot.id, target.id);
+    if (!preview.canConfirm) continue;
     const declaration = recordEvent(state, "aa-reaction-declare", {
       actorId: owner.id,
       subjectIds: [target.id],
@@ -393,11 +373,10 @@ export function resolvePostEntryAA(state, target, context = {}, rollD100 = () =>
       elementIndex: context.elementIndex,
       causeEventId: context.causeEventId
     });
+    const plan = planWeaponAttack(state, owner, slot, target, rollD100, random, { reaction: true, context, actionId: declaration.eventId });
     if (slot.energyCost > 0) owner.reactor.currentEnergy -= slot.energyCost;
     beginWeaponCooldown(slot);
-    const progress = progressFor(state, plan);
-    progress.declarationEventId = declaration.eventId;
-    progress.startedSlots.push(slot.id);
+  state.attackApplication = { plan, planId: plan.id, nextStep: 0, actionId: declaration.eventId };
     for (let index = 0; index < plan.steps.length; index++) {
       const result = applyAttackStep(state, plan, index);
       if (result.status !== "applied") break;
@@ -405,10 +384,4 @@ export function resolvePostEntryAA(state, target, context = {}, rollD100 = () =>
     outcomes.push({ ownerId: owner.id, slotId: slot.id, steps: plan.steps });
   }
   return outcomes;
-}
-
-export function skipAttack(state) {
-  if (state.stage !== "attack") return false;
-  log(state, `${activeUnit(state).name} пропускает атаку.`, "system");
-  return true;
 }

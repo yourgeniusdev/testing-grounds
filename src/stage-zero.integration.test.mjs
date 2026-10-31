@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyAttackStep, planAttack, resolvePostEntryAA } from "./battle.js";
+import { applyAttackStep, confirmWeaponAttack, resolvePostEntryAA } from "./battle.js";
 import * as domain from "./domain.js";
 import { buildManeuverOptions } from "./ui-rules.js";
 
@@ -54,7 +54,6 @@ function unit(overrides = {}) {
     hasActivated: false,
     hasWaited: false,
     activationStartedThisRound: true,
-    salvoCommitted: false,
     shield: 0,
     armor: 0,
     integrity: 20,
@@ -98,7 +97,7 @@ function snapshot(state) {
   return structuredClone({ ...state, rng: null });
 }
 
-test("Stage 0 battle seam executes movement stepwise through hazards, AA, interception, and the legacy attack block", () => {
+test("Stage 0 battle seam executes movement stepwise through hazards, AA, interception, and the weapon attack block", () => {
   const mover = unit();
   const passThroughCapital = unit({ id: "capital", name: "Capital", sideId: "crimson", kind: "capital", position: { q: 2, r: 0 }, heading: 3, currentSpeed: 2, speedRemaining: 2, maneuver: 1, maneuverRemaining: 1, stack: 1, unitHealth: null, weapons: [weapon({ id: "aa", name: "AA", targetKinds: ["squadron"], overwatch: true })] });
   const interceptor = unit({ id: "interceptor", name: "Interceptor", sideId: "crimson", position: { q: 4, r: 2 }, weapons: [] });
@@ -144,7 +143,7 @@ test("Stage 0 battle seam executes movement stepwise through hazards, AA, interc
   assert.equal(passThroughCapital.weapons[0].firedThisRound, true);
   assert.deepEqual(state.scenario.contents.map(content => content.id), ["asteroid", "mine"]);
 
-  const attackPlan = planAttack(state, passThroughCapital.id, new Set([mover.weapons[0].id]), () => 100, () => 0);
+  const attackPlan = confirmWeaponAttack(state, mover.id, mover.weapons[0].id, passThroughCapital.id, () => 100, () => 0);
   assert.ok(attackPlan);
   assert.equal(applyAttackStep(state, attackPlan, 0).status, "applied");
 

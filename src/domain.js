@@ -80,10 +80,19 @@ export function initializeWeaponState(weapon, fallbackSlotOrder = 0) {
   };
 }
 
+export function weaponReadiness(weapon) {
+  if (weapon.firedThisRound) return { ready: false, reason: "Уже стреляло в этом раунде" };
+  if (weapon.cooldownRemaining > 0) return { ready: false, reason: `Перезарядка: ${weapon.cooldownRemaining}` };
+  return { ready: true, reason: null };
+}
+
 export function beginWeaponCooldown(weapon) {
+  const readiness = weaponReadiness(weapon);
+  if (!readiness.ready) return false;
   weapon.firedThisRound = true;
   weapon.cooldownRemaining = weapon.cooldownRounds || 0;
   weapon.overwatch = false;
+  return true;
 }
 
 export function advanceWeaponRound(weapon) {
@@ -101,7 +110,7 @@ export function createBattleState() {
   const scenario = createScenario();
   const randomKeys = Object.fromEntries(scenario.units.map((unit, index) => [unit.id, ((index * 37 + 17) % 97) / 97]));
   const initiativeOrder = [...scenario.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || randomKeys[a.id] - randomKeys[b.id]).map(unit => unit.id);
-  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(initializeWeaponState), criticals: [], hasActivated: false, hasWaited: false, canWait: true, activationStartedThisRound: false, salvoCommitted: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, speedSpent: 0, speedRemaining: unit.currentSpeed, maneuverSpent: 0, maneuverRemaining: unit.maneuver ?? 0, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
+  const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(initializeWeaponState), criticals: [], hasActivated: false, hasWaited: false, canWait: true, activationStartedThisRound: false, movementEvasion: 0, evasiveManeuver: false, evasionLocked: false, speedSpent: 0, speedRemaining: unit.currentSpeed, maneuverSpent: 0, maneuverRemaining: unit.maneuver ?? 0, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
   return { scenario, units, roundNumber: 1, phase: "activation", lifecycle: "DeploymentLeft", stage: "system", initiativeOrder: [], activeUnitId: units[0]?.id || null, winner: null, log: [], events: [], sequence: 0, rng: Math.random, deployment: { left: false, right: false } };
 }
 
@@ -665,7 +674,6 @@ export function beginActivation(state) {
     unit.evasionLocked = false;
     unit.movementEvasion = 0;
     unit.evasiveManeuver = false;
-    unit.salvoCommitted = false;
     unit.speedSpent = 0;
     unit.speedRemaining = unit.currentSpeed;
     unit.maneuverSpent = 0;
@@ -698,9 +706,10 @@ export function waitActiveUnit(state) {
 }
 
 export function endActivation(state) {
+  if (state.winner || state.lifecycle === "Finished" || state.attackApplication) return null;
   const unit = activeUnit(state);
-  unit.salvoCommitted = false;
-  for (const weapon of unit.weapons) weapon.overwatch = !weapon.firedThisRound && weapon.cooldownRemaining <= 0 && weapon.targetKinds.includes("squadron");
+  if (!unit) return null;
+  for (const weapon of unit.weapons) weapon.overwatch = weaponReadiness(weapon).ready && weapon.targetKinds.includes("squadron");
   unit.hasActivated = true;
   const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated);
   if (nextId) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { applyAttackStep, attackArc, attackPreview, planAttack } from "./battle.js";
+import { applyAttackStep, confirmWeaponAttack, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import {
   DIRECTIONS,
   activeUnit,
@@ -48,7 +48,7 @@ test("default right-side confirmation exposes first-unit routes without blocking
   assert.ok(elapsed < 1000, `default route planning took ${Math.round(elapsed)}ms`);
 });
 
-test("Stage 1 completes deployment, maneuver, legacy salvo, activation, and next-unit transition", () => {
+test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and next-unit transition", () => {
   const state = createBattleState();
   state.scenario.bounds = { minCol: -2, maxCol: 2, minRow: -3, maxRow: 3 };
   state.scenario.contents = [];
@@ -85,14 +85,16 @@ test("Stage 1 completes deployment, maneuver, legacy salvo, activation, and next
   assert.equal(wasps.heading, 0);
   assert.equal(state.stage, "attack");
 
-  const selection = new Set(wasps.weapons.map(weapon => weapon.id));
-  const preview = attackPreview(state, bastion.id, selection);
-  assert.equal(preview.canConfirm, true);
-  assert.equal(preview.included.length, wasps.weapons.length);
-  const attackPlan = planAttack(state, bastion.id, selection, () => 100, () => 0);
-  assert.ok(attackPlan);
-  assert.equal(attackPlan.steps.length, 6);
-  for (let index = 0; index < attackPlan.steps.length; index++) assert.equal(applyAttackStep(state, attackPlan, index).status, "applied");
+  let totalShots = 0;
+  for (const weapon of wasps.weapons) {
+    const preview = previewWeaponAttack(state, wasps.id, weapon.id, bastion.id);
+    assert.equal(preview.canConfirm, true);
+    const attackPlan = confirmWeaponAttack(state, wasps.id, weapon.id, bastion.id, () => 100, () => 0);
+    assert.ok(attackPlan);
+    totalShots += attackPlan.steps.length;
+    for (let index = 0; index < attackPlan.steps.length; index++) assert.equal(applyAttackStep(state, attackPlan, index).status, "applied");
+  }
+  assert.equal(totalShots, 6);
   assert.equal(wasps.weapons.every(weapon => weapon.firedThisRound), true);
 
   const activation = endActivation(state);
@@ -133,13 +135,12 @@ test("a squadron maneuver final heading controls every weapon slot arc", () => {
   formerForeTarget.position = { q: mantis.position.q + formerDq * 2, r: mantis.position.r + formerDr * 2 };
 
   for (const weapon of mantis.weapons) {
-    const selection = new Set([weapon.id]);
-    const arc = attackArc(state, selection);
+    const arc = weaponAttackArc(state, mantis.id, weapon.id);
     assert.equal(arc.has(key(finalForeTarget.position.q, finalForeTarget.position.r)), true, `${weapon.id} final heading`);
     assert.equal(arc.has(key(formerForeTarget.position.q, formerForeTarget.position.r)), false, `${weapon.id} former heading`);
-    assert.equal(attackPreview(state, finalForeTarget.id, selection).included.length, 1, `${weapon.id} final heading preview`);
-    const formerPreview = attackPreview(state, formerForeTarget.id, selection);
-    assert.equal(formerPreview.included.length, 0, `${weapon.id} former heading preview`);
-    assert.equal(formerPreview.excluded[0].reason, "Вне сектора");
+    assert.equal(previewWeaponAttack(state, mantis.id, weapon.id, finalForeTarget.id).canConfirm, true, `${weapon.id} final heading preview`);
+    const formerPreview = previewWeaponAttack(state, mantis.id, weapon.id, formerForeTarget.id);
+    assert.equal(formerPreview.canConfirm, false, `${weapon.id} former heading preview`);
+    assert.deepEqual(formerPreview.reasons, ["Вне сектора"]);
   }
 });
