@@ -1,0 +1,466 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { planRoutes } from "./domain.js";
+import { aaPreviewDescriptors } from "./route-preview.js";
+import { buildManeuverOptions } from "./ui-rules.js";
+
+function unit(overrides = {}) {
+  return {
+    id: "mover",
+    name: "Mover",
+    sideId: "azure",
+    kind: "squadron",
+    position: { q: 0, r: 0 },
+    currentSpeed: 3,
+    maneuver: 0,
+    speedSpent: 0,
+    speedRemaining: 3,
+    maneuverSpent: 0,
+    maneuverRemaining: 0,
+    engagedWith: [],
+    weapons: [{ id: "weapon-a", firedThisRound: false, cooldownRemaining: 0 }],
+    ...overrides
+  };
+}
+
+function battle(mover, { units = [], contents = [] } = {}) {
+  return {
+    scenario: {
+      id: "route-planning-characterization",
+      bounds: { minCol: -4, maxCol: 4, minRow: -4, maxRow: 4 },
+      contents
+    },
+    units: [mover, ...units],
+    events: [{ eventId: "existing-event" }],
+    sequence: 1,
+    randomState: { seed: 17 }
+  };
+}
+
+function terrain(type = "asteroidField", overrides = {}) {
+  return {
+    id: `${type}-a`,
+    kind: "terrain",
+    type,
+    label: type,
+    position: { q: 1, r: 0 },
+    ...overrides
+  };
+}
+
+function routeShape(routes) {
+  return [...routes.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([destination, route]) => ({
+      destination,
+      position: route.position,
+      heading: route.heading,
+      movementCost: route.movementCost,
+      turnsSpent: route.turnsSpent,
+      steps: route.steps,
+      consequences: route.consequences,
+      previewConsequences: route.previewConsequences,
+      path: route.path,
+      interceptions: route.interceptions,
+      interception: route.interception
+    }));
+}
+
+const costCases = [
+  { name: "large ship entering an ordinary hex", kind: "capital", contents: [], expectedCost: 1 },
+  { name: "large ship entering asteroid terrain", kind: "capital", contents: [terrain()], expectedCost: 1 },
+  { name: "squadron entering an ordinary hex", kind: "squadron", contents: [], expectedCost: 1 },
+  { name: "squadron entering asteroid terrain", kind: "squadron", contents: [terrain()], expectedCost: 2 }
+];
+
+for (const scenario of costCases) {
+  test(`characterizes movement cost: ${scenario.name}`, () => {
+    const mover = unit({
+      kind: scenario.kind,
+      currentSpeed: 2,
+      speedRemaining: 2,
+      ...(scenario.kind === "capital" ? { heading: 0, maneuver: 0 } : {})
+    });
+    const routes = planRoutes(battle(mover, { contents: scenario.contents }), mover, "risky");
+    assert.equal(routes.get("1,0")?.movementCost, scenario.expectedCost);
+  });
+}
+
+const blockedCases = [
+  { name: "large ship by a large ship", moverKind: "capital", blockerKind: "capital", blockerType: "unit" },
+  { name: "large ship by a squadron", moverKind: "capital", blockerKind: "squadron", blockerType: "unit" },
+  { name: "squadron by a squadron", moverKind: "squadron", blockerKind: "squadron", blockerType: "unit" },
+  { name: "large ship by an object", moverKind: "capital", blockerType: "object" },
+  { name: "squadron by an object", moverKind: "squadron", blockerType: "object" }
+];
+
+for (const scenario of blockedCases) {
+  test(`characterizes forbidden entry: ${scenario.name}`, () => {
+    const mover = unit({
+      kind: scenario.moverKind,
+      currentSpeed: 1,
+      speedRemaining: 1,
+      ...(scenario.moverKind === "capital" ? { heading: 0, maneuver: 0 } : {})
+    });
+    const blocker = scenario.blockerType === "unit"
+      ? unit({ id: "blocker", kind: scenario.blockerKind, sideId: "crimson", position: { q: 1, r: 0 } })
+      : null;
+    const contents = scenario.blockerType === "object"
+      ? [{ id: "station", kind: "object", type: "station", position: { q: 1, r: 0 } }]
+      : [];
+    const routes = planRoutes(battle(mover, { units: blocker ? [blocker] : [], contents }), mover, "risky");
+    assert.equal(routes.has("1,0"), false);
+  });
+}
+
+test("squadron may cross a large ship but may not stop in its hex", () => {
+  const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
+  const largeShip = unit({ id: "blocker", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 });
+  const routes = planRoutes(battle(mover, { units: [largeShip] }), mover, "risky");
+  assert.equal(routes.has("1,0"), false);
+  assert.deepEqual(routes.get("2,0")?.path, [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 2, r: 0 }]);
+});
+
+test("crossing a large ship considers terrain cost and compatible hazards in the same hex", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
+  const largeShip = unit({ id: "blocker", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 });
+  const minefield = terrain("minefield", {
+    id: "mines-a",
+    kind: "hazard",
+    label: "Minefield",
+    hazard: { probability: 0.5, min: 4, max: 8, effect: "integrity damage" }
+  });
+  const detourBlockers = [
+    { q: 0, r: 1 },
+    { q: -1, r: 1 },
+    { q: -1, r: 0 },
+    { q: 0, r: -1 },
+    { q: 1, r: -1 }
+  ].map((position, index) => ({ id: `station-${index}`, kind: "object", type: "station", position }));
+  const routes = planRoutes(battle(mover, { units: [largeShip], contents: [terrain(), minefield, ...detourBlockers] }), mover, "risky");
+
+  assert.equal(routes.has("1,0"), false);
+  assert.equal(routes.get("2,0")?.movementCost, 3);
+  assert.deepEqual(routes.get("2,0")?.consequences, [{
+    sourceId: "mines-a",
+    sourceName: "Minefield",
+    probability: 0.5,
+    min: 4,
+    max: 8,
+    effect: "integrity damage"
+  }]);
+});
+
+test("a no-stop hex is not traversed without an affordable legal continuation", () => {
+  const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
+  const largeShip = unit({ id: "blocker", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 });
+  const routes = planRoutes(battle(mover, { units: [largeShip], contents: [terrain()] }), mover, "risky");
+
+  assert.equal(routes.has("1,0"), false);
+  assert.equal(routes.get("2,0"), undefined);
+});
+
+test("safe policy excludes known danger while risky policy exposes it", () => {
+  const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+  const minefield = {
+    id: "mines-a",
+    kind: "hazard",
+    type: "minefield",
+    label: "Minefield",
+    position: { q: 1, r: 0 },
+    hazard: { probability: 0.5, min: 4, max: 8, effect: "integrity damage" }
+  };
+  const state = battle(mover, { contents: [minefield] });
+  assert.equal(planRoutes(state, mover, "safe").has("1,0"), false);
+  assert.deepEqual(planRoutes(state, mover, "risky").get("1,0")?.consequences, [{
+    sourceId: "mines-a",
+    sourceName: "Minefield",
+    probability: 0.5,
+    min: 4,
+    max: 8,
+    effect: "integrity damage"
+  }]);
+});
+
+test("selected routes never visit a hex twice", () => {
+  const mover = unit({ kind: "capital", heading: 0, maneuver: 3, currentSpeed: 5, speedRemaining: 5 });
+  const routes = planRoutes(battle(mover), mover, "risky");
+  for (const route of routes.values()) {
+    const visited = route.path.map(position => `${position.q},${position.r}`);
+    assert.equal(new Set(visited).size, visited.length, `route to ${route.position.q},${route.position.r}`);
+  }
+});
+
+test("equal-cost alternatives select one reproducible route", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
+  const obstruction = { id: "station", kind: "object", type: "station", position: { q: 1, r: 0 } };
+  const route = planRoutes(battle(mover, { contents: [obstruction] }), mover, "risky").get("2,0");
+  assert.deepEqual(route?.path, [{ q: 0, r: 0 }, { q: 0, r: 1 }, { q: 1, r: 1 }, { q: 2, r: 0 }]);
+});
+
+test("route selection is structurally stable across rule-irrelevant source ordering", () => {
+  const moverA = unit({ currentSpeed: 1, speedRemaining: 1 });
+  const enemiesA = [
+    unit({ id: "enemy-east", sideId: "crimson", position: { q: 2, r: 0 } }),
+    unit({ id: "enemy-southeast", sideId: "crimson", position: { q: 1, r: 1 } })
+  ];
+  const hazardsA = [
+    terrain("minefield", { id: "mines-a", kind: "hazard", label: "Mines A", hazard: { probability: 0.5, min: 2, max: 4, effect: "integrity damage" } }),
+    terrain("minefield", { id: "mines-b", kind: "hazard", label: "Mines B", hazard: { probability: 0.5, min: 2, max: 4, effect: "integrity damage" } })
+  ];
+  const stateA = battle(moverA, { units: enemiesA, contents: hazardsA });
+
+  const moverB = structuredClone(moverA);
+  const stateB = battle(moverB, {
+    units: [...structuredClone(enemiesA)].reverse(),
+    contents: [...structuredClone(hazardsA)].reverse()
+  });
+
+  assert.deepEqual(routeShape(planRoutes(stateA, moverA, "risky")), routeShape(planRoutes(stateB, moverB, "risky")));
+});
+
+test("maneuver options preserve stable public data without mutating battle state", () => {
+  const mover = unit({
+    reactor: { currentEnergy: 2, capacity: 4 },
+    weapons: [{ id: "weapon-a", firedThisRound: false, cooldownRemaining: 0 }]
+  });
+  const enemy = unit({ id: "enemy", sideId: "crimson", position: { q: 3, r: 0 } });
+  const minefield = terrain("minefield", {
+    id: "mines-a",
+    kind: "hazard",
+    label: "Minefield",
+    hazard: { probability: 0.5, min: 4, max: 8, effect: "integrity damage" }
+  });
+  const state = battle(mover, { units: [enemy], contents: [minefield] });
+  let randomCalls = 0;
+  const rng = () => {
+    randomCalls++;
+    return 0.5;
+  };
+  state.rng = rng;
+  const before = structuredClone({ scenario: state.scenario, units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState });
+
+  planRoutes(state, mover, "safe");
+  const route = planRoutes(state, mover, "risky").get("1,0");
+  const [option] = buildManeuverOptions(mover, route, null);
+
+  assert.deepEqual({
+    optionId: option.optionId,
+    finalState: option.finalState,
+    resources: option.resources,
+    consequences: option.consequences,
+    interception: option.interception
+  }, {
+    optionId: "maneuver:1:0",
+    finalState: { hex: { q: 1, r: 0 } },
+    resources: { speed: { spent: 1, remaining: 2, capacity: 3 }, maneuver: { spent: 0, remaining: 0, capacity: 0 } },
+    consequences: [{ sourceId: "mines-a", sourceName: "Minefield", probability: 0.5, min: 4, max: 8, effect: "integrity damage" }],
+    interception: null
+  });
+  assert.equal(option.route, route);
+  assert.equal(option.consequences, route.consequences);
+  assert.deepEqual({ scenario: state.scenario, units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState }, before);
+  assert.equal(state.rng, rng);
+  assert.equal(randomCalls, 0);
+});
+
+test("Squadron route preview exposes every expected interception in stable order with a deterministic singular adapter", () => {
+  const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+  const enemies = [
+    unit({ id: "enemy-z", sideId: "crimson", position: { q: 2, r: 0 } }),
+    unit({ id: "enemy-a", sideId: "crimson", position: { q: 1, r: 1 } }),
+    unit({ id: "enemy-a", sideId: "crimson", position: { q: 1, r: 1 } })
+  ];
+  const ally = unit({ id: "ally", position: { q: 0, r: 1 } });
+  const route = planRoutes(battle(mover, { units: [enemies[0], ally, enemies[2], enemies[1]] }), mover, "risky").get("1,0");
+  const [option] = buildManeuverOptions(mover, route, null);
+
+  assert.deepEqual(route.interceptions, ["enemy-a", "enemy-z"]);
+  assert.equal(route.interception, "enemy-a");
+  assert.deepEqual(option.interceptions, ["enemy-a", "enemy-z"]);
+  assert.equal(option.interception, "enemy-a");
+});
+
+test("stage 0 keeps squadrons headingless and limits large ships to one turn before each step", () => {
+  const squadron = unit();
+  const squadronRoutes = planRoutes(battle(squadron), squadron, "risky");
+  assert.equal(Object.hasOwn(squadron, "heading"), false);
+  for (const route of squadronRoutes.values()) assert.equal(Object.hasOwn(route, "heading"), false);
+
+  const largeShip = unit({ kind: "capital", heading: 0, maneuver: 3, currentSpeed: 3, speedRemaining: 3 });
+  const largeShipRoutes = planRoutes(battle(largeShip), largeShip, "risky");
+  for (const route of largeShipRoutes.values()) {
+    for (const step of route.steps) assert.ok(Math.abs(step.turn) <= 1);
+  }
+});
+
+function aaWeapon(overrides = {}) {
+  return {
+    id: "aa",
+    weaponId: "aa-catalog",
+    slotOrder: 0,
+    name: "AA",
+    mount: "turret",
+    orientation: null,
+    weaponClass: "kinetic",
+    delivery: "projectile",
+    targetKinds: ["squadron"],
+    accuracy: 60,
+    maxRange: 2,
+    shots: 2,
+    damage: 3,
+    energyCost: 0,
+    cooldownRounds: 0,
+    firedThisRound: false,
+    cooldownRemaining: 0,
+    overwatch: true,
+    ...overrides
+  };
+}
+
+function aaOwner(overrides = {}) {
+  return unit({
+    id: "aa-owner",
+    name: "AA Owner",
+    kind: "capital",
+    sideId: "crimson",
+    position: { q: 0, r: 1 },
+    heading: 0,
+    integrity: 20,
+    weapons: [aaWeapon()],
+    ...overrides
+  });
+}
+
+test("safe policy excludes every known negative preview descriptor while risky policy retains risk-only final states", async t => {
+  const cases = [
+    ["Hazard", ({ contents }) => contents.push(terrain("minefield", { id: "known-hazard", kind: "hazard", hazard: { probability: 0.5, min: 2, max: 4, effect: "damage" } }))],
+    ["AA", ({ units }) => units.push(aaOwner())],
+    ["Interception", ({ units }) => units.push(unit({ id: "interceptor", sideId: "crimson", position: { q: 2, r: 0 } }))],
+    ["guaranteed effect", ({ contents }) => contents.push({ id: "gravity", kind: "terrain", type: "gravityWell", label: "Gravity Well", position: { q: 1, r: 0 }, routeEffect: { effect: "speed lock", negative: true, guaranteed: true, execute: { type: "set", path: "speedRemaining", value: 0 } } })]
+  ];
+
+  for (const [name, arrange] of cases) await t.test(name, () => {
+    const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+    const setup = { units: [], contents: [] };
+    arrange(setup);
+    const state = battle(mover, setup);
+    assert.equal(planRoutes(state, mover, "safe").has("1,0"), false);
+    const risky = planRoutes(state, mover, "risky").get("1,0");
+    assert.ok(risky);
+    assert.ok(risky.previewConsequences.length > 0);
+  });
+});
+
+test("risky route ordering is speed then maneuver then expected known harm then geometry", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
+  const directRisk = terrain("minefield", {
+    id: "direct-risk",
+    kind: "hazard",
+    position: { q: 1, r: 0 },
+    hazard: { probability: 1, min: 20, max: 20, effect: "damage" }
+  });
+  const speedFirst = planRoutes(battle(mover, { contents: [directRisk] }), mover, "risky").get("2,0");
+  assert.deepEqual(speedFirst.path, [{ q: 0, r: 0 }, { q: 1, r: 0 }, { q: 2, r: 0 }]);
+
+  const obstruction = { id: "station", kind: "object", type: "station", position: { q: 1, r: 0 } };
+  const lowHarm = terrain("minefield", { id: "low", kind: "hazard", position: { q: 0, r: 1 }, hazard: { probability: 0.5, min: 2, max: 2, effect: "damage" } });
+  const highHarm = terrain("minefield", { id: "high", kind: "hazard", position: { q: 1, r: -1 }, hazard: { probability: 1, min: 8, max: 8, effect: "damage" } });
+  const harmBeforeGeometry = planRoutes(battle(mover, { contents: [obstruction, lowHarm, highHarm] }), mover, "risky").get("2,0");
+  assert.deepEqual(harmBeforeGeometry.path, [{ q: 0, r: 0 }, { q: 0, r: 1 }, { q: 1, r: 1 }, { q: 2, r: 0 }]);
+
+  const geometry = planRoutes(battle(mover, { contents: [obstruction] }), mover, "risky").get("2,0");
+  assert.deepEqual(geometry.path, [{ q: 0, r: 0 }, { q: 0, r: 1 }, { q: 1, r: 1 }, { q: 2, r: 0 }]);
+});
+
+test("expected interception terminates a risky route and preserves the singular adapter", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
+  const interceptor = unit({ id: "interceptor", sideId: "crimson", position: { q: 2, r: 0 } });
+  const blockers = [
+    { q: 0, r: 1 },
+    { q: -1, r: 1 },
+    { q: -1, r: 0 },
+    { q: 0, r: -1 },
+    { q: 1, r: -1 }
+  ].map((position, index) => ({ id: `station-${index}`, kind: "object", type: "station", position }));
+  const routes = planRoutes(battle(mover, { units: [interceptor], contents: blockers }), mover, "risky");
+  const intercepted = routes.get("1,0");
+
+  assert.deepEqual(intercepted.path, [{ q: 0, r: 0 }, { q: 1, r: 0 }]);
+  assert.deepEqual(intercepted.interceptions, ["interceptor"]);
+  assert.equal(intercepted.interception, "interceptor");
+  assert.equal(routes.has("2,0"), false);
+  assert.equal([...routes.values()].some(route => route.path.length > 2), false);
+});
+
+test("AA preview expected harm uses battle geometry, endpoint cover, evasion, and active-layer multiplier", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3, baseEvasion: 10, movementEvasion: 0, shield: 4, armor: 0, integrity: 20 });
+  const owner = aaOwner({ position: { q: -1, r: 0 }, weapons: [aaWeapon({ accuracy: 100, shots: 2, damage: 4, weaponClass: "kinetic", maxRange: 3 })] });
+  const blocker = unit({ id: "blocker", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, mass: 80, integrity: 20, heading: 0 });
+  const cover = terrain("debrisField", { id: "cover", position: { q: 2, r: 0 } });
+  const state = battle(mover, { units: [owner, blocker], contents: [cover] });
+  const [aa] = aaPreviewDescriptors(state, mover, { q: 2, r: 0 });
+
+  assert.deepEqual({ probability: aa.probability, max: aa.max, expectedHarm: aa.expectedHarm }, { probability: 0.3, max: 12, expectedHarm: 3.6 });
+});
+
+test("known AA preview is descriptive and consumes neither RNG nor readiness", () => {
+  const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+  const owner = aaOwner();
+  const state = battle(mover, { units: [owner] });
+  let randomCalls = 0;
+  state.rng = () => {
+    randomCalls++;
+    return 0;
+  };
+  const before = structuredClone({ units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState });
+
+  const route = planRoutes(state, mover, "risky").get("1,0");
+
+  assert.deepEqual(route.previewConsequences, [{ kind: "aa", sourceId: "aa-owner", sourceName: "AA Owner", slotId: "aa", effect: "AA reaction", probability: 0.55, min: 0, max: 6, expectedHarm: 3.3, negative: true, guaranteed: false }]);
+  assert.deepEqual({ units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState }, before);
+  assert.equal(randomCalls, 0);
+  assert.equal(owner.weapons[0].overwatch, true);
+  assert.equal(owner.weapons[0].firedThisRound, false);
+});
+
+test("hidden hazards and reactions neither exclude routes nor appear in preview descriptors", () => {
+  const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+  const hiddenHazard = terrain("minefield", {
+    id: "hidden-hazard",
+    kind: "hazard",
+    hidden: true,
+    hazard: { probability: 1, min: 9, max: 9, effect: "secret damage" }
+  });
+  const hiddenAA = aaOwner({ hidden: true });
+  const state = battle(mover, { units: [hiddenAA], contents: [hiddenHazard] });
+
+  const safe = planRoutes(state, mover, "safe").get("1,0");
+  const risky = planRoutes(state, mover, "risky").get("1,0");
+
+  assert.ok(safe);
+  assert.deepEqual(safe.previewConsequences, []);
+  assert.deepEqual(risky.previewConsequences, []);
+  assert.equal(JSON.stringify(safe).includes("secret damage"), false);
+});
+
+test("policy switching is pure and repeated visibility-filtered rebuilds are deterministic", () => {
+  const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
+  const owner = aaOwner();
+  const minefield = terrain("minefield", { id: "mines", kind: "hazard", hazard: { probability: 0.5, min: 2, max: 4, effect: "damage" } });
+  const state = battle(mover, { units: [owner], contents: [minefield] });
+  let randomCalls = 0;
+  state.rng = () => {
+    randomCalls++;
+    return 0.5;
+  };
+  const before = structuredClone({ scenario: state.scenario, units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState });
+
+  const riskyA = routeShape(planRoutes(state, mover, "risky"));
+  planRoutes(state, mover, "safe");
+  const riskyB = routeShape(planRoutes(state, mover, "risky"));
+
+  assert.deepEqual(riskyB, riskyA);
+  assert.deepEqual({ scenario: state.scenario, units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState }, before);
+  assert.equal(randomCalls, 0);
+});

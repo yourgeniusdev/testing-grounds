@@ -1,7 +1,7 @@
-import { DIRECTIONS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, inside, key, movementEvasion, planRoutes, resolveHazardConsequences, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
+import { DIRECTIONS, activeUnit, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, movementEvasion, planManeuver, planRoutes, signedTurn, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { buildManeuverOptions, headingAngle, maneuverResourcePreview, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
-import { applyAttackStep, attackArc, attackPreview, availableAttackTargets, planAttack, skipAttack } from "./battle.js";
+import { buildManeuverOptions, headingAngle, maneuverResourcePreview, routeConsequenceRows, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
+import { applyAttackStep, attackArc, attackPreview, availableAttackTargets, planAttack, resolvePostEntryAA, skipAttack } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 
 const canvas = document.getElementById("battlefield");
@@ -566,88 +566,80 @@ function resizeCanvas() {
 function startMovement(option = selectedOption()) {
   if (!ui.selected || !option || ui.animation) return;
   const unit = activeUnit(state);
+  const plan = planManeuver(state, option);
+  if (!plan) { refresh(); return; }
   if (unit.evasiveManeuver) addLog(`${unit.name} применяет «Манёвр уклонения» за 1 очко манёвренности.`, unit.sideId);
-  const route = option.route;
-  const finalHeading = option.finalState.heading;
-  let path = [...route.path];
-  if (unit.kind === "squadron") {
-    path = path.map((point, index) => ({ ...point, heading: index ? route.steps[index - 1].heading : 0 }));
-    if (path.length > 1) path.push({ ...route.position, heading: 0 });
-  }
-  if (unit.kind === "capital" && (path.length === 1 || finalHeading !== route.heading)) path.push({ ...route.position, heading: finalHeading });
-  if (path.length === 1) path.push({ ...path[0], heading: finalHeading ?? 0 });
-  const origin = axialToPixel(path[0]);
-  const movingPath = path.filter((point, index) => index === 0 || point.q !== path[index - 1].q || point.r !== path[index - 1].r);
-  const finalPoint = path[path.length - 1];
-  const finalTurn = finalPoint.heading ?? movingPath[movingPath.length - 1].heading ?? unit.heading ?? 0;
-  ui.animation = { kind: "movement", unitId: unit.id, glyph: unit.glyph, color: unit.color, stack: unit.stack, size: VISUALS[unit.glyph].size, path, movingPath, started: performance.now(), x: origin.x, y: origin.y, heading: unit.heading || 0, finalTurn, route, finalHeading };
+  ui.animation = { kind: "movement", unitId: unit.id, unitName: unit.name, sideId: unit.sideId, glyph: unit.glyph, color: unit.color, stack: unit.stack, size: VISUALS[unit.glyph].size, plan, nextElement: 0, executedMoves: 0, lastEvasion: unit.movementEvasion };
   document.body.classList.add("animating");
   renderHeader();
-  requestAnimationFrame(animate);
+  executeNextManeuverElement();
+}
+
+function executeNextManeuverElement() {
+  const animation = ui.animation;
+  if (!animation || animation.kind !== "movement") return;
+  const result = executeManeuverElement(state, animation.plan, animation.nextElement, {
+    resolvePostEntry({ state: current, unit, plan, elementIndex, causeEventId }) {
+      return resolvePostEntryAA(current, unit, { planId: plan.id, elementIndex, causeEventId });
+    }
+  });
+  for (const outcome of result.hazardOutcomes || []) {
+    if (!outcome.hit) addLog(`${animation.unitName} избегает эффекта «${outcome.consequence.sourceName}».`, "safe");
+    else addLog(`${animation.unitName}: ${outcome.consequence.sourceName} наносит ${outcome.damage} урона.`, "danger");
+  }
+  animation.lastEvasion = unitById(state, animation.unitId)?.movementEvasion ?? animation.lastEvasion;
+  if (result.status === "invalid") { finishMovement(result); return; }
+  if (result.transition) {
+    animation.transition = result.transition;
+    animation.started = performance.now();
+    animation.x = axialToPixel(result.transition.before.position).x;
+    animation.y = axialToPixel(result.transition.before.position).y;
+    animation.heading = result.transition.before.heading ?? result.transition.after.heading ?? 0;
+    if (result.transition.type === "move") animation.executedMoves++;
+    animation.result = result;
+    requestAnimationFrame(animate);
+    return;
+  }
+  finishMovement(result);
 }
 
 function animate(now) {
   const animation = ui.animation;
-  if (!animation) return;
-  const moveDuration = animation.movingPath.length > 1 ? Math.max(440, (animation.movingPath.length - 1) * 320) : 0;
-  const turnDuration = 280;
-  const elapsed = now - animation.started;
-  const moving = animation.movingPath.length > 1;
-  const moveProgress = moving ? Math.min(1, Math.max(0, elapsed / moveDuration)) : 1;
-  const routePosition = moveProgress * Math.max(0, animation.movingPath.length - 1);
-  const segment = Math.max(0, Math.min(Math.floor(routePosition), animation.movingPath.length - 2));
-  const segmentProgress = Math.min(1, routePosition - segment);
-  const from = animation.movingPath[segment];
-  const to = animation.movingPath[Math.min(segment + 1, animation.movingPath.length - 1)];
-  const start = axialToPixel(from);
-  const end = axialToPixel(to);
-  animation.x = start.x + (end.x - start.x) * segmentProgress;
-  animation.y = start.y + (end.y - start.y) * segmentProgress;
-  const fromHeading = from.heading ?? animation.heading;
-  const travelHeading = to.heading ?? fromHeading;
-  animation.heading = fromHeading + signedTurn(fromHeading, travelHeading) * segmentProgress;
-  if (moveProgress >= 1) {
-    const turnProgress = Math.min(1, Math.max(0, (elapsed - moveDuration) / turnDuration));
-    const turnEase = 1 - Math.pow(1 - turnProgress, 3);
-    const arrivalHeading = animation.movingPath[animation.movingPath.length - 1].heading ?? animation.heading;
-    animation.heading = arrivalHeading + signedTurn(arrivalHeading, animation.finalTurn) * turnEase;
-  }
+  if (!animation?.transition) return;
+  const transition = animation.transition;
+  const duration = transition.type === "move" ? 320 : 280;
+  const progress = Math.min(1, Math.max(0, (now - animation.started) / duration));
+  const eased = 1 - Math.pow(1 - progress, 3);
+  const start = axialToPixel(transition.before.position);
+  const end = axialToPixel(transition.after.position);
+  animation.x = start.x + (end.x - start.x) * eased;
+  animation.y = start.y + (end.y - start.y) * eased;
+  const fromHeading = transition.before.heading ?? animation.heading;
+  const toHeading = transition.after.heading ?? fromHeading;
+  animation.heading = fromHeading + signedTurn(fromHeading, toHeading) * eased;
   draw();
-  const complete = moveProgress >= 1 && (animation.finalTurn === animation.heading || elapsed >= moveDuration + turnDuration);
-  if (!complete) requestAnimationFrame(animate);
-  else finishMovement();
+  if (progress < 1) { requestAnimationFrame(animate); return; }
+  const result = animation.result;
+  animation.transition = null;
+  animation.nextElement++;
+  if (result.status === "executed") executeNextManeuverElement();
+  else finishMovement(result);
 }
 
-function resolveConsequences(route, unit) {
-  for (const outcome of resolveHazardConsequences(state, unit, route.consequences)) {
-    if (!outcome.hit) {
-      addLog(`${unit.name} избегает эффекта «${outcome.consequence.sourceName}».`, "safe");
-      continue;
-    }
-    addLog(`${unit.name}: ${outcome.consequence.sourceName} наносит ${outcome.damage} урона.`, "danger");
-    if (outcome.destroyed) {
-      addLog(`${unit.name} уничтожен. На позиции появляется поле обломков.`, "danger");
-      if (outcome.winner) addLog(`Победа флотилии ${outcome.winner}.`, "system");
-    }
-  }
-}
-
-function finishMovement() {
+function finishMovement(result) {
   const animation = ui.animation;
-  const unit = activeUnit(state);
-  if (animation.route.steps.length === 0) {
-    if (unit.kind === "capital" && animation.finalHeading !== unit.heading) applyStationaryRotation(state, animation.finalHeading);
-    else skipMovement(state);
-  } else applyMovement(state, animation.route, animation.finalHeading);
-  resolveConsequences(animation.route, unit);
-  if (!state.units.includes(unit)) {
-    ui.animation = null; ui.selected = null; document.body.classList.remove("animating");
+  if (!animation) return;
+  const unit = unitById(state, animation.unitId);
+  ui.animation = null; ui.selected = null; document.body.classList.remove("animating");
+  if (result?.status === "destroyed") {
+    addLog(`${animation.unitName} уничтожен. На позиции появляется поле обломков.`, "danger");
+    if (result.destruction?.winner) addLog(`Победа флотилии ${result.destruction.winner}.`, "system");
     refresh();
     return;
   }
-  const suffix = animation.route.interception ? " и попадает в перехват" : "";
-  addLog(`${unit.name} завершает манёвр: ${animation.route.steps.length} шаг., уклонение +${unit.movementEvasion}%${suffix}.`, unit.sideId);
-  ui.animation = null; ui.selected = null; document.body.classList.remove("animating");
+  if (!unit) { refresh(); return; }
+  const suffix = result?.status === "stopped" ? " досрочно" : "";
+  addLog(`${unit.name} завершает манёвр${suffix}: ${animation.executedMoves} шаг., уклонение +${animation.lastEvasion}%.`, unit.sideId);
   addLog(`${unit.name}: начинается фаза атаки.`, "azure");
   refresh();
 }
@@ -718,6 +710,11 @@ function positionTooltip(event) {
 }
 
 function eventTooltip(position) {
+  const route = ui.selected?.route;
+  if (route && key(position.q, position.r) === key(route.position.q, route.position.r)) {
+    const rows = routeConsequenceRows(route);
+    if (rows.length) return { title: "ПОСЛЕДСТВИЯ МАРШРУТА", content: rows.map(row => `<article class="tooltip-event ${row.kind}"><b>${row.title}</b><span>${row.detail}</span></article>`).join("") };
+  }
   const contents = contentsAt(state, position);
   const event = selectedEventAt(position);
   const hazards = event?.hazards.length ? event.hazards : contents.filter(content => content.hazard).map(content => ({ sourceId: content.id, sourceName: content.label, ...content.hazard }));

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildManeuverOptions, maneuverResourcePreview } from "./ui-rules.js";
+import { buildManeuverOptions, maneuverResourcePreview, routeConsequenceRows } from "./ui-rules.js";
 
 const signedTurn = (from, to) => {
   let delta = (to - from + 6) % 6;
@@ -48,6 +48,7 @@ test("buildManeuverOptions falls back to a heading-free squadron option", () => 
     route: plannedRoute,
     resources: { speed: { spent: 3, remaining: 2, capacity: 5 } },
     consequences: [],
+    interceptions: [],
     interception: "enemy-flight"
   }]);
 });
@@ -80,6 +81,35 @@ test("options expose route consequences and interception without transforming th
   assert.equal(option.consequences, consequences);
   assert.equal(option.interception, "wasps");
   assert.deepEqual(option.resources.speed, { spent: 7, remaining: 0, capacity: 5 });
+});
+
+test("options expose the full interception preview plus the temporary deterministic singular adapter", () => {
+  const plannedRoute = route({ interceptions: ["enemy-a", "enemy-z"], interception: "enemy-a" });
+
+  const [option] = buildManeuverOptions({ currentSpeed: 5 }, plannedRoute);
+
+  assert.deepEqual(option.interceptions, ["enemy-a", "enemy-z"]);
+  assert.equal(option.interception, "enemy-a");
+});
+
+test("route consequence rows visibly describe hazards, AA, guaranteed effects, and every interception", () => {
+  const routePreview = route({
+    previewConsequences: [
+      { kind: "hazard", sourceId: "mines", sourceName: "Minefield", effect: "integrity damage", probability: 0.5, min: 2, max: 6, expectedHarm: 2, guaranteed: false },
+      { kind: "aa", sourceId: "escort", sourceName: "Escort", slotId: "aa", effect: "AA reaction", probability: 0.4, min: 0, max: 4, expectedHarm: 1.6, guaranteed: false },
+      { kind: "effect", sourceId: "gravity", sourceName: "Gravity Well", effect: "speed lock", probability: 1, min: 0, max: 0, expectedHarm: 0, guaranteed: true },
+      { kind: "interception", sourceId: "enemy-a", sourceName: "Enemy A", effect: "Interception", probability: 1, min: 0, max: 0, expectedHarm: 0, guaranteed: true },
+      { kind: "interception", sourceId: "enemy-z", sourceName: "Enemy Z", effect: "Interception", probability: 1, min: 0, max: 0, expectedHarm: 0, guaranteed: true }
+    ]
+  });
+
+  assert.deepEqual(routeConsequenceRows(routePreview), [
+    { kind: "hazard", title: "Minefield", detail: "50% · 2–6 · integrity damage · expected harm 2" },
+    { kind: "aa", title: "AA · Escort", detail: "40% · 0–4 · AA reaction · expected harm 1.6" },
+    { kind: "effect", title: "Gravity Well", detail: "Guaranteed · speed lock" },
+    { kind: "interception", title: "Interception · Enemy A", detail: "Guaranteed · Interception" },
+    { kind: "interception", title: "Interception · Enemy Z", detail: "Guaranteed · Interception" }
+  ]);
 });
 
 test("maneuverResourcePreview uses the hovered preview option before the selected option", () => {

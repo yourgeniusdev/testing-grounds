@@ -34,7 +34,8 @@ export function buildManeuverOptions(unit, route, headings, signedTurn) {
       route,
       resources,
       consequences: route.consequences || [],
-      interception: route.interception ?? null
+      interceptions: route.interceptions || [],
+      interception: route.interception ?? route.interceptions?.[0] ?? null
     };
   });
 }
@@ -66,6 +67,22 @@ export function maneuverResourcePreview(unit, selected, stage, signedTurn) {
   const plannedTurns = (route.turnsSpent || 0) + headingTurns + (unit.evasiveManeuver ? 1 : 0);
   const maneuverPreview = Math.max(0, plannedTurns - maneuverSpent);
   return { speedSpent, speedPreview, maneuverSpent, maneuverPreview };
+}
+
+function consequenceDetail(consequence) {
+  const guarantee = consequence.guaranteed ? "Guaranteed" : `${Math.round((consequence.probability || 0) * 100)}%`;
+  const range = consequence.min === consequence.max ? `${consequence.max}` : `${consequence.min}–${consequence.max}`;
+  const harm = consequence.expectedHarm > 0 ? ` · expected harm ${consequence.expectedHarm}` : "";
+  if (consequence.guaranteed && !consequence.max) return `${guarantee} · ${consequence.effect}`;
+  return `${guarantee} · ${range} · ${consequence.effect}${harm}`;
+}
+
+export function routeConsequenceRows(route) {
+  return (route?.previewConsequences || []).map(consequence => ({
+    kind: consequence.kind,
+    title: consequence.kind === "aa" ? `AA · ${consequence.sourceName}` : consequence.kind === "interception" ? `Interception · ${consequence.sourceName}` : consequence.sourceName,
+    detail: consequenceDetail(consequence)
+  }));
 }
 
 export function shouldHighlightOccupiedHex(lifecycle) {

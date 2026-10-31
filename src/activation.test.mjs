@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
 import {
   activeUnit,
-  applyMovement,
   applyStationaryRotation,
   beginActivation,
   createBattleState,
+  destroyUnit,
   endActivation,
+  executeManeuverElement,
+  planManeuver,
   planRoutes,
   skipMovement,
+  signedTurn,
   useEvasiveManeuver,
   waitActiveUnit
 } from "./domain.js";
+import { buildManeuverOptions } from "./ui-rules.js";
 
 function activationState() {
   const state = createBattleState();
@@ -84,18 +88,14 @@ function activationState() {
   assert.equal(atlas.canWait, true);
   assert.equal(atlas.speedSpent, 0);
   assert.equal(atlas.maneuverSpent, 0);
-  applyMovement(state, {
-    position: { q: atlas.position.q + 2, r: atlas.position.r },
-    heading: atlas.heading,
-    movementCost: 2,
-    turnsSpent: 1,
-    steps: [{}, {}],
-    interception: null
-  }, (atlas.heading + 1) % 6);
+  const route = planRoutes(state, atlas, "safe").get(`${atlas.position.q + 2},${atlas.position.r}`);
+  const option = buildManeuverOptions(atlas, route, new Set([(atlas.heading + 1) % 6]), signedTurn)[0];
+  const plan = planManeuver(state, option);
+  for (let index = 0; index < plan.elements.length; index++) executeManeuverElement(state, plan, index);
   assert.equal(atlas.canWait, false);
   assert.deepEqual(
     { speedSpent: atlas.speedSpent, speedRemaining: atlas.speedRemaining, maneuverSpent: atlas.maneuverSpent, maneuverRemaining: atlas.maneuverRemaining },
-    { speedSpent: 2, speedRemaining: atlas.currentSpeed - 2, maneuverSpent: 2, maneuverRemaining: atlas.maneuver - 2 }
+    { speedSpent: 2, speedRemaining: atlas.currentSpeed - 2, maneuverSpent: 1, maneuverRemaining: atlas.maneuver - 1 }
   );
 }
 
@@ -143,6 +143,39 @@ function activationState() {
   assert.equal(swift.activationStartedThisRound, true);
   assert.equal(swift.speedSpent, 0);
   assert.equal(swift.speedRemaining, swift.currentSpeed);
+}
+
+{
+  const state = createBattleState();
+  const active = state.units.find(unit => unit.id === "atlas");
+  const activatedAlly = state.units.find(unit => unit.id === "swift");
+  const enemy = state.units.find(unit => unit.id === "bastion");
+  state.units = [active, activatedAlly, enemy];
+  state.initiativeOrder = [active.id, activatedAlly.id, enemy.id];
+  state.activeUnitId = active.id;
+  state.roundNumber = 3;
+  state.lifecycle = "SystemActions";
+  active.hasActivated = false;
+  active.activationStartedThisRound = true;
+  activatedAlly.hasActivated = true;
+  activatedAlly.activationStartedThisRound = true;
+  activatedAlly.hasWaited = true;
+  activatedAlly.speedSpent = 2;
+  enemy.hasActivated = true;
+  enemy.activationStartedThisRound = true;
+
+  destroyUnit(state, active);
+
+  assert.equal(state.roundNumber, 4);
+  assert.equal(state.activeUnitId, activatedAlly.id);
+  assert.equal(activeUnit(state), activatedAlly);
+  for (const survivor of state.units) {
+    assert.equal(survivor.hasActivated, false);
+    assert.equal(survivor.hasWaited, false);
+  }
+  assert.equal(activatedAlly.activationStartedThisRound, true);
+  assert.equal(enemy.activationStartedThisRound, false);
+  assert.equal(activatedAlly.speedSpent, 0);
 }
 
 console.log("activation checks passed");

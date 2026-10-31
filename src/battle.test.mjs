@@ -6,6 +6,7 @@ import {
   availableAttackTargets,
   planAttack,
   resolveAttack,
+  resolvePostEntryAA,
   supercoverLine
 } from "./battle.js";
 import {
@@ -40,6 +41,7 @@ function weapon(overrides = {}) {
     cooldownRounds: 0,
     firedThisRound: false,
     cooldownRemaining: 0,
+    overwatch: false,
     visual: { projectile: "tracer", color: "#fff", size: 0.1, speedHexesPerSecond: 5, launchIntervalMs: 100, trail: "short", impact: "spark", impactRadius: 0.1 },
     ...overrides
   };
@@ -232,15 +234,17 @@ function battle(weapons, targetOverrides = {}) {
 }
 
 {
-  const gun = weapon();
+  const gun = weapon({ targetKinds: ["capital", "squadron"] });
   const { state, attacker, target } = battle([gun]);
   attacker.salvoCommitted = true;
   beginActivation(state);
   assert.equal(attacker.salvoCommitted, false);
   attacker.salvoCommitted = true;
-  target.hasActivated = true;
   endActivation(state);
   assert.equal(attacker.salvoCommitted, false);
+  assert.equal(gun.overwatch, true);
+  beginActivation(state);
+  assert.equal(gun.overwatch, true);
 }
 
 {
@@ -250,6 +254,81 @@ function battle(weapons, targetOverrides = {}) {
   assert.equal(arc.has("0,-2"), true);
   assert.equal(arc.has("2,0"), false);
   assert.deepEqual(supercoverLine({ q: 0, r: 0 }, { q: 2, r: -1 }), [{ q: 0, r: 0 }, { q: 1, r: -1 }, { q: 1, r: 0 }, { q: 2, r: -1 }]);
+}
+
+{
+  const manual = weapon({ id: "manual", mount: "battery-left", targetKinds: ["squadron"] });
+  const reactor = unit({ id: "reactor", sideId: "crimson", position: { q: 0, r: 0 }, heading: 0, weapons: [manual] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 0, r: -2 }, stack: 2, unitHealth: 5 });
+  const state = battle([]).state;
+  state.units = [target, reactor];
+  state.activeUnitId = target.id;
+  state.stage = "attack";
+  assert.deepEqual(attackPreview(state, target.id, new Set([manual.id]), reactor).included.map(item => item.id), [manual.id]);
+  assert.equal(attackArc(state, new Set([manual.id]), reactor).has("0,-2"), true);
+  assert.deepEqual(availableAttackTargets(state, new Set([manual.id]), reactor).map(item => item.id), [target.id]);
+  assert.equal(planAttack(state, target.id, new Set([manual.id]), () => 100, () => 0, reactor), null);
+  assert.equal(reactor.salvoCommitted, undefined);
+}
+
+{
+  const manual = weapon({ id: "manual", targetKinds: ["squadron"] });
+  const reactor = unit({ id: "reactor", sideId: "crimson", position: { q: 0, r: 0 }, weapons: [manual] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, stack: 2, unitHealth: 5 });
+  const state = battle([]).state;
+  state.units = [target, reactor];
+  state.activeUnitId = target.id;
+  state.stage = "attack";
+
+  assert.equal(planAttack(state, target.id, new Set([manual.id]), () => 1, () => 0, reactor), null);
+  assert.ok(planAttack(state, target.id, new Set([manual.id]), () => 1, () => 0, reactor, { reaction: true }));
+  assert.equal(planAttack(state, reactor.id, new Set([manual.id]), () => 1, () => 0), null);
+}
+
+{
+  const slotA = weapon({ id: "slot-a", slotOrder: 1, targetKinds: ["squadron"], accuracy: 0, overwatch: true });
+  const slotB = weapon({ id: "slot-b", slotOrder: 0, targetKinds: ["squadron"], accuracy: 100, overwatch: true });
+  const ownerZ = unit({ id: "owner-z", sideId: "crimson", weapons: [slotA] });
+  const ownerA = unit({ id: "owner-a", sideId: "crimson", weapons: [{ ...slotA, id: "owner-a-slot-a" }, slotB] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, integrity: 20, stack: 4, unitHealth: 5 });
+  const state = battle([]).state;
+  state.units = [target, ownerZ, ownerA];
+  state.activeUnitId = target.id;
+  state.initiativeOrder = [target.id, ownerA.id, ownerZ.id];
+  state.stage = "system";
+  state.lifecycle = "SystemActions";
+  const outcomes = resolvePostEntryAA(state, target, { planId: "move-plan", elementIndex: 2, causeEventId: "move-event" }, () => 100, () => 0);
+  assert.deepEqual(outcomes.map(outcome => `${outcome.ownerId}:${outcome.slotId}`), ["owner-a:slot-b", "owner-a:owner-a-slot-a", "owner-z:slot-a"]);
+  assert.equal(outcomes[1].steps[0].outcome, "miss");
+  assert.equal(ownerA.weapons.every(slot => slot.firedThisRound), true);
+  assert.equal(ownerZ.weapons[0].firedThisRound, true);
+  const declarations = state.events.filter(event => event.action === "aa-reaction-declare");
+  assert.deepEqual(declarations.map(event => [event.actorId, event.slotId, event.planId, event.elementIndex, event.causeEventId]), [
+    ["owner-a", "slot-b", "move-plan", 2, "move-event"],
+    ["owner-a", "owner-a-slot-a", "move-plan", 2, "move-event"],
+    ["owner-z", "slot-a", "move-plan", 2, "move-event"]
+  ]);
+  assert.equal(resolvePostEntryAA(state, target, { planId: "again", elementIndex: 3, causeEventId: "next" }).length, 0);
+}
+
+{
+  const aa = weapon({ id: "aa", targetKinds: ["squadron"] });
+  const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, stack: 2, unitHealth: 5 });
+  const state = battle([]).state;
+  state.units = [target, owner];
+  state.activeUnitId = target.id;
+  state.stage = "attack";
+  assert.equal(resolveAttack(state, target.id, new Set([aa.id]), () => 100, () => 0, owner), false);
+  assert.equal(resolvePostEntryAA(state, target, { causeEventId: "move" }).length, 0);
+  aa.firedThisRound = false;
+  aa.overwatch = true;
+  owner.salvoCommitted = false;
+  assert.equal(resolvePostEntryAA(state, target, { causeEventId: "attack" }, () => 100, () => 0).length, 0);
+  state.stage = "system";
+  assert.equal(resolvePostEntryAA(state, target, { causeEventId: "move" }, () => 100, () => 0).length, 1);
+  state.stage = "attack";
+  assert.equal(resolveAttack(state, target.id, new Set([aa.id]), () => 100, () => 0, owner), false);
 }
 
 console.log("battle checks passed");
