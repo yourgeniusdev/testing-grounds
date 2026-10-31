@@ -1,17 +1,19 @@
-import { ARROWS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, inside, key, movementEvasion, planRoutes, resolveHazardConsequences, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
+import { DIRECTIONS, activeUnit, applyMovement, applyStationaryRotation, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, inside, key, movementEvasion, planRoutes, resolveHazardConsequences, signedTurn, skipMovement, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { headingAngle, maneuverResourcePreview, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
+import { buildManeuverOptions, headingAngle, maneuverResourcePreview, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
 import { applyAttackStep, attackArc, attackPreview, availableAttackTargets, planAttack, skipAttack } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
-const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "stageLabel", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "maneuverPopup", "maneuverBadge", "maneuverDetails", "attackPopup", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "attackWeaponActions", "actionTitle", "routeBadge", "routeDetails", "headingPicker", "headingButtons", "confirmManeuverButton", "cancelManeuverButton", "confirmButton", "cancelButton", "combatLog", "clearLogButton"];
+const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "stageLabel", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "attackWeaponActions", "combatLog", "clearLogButton"];
 const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+const tooltipTitle = el.tooltip.querySelector(".hex-tooltip-title");
+const tooltipContent = el.tooltip.querySelector(".hex-tooltip-content");
 const stageNames = { system: "СИСТЕМЫ", movement: "МАНЁВР", attack: "АТАКА", deployment: "РАССТАНОВКА" };
 const entityImages = new Map();
 let state = createBattleState();
-let ui = { policy: "risky", selectedWeapons: new Set(), hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, animation: null, lastActiveUnit: null, geometry: { size: 38, cx: 0, cy: 0, dpr: 1 } };
+let ui = { policy: "risky", selectedWeapons: new Set(), hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, tooltipInside: false, tooltipTimer: null, animation: null, lastActiveUnit: null, geometry: { size: 38, cx: 0, cy: 0, dpr: 1 } };
 
 function addLog(message, tone = "neutral") {
   state.log.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, round: state.roundNumber, message, tone });
@@ -21,7 +23,7 @@ function addLog(message, tone = "neutral") {
 
 function resetBattle() {
   state = createBattleState();
-  ui = { ...ui, selectedWeapons: new Set(), routes: new Map(), selected: null, hovered: null, animation: null };
+  ui = { ...ui, selectedWeapons: new Set(), routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, animation: null };
   state.activeUnitId = state.units.find(unit => unit.sideId === "azure")?.id || null;
   state.stage = "deployment";
   addLog("Фаза расстановки: разместите и подтвердите левую сторону.", "system");
@@ -55,15 +57,60 @@ function pixelToAxial(x, y) {
   return cubeRound((Math.sqrt(3) / 3 * px - py / 3) / ui.geometry.size, (2 / 3 * py) / ui.geometry.size);
 }
 
-function pointerHex(event) {
+function pointerPoint(event) {
   const rect = canvas.getBoundingClientRect();
-  return pixelToAxial(event.clientX - rect.left, event.clientY - rect.top);
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function pointerHex(event) {
+  const point = pointerPoint(event);
+  return pixelToAxial(point.x, point.y);
+}
+
+function selectedOption() {
+  return ui.hoveredOption || ui.selected?.baseOption || null;
+}
+
+function clearManeuverSelection() {
+  ui.selected = null;
+  ui.hoveredOption = null;
+  ui.optionTargets = [];
+  hideTooltip();
+}
+
+function optionHeadings(unit, route) {
+  if (route.heading === undefined) return null;
+  return route.steps.length ? availableFinalHeadings(unit, route) : availableStationaryHeadings(unit);
+}
+
+function optionTarget(option) {
+  const target = axialToPixel(option.finalState.hex);
+  if (option.finalState.heading === undefined) return { x: target.x, y: target.y, radius: 17, option };
+  const heading = option.finalState.heading;
+  const [dq, dr] = DIRECTIONS[heading];
+  const neighbor = axialToPixel({ q: option.finalState.hex.q + dq, r: option.finalState.hex.r + dr });
+  const rect = canvas.getBoundingClientRect();
+  const margin = 24;
+  const rawInside = neighbor.x >= margin && neighbor.x <= rect.width - margin && neighbor.y >= margin + 24 && neighbor.y <= rect.height - margin;
+  const distance = rawInside ? 1 : .62;
+  const x = target.x + (neighbor.x - target.x) * distance;
+  const y = target.y + (neighbor.y - target.y) * distance;
+  return { x: Math.max(margin, Math.min(rect.width - margin, x)), y: Math.max(margin + 24, Math.min(rect.height - margin, y)), radius: 18, option };
+}
+
+function optionAtPoint(point) {
+  const targets = ui.optionTargets.map(target => ({ target, distance: Math.hypot(point.x - target.x, point.y - target.y) })).filter(candidate => candidate.distance <= candidate.target.radius);
+  targets.sort((a, b) => a.distance - b.distance);
+  return targets[0]?.target.option || null;
 }
 
 function refreshRoutes() {
   const unit = activeUnit(state);
   ui.routes = state.stage === "attack" || state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight" ? new Map() : planRoutes(state, unit, ui.policy);
   ui.selected = null;
+  ui.hoveredOption = null;
+  ui.optionTargets = [];
+  hideTooltip();
   if (state.stage !== "attack") ui.selectedWeapons = new Set();
 }
 
@@ -78,7 +125,6 @@ function renderAll() {
   renderUnitSummary();
   renderWeaponSummary();
   renderResourceBar();
-  renderRouteInspector();
   renderLog();
   draw();
 }
@@ -191,13 +237,18 @@ function renderUnitSummary() {
   }
   const evasion = unit.evasionLocked ? 0 : (unit.baseEvasion || 0) + unit.movementEvasion;
   const model = unit.kind === "capital" ? unit.hullClassName : unit.squadronModelName;
-  const { speedSpent, speedPreview, maneuverSpent, maneuverPreview } = maneuverResourcePreview(unit, ui.selected, state.stage, signedTurn);
+  const previewSelection = ui.selected ? { ...ui.selected, previewOption: selectedOption() } : null;
+  const { speedSpent, speedPreview, maneuverSpent, maneuverPreview } = maneuverResourcePreview(unit, previewSelection, state.stage, signedTurn);
   const routePreview = ui.selected?.route && state.stage !== "attack" ? ui.selected.route : null;
-  const stationaryTurn = unit.kind === "capital" && routePreview?.steps.length === 0 && ui.selected.heading !== unit.heading;
+  const previewOption = selectedOption();
+  const previewHeading = previewOption?.finalState.heading;
+  const stationaryTurn = routePreview?.steps.length === 0 && previewHeading !== undefined && previewHeading !== unit.heading;
   const previewEvasion = routePreview ? stationaryTurn ? 0 : movementEvasion(routePreview.steps.length, unit.evasiveManeuver) : 0;
   const evasionBonus = routePreview ? previewEvasion : 0;
-  const speedState = `<div class="resource-state"><span>Скорость <b>${Math.max(0, unit.currentSpeed - speedSpent)}/${unit.currentSpeed}</b></span>${resourceSegments(unit.currentSpeed, speedSpent, speedPreview, "speed")}</div>`;
-  const maneuverState = unit.kind === "capital" ? `<div class="resource-state"><span>Манёвренность <b>${Math.max(0, unit.maneuver - maneuverSpent)}/${unit.maneuver}</b></span>${resourceSegments(unit.maneuver, maneuverSpent, maneuverPreview, "maneuver")}</div>` : "";
+  const speedRemaining = Math.max(0, unit.currentSpeed - speedSpent - speedPreview);
+  const maneuverRemaining = Math.max(0, (unit.maneuver || 0) - maneuverSpent - maneuverPreview);
+  const speedState = `<div class="resource-state"><span>Скорость <b>${speedRemaining}/${unit.currentSpeed}</b></span>${resourceSegments(unit.currentSpeed, speedSpent, speedPreview, "speed")}</div>`;
+  const maneuverState = unit.maneuver !== undefined ? `<div class="resource-state"><span>Манёвренность <b>${maneuverRemaining}/${unit.maneuver}</b></span>${resourceSegments(unit.maneuver, maneuverSpent, maneuverPreview, "maneuver")}</div>` : "";
   const evasionPreview = evasionBonus > 0 ? `<em>+${evasionBonus}%</em>` : evasionBonus < 0 ? `<i>${evasionBonus}%</i>` : "";
   el.unitSummary.innerHTML = `<div class="unit-identity"><div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-identity-copy"><span class="active-label">${state.winner ? "Последний активный юнит" : "Активный юнит"}</span><strong>${unit.name}</strong><small>${model}</small></div><span class="class-badge" style="color:${unit.color}">${unit.kind === "capital" ? "CAPITAL" : "SQUADRON"}</span></div><section class="inspector-section current-state"><div class="section-title"><span>Текущее состояние</span></div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")}${healthBar("Броня", unit.armor, unit.maxArmor, "armor")}${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}</div>${speedState}${maneuverState}<div class="evasion-state"><span>Уклонение</span><b>${evasion}% ${evasionPreview}</b></div></section><section class="inspector-section status-section"><div class="section-title"><span>Критические повреждения</span><small>${unit.criticals.length}</small></div>${statusList(unit.criticals.map(item => ({ ...item, tone: "negative", icon: "!", name: item.type })), "critical", "Критических повреждений нет")}</section><section class="inspector-section status-section"><div class="section-title"><span>Активные эффекты</span><small>${effectRows(unit).length}</small></div>${statusList(effectRows(unit), "effect", "Активных эффектов нет")}</section>${state.winner ? '<div class="battle-finished">Бой завершён</div>' : ""}`;
 }
@@ -265,92 +316,6 @@ function renderResourceBar() {
   el.energyResource.innerHTML = `<span class="energy-label"><b>${unit.name}</b><span>Энергия ${unit.reactor.currentEnergy}/${unit.reactor.capacity}</span></span>${resourceSegments(unit.reactor.capacity, unit.reactor.capacity - unit.reactor.currentEnergy, preview, "energy")}`;
 }
 
-function consequenceMarkup(consequence) {
-  return `<li><b>${consequence.sourceName}</b><span>${Math.round(consequence.probability * 100)}% · ${consequence.min}–${consequence.max} · ${consequence.effect}</span></li>`;
-}
-
-function positionPopup(popup, position) {
-  const wrap = canvas.parentElement.getBoundingClientRect();
-  const target = axialToPixel(position);
-  const popupWidth = popup.offsetWidth || 220;
-  const popupHeight = popup.offsetHeight || 100;
-  const gap = ui.geometry.size + 12;
-  const left = Math.max(10, Math.min(target.x + gap, wrap.width - popupWidth - 10));
-  const top = Math.max(44, Math.min(target.y - popupHeight / 2, wrap.height - popupHeight - 74));
-  popup.style.left = `${left}px`;
-  popup.style.top = `${top}px`;
-}
-
-function positionManeuverPopup() {
-  if (!ui.selected?.position || state.stage === "attack" || state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight") { el.maneuverPopup.hidden = true; return; }
-  positionPopup(el.maneuverPopup, ui.selected.position);
-}
-
-function positionAttackPopup() {
-  if (state.stage !== "attack") { el.attackPopup.hidden = true; return; }
-  positionPopup(el.attackPopup, ui.selected?.position || activeUnit(state).position);
-}
-
-function renderRouteInspector() {
-  const unit = activeUnit(state);
-  const selected = ui.selected;
-  const attacking = state.stage === "attack";
-  const deploying = state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight";
-  el.maneuverPopup.hidden = deploying || attacking || !selected?.position || Boolean(ui.animation);
-   el.attackPopup.hidden = !attacking || !selected || Boolean(ui.animation);
-  el.attackPopup.setAttribute("aria-label", attacking ? "Фаза атаки: выберите орудия и цель" : "Фаза атаки");
-  el.actionTitle.textContent = attacking ? "План атаки" : "План манёвра";
-  if (deploying) {
-    el.headingPicker.hidden = true;
-    el.confirmButton.hidden = true;
-    el.cancelButton.hidden = true;
-    return;
-  }
-   if (attacking) {
-    el.headingPicker.hidden = true;
-    el.confirmButton.hidden = false;
-    el.cancelButton.hidden = false;
-    el.cancelButton.disabled = false;
-      if (!selected) return;
-      const preview = attackPreview(state, selected.targetId, ui.selectedWeapons);
-    el.routeBadge.textContent = preview.canConfirm ? "ГОТОВ" : "НЕДОСТУПНО";
-      const exclusions = preview.excluded.map(weapon => `<li>${weapon.name}: ${weapon.reason}</li>`).join("");
-      const energy = preview.energyRequired ? `<p class="attack-summary">Энергия: <b>${preview.energyRequired}/${preview.energyAvailable}</b></p>` : "";
-      el.routeDetails.innerHTML = `<div class="attack-vitals">${healthBar("Щит", preview.target.shield, preview.target.maxShield, "shield", preview.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", preview.target.armor, preview.target.maxArmor, "armor", preview.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", preview.target.integrity, preview.target.maxIntegrity, "integrity", preview.layer === "integrity" ? preview.potentialDamage : 0)}</div><div class="maneuver-metrics"><span><b>${preview.included.length}</b> ОРУД.</span><span><b>${preview.shots}</b> ВЫСТР.</span><span><b>${preview.potentialDamage}</b> УРОН</span></div><div class="attack-weapons">${preview.ordered.map(weapon => `<span><strong>${weapon.name}</strong><small>${weapon.weaponClass} · ${weapon.shots}×${weapon.damage} · ${preview.hitChances[weapon.id]}% попадание · крит ${weapon.critChance}%</small></span>`).join("")}</div><p class="attack-summary">Слой: <b>${preview.layer}</b> · уклонение цели: <b>${preview.target.baseEvasion + preview.target.movementEvasion}%</b></p>${energy}${preview.target.criticals.length ? `<p class="route-warning">Криты: ${preview.target.criticals.map(critical => critical.type).join(", ")}</p>` : ""}${exclusions ? `<ul class="route-warning attack-exclusions">${exclusions}</ul>` : ""}${!preview.enoughEnergy ? '<p class="route-warning">Недостаточно энергии для залпа</p>' : ""}${!preview.salvoAvailable ? '<p class="route-warning">Залп уже выполнен в этой активации</p>' : ""}`;
-     el.confirmButton.disabled = !preview.canConfirm;
-    positionAttackPopup();
-    return;
-  }
-  if (!selected) {
-    el.headingPicker.hidden = true;
-    el.confirmButton.hidden = true;
-    el.cancelButton.hidden = true;
-    return;
-  }
-  const route = selected.route;
-  const stationary = route.steps.length === 0;
-  const evasion = stationary && selected.heading !== unit.heading ? 0 : movementEvasion(route.steps.length, unit.evasiveManeuver);
-  const maneuverBudget = unit.kind === "capital" ? unit.maneuver - (unit.evasiveManeuver ? 1 : 0) : 0;
-  const remainingTurns = unit.kind === "capital" ? maneuverBudget - route.turnsSpent - (selected.heading !== route.heading ? 1 : 0) : 0;
-  el.maneuverBadge.textContent = route.consequences.length ? "РИСК" : "ГОТОВ";
-  el.maneuverDetails.innerHTML = `<div class="maneuver-metrics"><span><b>${route.movementCost}/${unit.currentSpeed}</b> SPD</span><span><b>${unit.kind === "capital" ? route.turnsSpent : route.steps.length}</b> ${unit.kind === "capital" ? "ПОВ." : "ШАГ."}</span><span><b>+${evasion}%</b> УКЛ.</span>${unit.kind === "capital" ? `<span><b>${Math.max(0, remainingTurns)}</b> ОСТ.</span>` : ""}</div>${route.interception ? '<p class="route-warning">После манёвра: перехват</p>' : ""}${route.consequences.length ? `<ul class="consequence-list">${route.consequences.map(consequenceMarkup).join("")}</ul>` : ""}`;
-  if (unit.kind === "capital") {
-    el.headingPicker.hidden = false;
-    const options = stationary ? availableStationaryHeadings(unit) : availableFinalHeadings(unit, route);
-    el.headingButtons.innerHTML = ARROWS.map((arrow, heading) => `<button class="heading-button ${heading === selected.heading ? "active" : ""}" data-heading="${heading}" ${options.has(heading) ? "" : "disabled"}>${arrow}</button>`).join("");
-    el.headingButtons.querySelectorAll("button:not(:disabled)").forEach(button => button.addEventListener("click", () => {
-      ui.selected.heading = Number(button.dataset.heading);
-      renderUnitSummary();
-      renderRouteInspector();
-      draw();
-    }));
-  } else el.headingPicker.hidden = true;
-  el.confirmButton.hidden = true;
-  el.cancelButton.hidden = true;
-  el.confirmManeuverButton.disabled = false;
-  positionManeuverPopup();
-}
-
 function renderLog() {
   el.combatLog.innerHTML = state.log.map(entry => `<li class="${entry.tone}"><time>R${entry.round}</time><span>${entry.message}</span></li>`).join("") || '<li class="empty-log">Журнал пуст</li>';
 }
@@ -388,6 +353,10 @@ function draw() {
   for (const unit of state.units) if (ui.animation?.unitId !== unit.id) drawEntity(unit, unit.glyph, unit.color, unit.heading);
   if (ui.animation?.kind === "movement") drawAnimatedEntity();
   if (ui.animation?.kind === "attack") drawAttackAnimation();
+  if (ui.selected && state.stage !== "attack" && !ui.animation) {
+    drawManeuverGhost();
+    drawManeuverOptions();
+  }
 }
 
 function drawStars(width, height) {
@@ -404,7 +373,11 @@ function drawHex(position) {
   let fill = "rgba(18,30,44,.34)";
   let stroke = "rgba(67,89,112,.36)";
   let width = 1;
-  if (route && state.lifecycle !== "DeploymentLeft" && state.lifecycle !== "DeploymentRight") { fill = "rgba(101,244,178,.052)"; stroke = "rgba(101,244,178,.28)"; }
+  if (route && state.lifecycle !== "DeploymentLeft" && state.lifecycle !== "DeploymentRight") {
+    const muted = Boolean(ui.selected?.route && state.stage !== "attack");
+    fill = muted ? "rgba(101,244,178,.018)" : "rgba(101,244,178,.052)";
+    stroke = muted ? "rgba(101,244,178,.10)" : "rgba(101,244,178,.28)";
+  }
   const deploying = state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight";
   if (deploying && deploymentZone(state, state.lifecycle === "DeploymentLeft" ? "azure" : "crimson").some(cell => key(cell.q, cell.r) === key(position.q, position.r))) { fill = "rgba(101,244,178,.16)"; stroke = "rgba(101,244,178,.85)"; }
   if (state.stage === "attack" && ui.selectedWeapons.size) {
@@ -423,11 +396,21 @@ function drawHex(position) {
   }
   if (contents.some(content => content.kind !== "object")) { fill = "rgba(244,200,97,.10)"; stroke = "rgba(244,200,97,.45)"; }
   if (contents.some(content => content.kind === "object") || (occupant && shouldHighlightOccupiedHex(state.lifecycle))) { fill = "rgba(255,102,125,.09)"; stroke = "rgba(255,102,125,.42)"; }
-  if (ui.hovered && key(...Object.values(ui.hovered)) === key(position.q, position.r)) { stroke = route ? "#65f4b2" : "#8aa0b6"; width = 2; }
+  const event = selectedEventAt(position);
+  if (event?.hazards.length) { fill = "rgba(244,200,97,.20)"; stroke = "rgba(244,200,97,.82)"; width = 2; }
+  if (event?.interception) { fill = event.hazards.length ? fill : "rgba(255,158,94,.20)"; stroke = "#ff9e5e"; width = 2.5; }
+  if (ui.hovered && key(ui.hovered.q, ui.hovered.r) === key(position.q, position.r)) {
+    if (route && ui.selected?.route) fill = "rgba(101,244,178,.032)";
+    stroke = route ? "#65f4b2" : "#8aa0b6"; width = 2;
+  }
    if (state.stage === "attack" && ui.selectedWeapons.size && availableAttackTargets(state, ui.selectedWeapons).some(target => key(target.position.q, target.position.r) === key(position.q, position.r))) { fill = "rgba(255,102,125,.14)"; stroke = "#ff667d"; width = 2; }
   if (ui.selected?.position && key(ui.selected.position.q, ui.selected.position.r) === key(position.q, position.r)) { fill = "rgba(102,228,255,.14)"; stroke = "#66e4ff"; width = 2.5; }
 
-  ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = width; ctx.stroke();
+  ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = width;
+  if (event?.interception) ctx.setLineDash([5, 4]);
+  ctx.stroke(); ctx.setLineDash([]);
+  if (event?.hazards.length) { hexPath(x, y, ui.geometry.size - 8); ctx.strokeStyle = "#f4c861"; ctx.lineWidth = 2; ctx.stroke(); }
+  if (event?.interception) { hexPath(x, y, ui.geometry.size - 3); ctx.strokeStyle = "#ff9e5e"; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]); }
   if (route && key(position.q, position.r) !== key(activeUnit(state).position.q, activeUnit(state).position.r)) { ctx.fillStyle = "rgba(101,244,178,.7)"; ctx.beginPath(); ctx.arc(x, y, 2.2, 0, Math.PI * 2); ctx.fill(); }
   const { col, row } = axialToOffset(position.q, position.r);
   ctx.fillStyle = "rgba(116,137,158,.36)"; ctx.font = "7px monospace"; ctx.textAlign = "center"; ctx.fillText(`${col}:${row}`, x, y + ui.geometry.size * .69);
@@ -445,11 +428,80 @@ function drawEntity(entity, glyph, color, heading = 0) {
   if (shouldOutlineUnit(entity.id, state.activeUnitId, ui.selected?.deploymentUnitId, state.lifecycle)) { ctx.strokeStyle = color; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, 25, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
 }
 
+function selectedEventAt(position) {
+  const route = ui.selected?.route;
+  if (!route) return null;
+  const hazards = [];
+  const pathVisits = route.path.filter(point => key(point.q, point.r) === key(position.q, position.r)).length;
+  for (const content of contentsAt(state, position)) {
+    const matches = route.consequences.filter(consequence => consequence.sourceId === content.id);
+    const count = Math.max(matches.length, matches.length ? pathVisits : 0);
+    for (let index = 0; index < count; index++) hazards.push(matches[index % matches.length]);
+  }
+  const interceptor = route.interception ? unitById(state, route.interception) : null;
+  const interception = interceptor && key(position.q, position.r) === key(route.position.q, route.position.r) ? interceptor : null;
+  return hazards.length || interception ? { hazards, interception } : null;
+}
+
+function firstHazardPathIndex(route) {
+  return route.path.findIndex((point, index) => index > 0 && contentsAt(state, point).some(content => route.consequences.some(consequence => consequence.sourceId === content.id)));
+}
+
+function drawRouteSegment(from, to, color) {
+  const a = axialToPixel(from);
+  const b = axialToPixel(to);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 5]);
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
 function drawRoute() {
   if (!shouldDrawRoute(ui.selected)) return;
-  ctx.strokeStyle = "#66e4ff"; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.beginPath();
-  ui.selected.route.path.forEach((point, index) => { const pixel = axialToPixel(point); if (!index) ctx.moveTo(pixel.x, pixel.y); else ctx.lineTo(pixel.x, pixel.y); });
-  ctx.stroke(); ctx.setLineDash([]);
+  const path = ui.selected.route.path;
+  const hazardIndex = firstHazardPathIndex(ui.selected.route);
+  for (let index = 1; index < path.length; index++) drawRouteSegment(path[index - 1], path[index], hazardIndex >= 0 && index > hazardIndex ? "#f4c861" : "#66e4ff");
+}
+
+function drawManeuverGhost() {
+  const option = selectedOption();
+  if (!option || option.finalState.heading === undefined) return;
+  const unit = activeUnit(state);
+  const image = imageFor(unit.glyph, unit.color, unit.stack);
+  const { x, y } = axialToPixel(option.finalState.hex);
+  const size = VISUALS[unit.glyph].size;
+  ctx.save();
+  ctx.globalAlpha = ui.hoveredOption ? .55 : .35;
+  ctx.translate(x, y); ctx.rotate(headingAngle(option.finalState.heading));
+  ctx.shadowColor = unit.color; ctx.shadowBlur = 14;
+  if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size);
+  ctx.restore();
+}
+
+function drawManeuverOptions() {
+  const options = ui.selected?.options || [];
+  ui.optionTargets = options.map(optionTarget);
+  for (const target of ui.optionTargets) {
+    const active = ui.hoveredOption?.optionId === target.option.optionId;
+    ctx.save();
+    ctx.translate(target.x, target.y);
+    if (active) ctx.scale(1.14, 1.14);
+    ctx.fillStyle = active ? "rgba(102,228,255,.98)" : "rgba(8,18,28,.94)";
+    ctx.strokeStyle = active ? "#d8f8ff" : "#66e4ff";
+    ctx.lineWidth = active ? 2.5 : 1.5;
+    ctx.shadowColor = "#66e4ff"; ctx.shadowBlur = active ? 18 : 10;
+    ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = active ? "#071019" : "#66e4ff";
+    ctx.font = "700 20px ui-monospace,monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    if (target.option.finalState.heading === undefined) ctx.fillText("✓", 0, 1);
+    else {
+      ctx.rotate(headingAngle(target.option.finalState.heading));
+      ctx.fillText("↑", 0, 1);
+    }
+    ctx.restore();
+  }
 }
 
 function drawAttackAnimation() {
@@ -508,18 +560,15 @@ function resizeCanvas() {
   const heightSize = (rect.height - 56) / 16;
   const widthSize = (rect.width - 32) / (Math.sqrt(3) * 14);
   ui.geometry = { dpr, size: Math.max(18, Math.min(44, heightSize, widthSize)), cx: rect.width / 2, cy: rect.height / 2 - 4 };
-  positionManeuverPopup();
-  positionAttackPopup();
   draw();
 }
 
-function startMovement() {
-  if (!ui.selected || ui.animation) return;
-  el.maneuverPopup.hidden = true;
+function startMovement(option = selectedOption()) {
+  if (!ui.selected || !option || ui.animation) return;
   const unit = activeUnit(state);
   if (unit.evasiveManeuver) addLog(`${unit.name} применяет «Манёвр уклонения» за 1 очко манёвренности.`, unit.sideId);
-  const route = ui.selected.route;
-  const finalHeading = ui.selected.heading;
+  const route = option.route;
+  const finalHeading = option.finalState.heading;
   let path = [...route.path];
   if (unit.kind === "squadron") {
     path = path.map((point, index) => ({ ...point, heading: index ? route.steps[index - 1].heading : 0 }));
@@ -616,55 +665,132 @@ function selectHex(position) {
     const target = unitAt(state, position, activeUnit(state).id);
     if (!ui.selectedWeapons.size || !target || !availableAttackTargets(state, ui.selectedWeapons).includes(target)) return;
     ui.selected = { position, targetId: target.id };
-    renderRouteInspector(); draw();
+    draw();
     return;
   }
   const route = ui.routes.get(key(position.q, position.r));
-  if (!route) return;
+  const occupant = unitAt(state, position, activeUnit(state).id);
+  if (!route) {
+    if (!occupant) { clearManeuverSelection(); renderUnitSummary(); draw(); }
+    return;
+  }
+  if (ui.selected?.position && key(ui.selected.position.q, ui.selected.position.r) === key(position.q, position.r)) {
+    clearManeuverSelection(); renderUnitSummary(); draw(); return;
+  }
   const unit = activeUnit(state);
-  ui.selected = { position, route, heading: unit.kind === "capital" ? route.heading ?? unit.heading : null };
-  renderUnitSummary(); renderRouteInspector(); draw();
+  const options = buildManeuverOptions(unit, route, optionHeadings(unit, route), signedTurn);
+  if (!options.length) { clearManeuverSelection(); refreshRoutes(); renderAll(); return; }
+  const baseOption = options.find(option => option.finalState.heading === route.heading) || options[0];
+  ui.selected = { position, route, options, baseOption, previewOption: baseOption };
+  ui.hoveredOption = null;
+  renderUnitSummary(); draw();
+}
+
+function cancelTooltipClose() {
+  clearTimeout(ui.tooltipTimer);
+  ui.tooltipTimer = null;
+}
+
+function hideTooltip() {
+  cancelTooltipClose();
+  el.tooltip.hidden = true;
+  ui.tooltipHex = null;
+}
+
+function scheduleTooltipClose() {
+  if (ui.tooltipTimer) return;
+  ui.tooltipTimer = setTimeout(() => {
+    ui.tooltipTimer = null;
+    if (!ui.tooltipInside) hideTooltip();
+  }, 140);
+}
+
+function positionTooltip(event) {
+  const wrap = canvas.parentElement.getBoundingClientRect();
+  const width = el.tooltip.offsetWidth || 240;
+  const height = el.tooltip.offsetHeight || 140;
+  const localX = event.clientX - wrap.left;
+  const localY = event.clientY - wrap.top;
+  const left = localX + width + 24 <= wrap.width ? localX + 14 : localX - width - 14;
+  const top = localY + height + 18 <= wrap.height ? localY + 14 : localY - height - 14;
+  el.tooltip.style.left = `${Math.max(8, Math.min(left, wrap.width - width - 8))}px`;
+  el.tooltip.style.top = `${Math.max(44, Math.min(top, wrap.height - height - 8))}px`;
+}
+
+function eventTooltip(position) {
+  const contents = contentsAt(state, position);
+  const event = selectedEventAt(position);
+  const hazards = event?.hazards.length ? event.hazards : contents.filter(content => content.hazard).map(content => ({ sourceId: content.id, sourceName: content.label, ...content.hazard }));
+  if (!hazards.length && !event?.interception) return null;
+  const hazardRows = hazards.map((hazard, index) => `<article class="tooltip-event hazard"><b>${hazard.sourceName}</b><span>${event?.hazards.length ? `Прохождение ${index + 1} · ${Math.round(hazard.probability * 100)}% · ${hazard.min}–${hazard.max} · ${hazard.effect}` : `${hazard.effect}`}</span></article>`).join("");
+  const interceptionRow = event?.interception ? `<article class="tooltip-event interception"><b>ПЕРЕХВАТ</b><span>${event.interception.name} · эскадрилья связывает юнит боем после манёвра</span></article>` : "";
+  return { title: hazards.length && event?.interception ? "ЭФФЕКТЫ ГЕКСА" : event?.interception ? "ПЕРЕХВАТ" : "ОПАСНОСТЬ", content: `${hazardRows}${interceptionRow}` };
+}
+
+function unitTooltip(occupant, preview = null) {
+  const evasion = occupant.evasionLocked ? 0 : (occupant.baseEvasion || 0) + occupant.movementEvasion;
+  const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview?.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor", preview?.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview?.layer === "integrity" ? preview.potentialDamage : 0)}</div>`;
+  return { title: occupant.name, content: `<span class="tooltip-model">${unitModel(occupant)}</span>${vitals}Уклонение ${evasion}%${tooltipStatuses(occupant)}` };
+}
+
+function attackTooltip(occupant) {
+  if (ui.selected?.targetId !== occupant.id) return unitTooltip(occupant);
+  const preview = attackPreview(state, occupant.id, ui.selectedWeapons);
+  const base = unitTooltip(occupant, preview);
+  const weapons = preview.ordered.map(weapon => `<span><strong>${weapon.name}</strong><small>${weapon.shots}×${weapon.damage} · ${preview.hitChances[weapon.id]}% попадание</small></span>`).join("");
+  const exclusions = preview.excluded.map(weapon => `<li>${weapon.name}: ${weapon.reason}</li>`).join("");
+  const energy = preview.energyRequired ? `<p>Энергия: <b>${preview.energyRequired}/${preview.energyAvailable}</b></p>` : "";
+  const hint = !ui.selectedWeapons.size ? "<p>Сначала выберите орудия</p>" : !preview.included.length ? "<p>Цель вне сектора или дальности выбранных орудий</p>" : "";
+  const detail = `<div class="tooltip-attack-metrics"><span><b>${preview.included.length}</b> ОРУД.</span><span><b>${preview.shots}</b> ВЫСТР.</span><span><b>${preview.potentialDamage}</b> УРОН</span></div><div class="tooltip-attack-weapons">${weapons}</div>${energy}${exclusions ? `<ul>${exclusions}</ul>` : ""}${hint}<div class="tooltip-attack-actions"><button type="button" class="button primary" data-tooltip-action="confirm-attack" ${preview.canConfirm ? "" : "disabled"}>Подтвердить атаку</button><button type="button" class="button" data-tooltip-action="cancel-attack">Отменить</button></div>`;
+  return { title: base.title, content: `${base.content}<div class="tooltip-attack">${detail}</div>` };
+}
+
+function combineTooltips(primary, secondary) {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  return { title: primary.title, content: `${primary.content}<div class="tooltip-section">${secondary.content}</div>` };
+}
+
+function showHexTooltip(position, event) {
+  const occupant = unitAt(state, position);
+  const events = eventTooltip(position);
+  const target = state.stage === "attack" && occupant && occupant.sideId !== activeUnit(state).sideId ? attackTooltip(occupant) : occupant ? unitTooltip(occupant) : null;
+  const model = combineTooltips(target, events);
+  if (!model) { scheduleTooltipClose(); return; }
+  cancelTooltipClose();
+  ui.tooltipHex = position;
+  tooltipTitle.textContent = model.title;
+  tooltipContent.innerHTML = model.content;
+  el.tooltip.hidden = false;
+  positionTooltip(event);
 }
 
 canvas.addEventListener("pointermove", event => {
-  if (ui.animation) return;
+  const point = pointerPoint(event);
+  const option = !ui.animation && ui.selected && state.stage !== "attack" ? optionAtPoint(point) : null;
+  if (option !== ui.hoveredOption) {
+    ui.hoveredOption = option;
+    renderUnitSummary();
+  }
   const position = pointerHex(event);
   ui.hovered = inside(state, position) ? position : null;
-  if (!ui.hovered) { el.tooltip.hidden = true; draw(); return; }
+  if (!ui.hovered) { scheduleTooltipClose(); draw(); return; }
+  if (ui.tooltipHex && key(ui.tooltipHex.q, ui.tooltipHex.r) !== key(position.q, position.r)) scheduleTooltipClose();
   const offset = axialToOffset(position.q, position.r);
   el.coordinates.textContent = `HEX ${offset.col >= 0 ? "+" : ""}${offset.col} : ${offset.row >= 0 ? "+" : ""}${offset.row}`;
-  const route = ui.routes.get(key(position.q, position.r));
-  const occupant = unitAt(state, position);
-  const contents = contentsAt(state, position);
-  if (state.stage === "attack" && occupant && occupant.sideId !== activeUnit(state).sideId) {
-    const preview = attackPreview(state, occupant.id, ui.selectedWeapons);
-    const weapons = preview.ordered.map(weapon => `${weapon.name}: ${weapon.shots}×${weapon.damage}, ${preview.hitChances[weapon.id]}%`).join("<br>");
-    const selectionHint = ui.selectedWeapons.size ? "" : "<br><em>Сначала выберите плитки орудий</em>";
-    const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor", preview.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview.layer === "integrity" ? preview.potentialDamage : 0)}</div>`;
-    const summary = `<b>${occupant.name}</b><br><span class="tooltip-model">${unitModel(occupant)}</span>${vitals}Уклонение ${occupant.evasionLocked ? 0 : (occupant.baseEvasion || 0) + occupant.movementEvasion}%${tooltipStatuses(occupant)}`;
-    el.tooltip.innerHTML = preview.included.length ? `${summary}<em>${weapons}</em><br>До ${preview.potentialDamage} урона по слою «${preview.layer}» · ${preview.shots} выстр.` : `${summary}${selectionHint || "<br><em>Недопустимая цель: вне сектора или дальности</em>"}`;
-  } else if (occupant) {
-    const evasion = occupant.evasionLocked ? 0 : (occupant.baseEvasion || 0) + occupant.movementEvasion;
-    const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield")}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor")}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity")}</div>`;
-    el.tooltip.innerHTML = `<b>${occupant.name}</b><br><span class="tooltip-model">${unitModel(occupant)}</span>${vitals}Уклонение ${evasion}%${tooltipStatuses(occupant)}`;
-  } else if (route) {
-    const destination = contents.length ? `<br>${contents.map(item => item.label).join(", ")}` : "";
-    const consequences = route.consequences.length ? `<br><em>${route.consequences.map(item => `${item.sourceName}: ${Math.round(item.probability * 100)}%, ${item.min}–${item.max} ${item.effect}`).join("<br>")}</em>` : "<br>Опасностей нет";
-    el.tooltip.innerHTML = `<b>МАРШРУТ ДОСТУПЕН</b><br>${route.movementCost}/${activeUnit(state).currentSpeed} Speed · ${route.steps.length} шаг. · ${route.turnsSpent} повор.${destination}${consequences}`;
-  } else {
-    const details = occupant ? `${occupant.name}<br>Щит ${occupant.shield} · Броня ${occupant.armor} · Целостность ${occupant.integrity}` : contents.length ? contents.map(item => `${item.label}${item.hazard ? ` · ${Math.round(item.hazard.probability * 100)}%, ${item.hazard.min}–${item.hazard.max}` : ""}`).join("<br>") : "Пустой гекс";
-    el.tooltip.innerHTML = `<b>НЕДОСТУПНО</b><br>${details}`;
-  }
-  el.tooltip.hidden = false;
-  const wrap = canvas.parentElement.getBoundingClientRect();
-  const tooltipWidth = el.tooltip.offsetWidth || 220;
-  const tooltipHeight = el.tooltip.offsetHeight || 110;
-  el.tooltip.style.left = `${Math.max(8, Math.min(event.clientX - wrap.left + 14, wrap.width - tooltipWidth - 8))}px`;
-  el.tooltip.style.top = `${Math.max(8, Math.min(event.clientY - wrap.top + 14, wrap.height - tooltipHeight - 8))}px`;
+  if (option) hideTooltip(); else showHexTooltip(position, event);
   draw();
 });
-canvas.addEventListener("pointerleave", () => { ui.hovered = null; el.tooltip.hidden = true; el.coordinates.textContent = "HEX —"; draw(); });
-canvas.addEventListener("click", event => { if (!ui.animation) selectHex(pointerHex(event)); });
+canvas.addEventListener("pointerleave", () => { ui.hovered = null; ui.hoveredOption = null; scheduleTooltipClose(); el.coordinates.textContent = "HEX —"; renderUnitSummary(); draw(); });
+canvas.addEventListener("click", event => {
+  if (ui.animation) return;
+  const option = optionAtPoint(pointerPoint(event));
+  if (option) { startMovement(option); return; }
+  selectHex(pointerHex(event));
+  if (state.stage === "attack" && ui.selected?.targetId) showHexTooltip(ui.selected.position, event);
+});
+el.tooltip.addEventListener("pointerenter", () => { ui.tooltipInside = true; cancelTooltipClose(); });
+el.tooltip.addEventListener("pointerleave", () => { ui.tooltipInside = false; scheduleTooltipClose(); });
 
 el.routePolicyButton.addEventListener("click", () => { if (ui.animation) return; ui.policy = ui.policy === "safe" ? "risky" : "safe"; refresh(); });
 el.startBattleButton.addEventListener("click", () => { el.menuScreen.hidden = true; el.battleScreen.hidden = false; resetBattle(); requestAnimationFrame(resizeCanvas); });
@@ -682,14 +808,12 @@ el.evasionButton.addEventListener("click", () => { if (useEvasiveManeuver(state)
 el.waitButton.addEventListener("click", () => { const name = activeUnit(state).name; if (waitActiveUnit(state)) { addLog(`${name} ждёт и переносится в конец очереди.`, "system"); addLog(`${activeUnit(state).name} начинает активацию.`, activeUnit(state).sideId); refresh(); } });
 el.endActivationButton.addEventListener("click", () => { if (ui.animation) return; const name = activeUnit(state).name; if (state.stage === "attack") skipAttack(state); const result = endActivation(state); addLog(`${name} завершает активацию.`, "system"); if (result.newRound) addLog(`Начинается раунд ${state.roundNumber}.`, "system"); addLog(`${activeUnit(state).name} начинает активацию.`, activeUnit(state).sideId); refresh(); });
 
-el.confirmManeuverButton.addEventListener("click", startMovement);
-el.cancelManeuverButton.addEventListener("click", () => { ui.selected = null; renderUnitSummary(); renderRouteInspector(); draw(); });
-el.confirmButton.addEventListener("click", () => {
-  if (!ui.selected || ui.animation) return;
+function confirmAttack() {
+  if (!ui.selected?.targetId || ui.animation) return;
   const target = unitById(state, ui.selected.targetId);
   const plan = planAttack(state, target.id, ui.selectedWeapons);
   if (!plan?.steps.length) return;
-  el.attackPopup.hidden = true;
+  hideTooltip();
   const started = performance.now();
   ui.animation = { kind: "attack", plan, from: { ...activeUnit(state).position }, stepIndex: 0, started };
   document.body.classList.add("animating");
@@ -719,10 +843,15 @@ el.confirmButton.addEventListener("click", () => {
     refresh();
   };
   requestAnimationFrame(frame);
+}
+
+el.tooltip.addEventListener("click", event => {
+  const action = event.target.closest("[data-tooltip-action]")?.dataset.tooltipAction;
+  if (action === "confirm-attack") confirmAttack();
+  if (action === "cancel-attack") { ui.selected = null; hideTooltip(); draw(); }
 });
-el.cancelButton.addEventListener("click", () => { if (ui.animation) return; ui.selected = null; renderRouteInspector(); draw(); });
 el.clearLogButton.addEventListener("click", () => { state.log = []; renderLog(); });
 window.addEventListener("resize", resizeCanvas);
-window.addEventListener("keydown", event => { if (event.key === "Escape" && !el.rulesDialog.open) { ui.selected = null; renderRouteInspector(); draw(); } });
+window.addEventListener("keydown", event => { if (event.key === "Escape" && !el.rulesDialog.open && !ui.animation) { clearManeuverSelection(); renderUnitSummary(); draw(); } });
 
 renderAll();

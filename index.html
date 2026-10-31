@@ -44,18 +44,7 @@
         <section class="battlefield-wrap">
           <div class="canvas-toolbar"><div><span class="live-indicator"></span><span id="modeLabel">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
           <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
-          <div id="tooltip" class="hex-tooltip" hidden></div>
-          <div id="maneuverPopup" class="maneuver-popup" hidden>
-            <div class="maneuver-popup-title"><span>План манёвра</span><span id="maneuverBadge">ГОТОВ</span></div>
-            <div id="maneuverDetails" class="maneuver-details"></div>
-            <div id="headingPicker" class="heading-picker" hidden><span>Конечный курс</span><div id="headingButtons" class="heading-buttons"></div></div>
-            <div class="maneuver-popup-actions"><button id="confirmManeuverButton" class="button primary icon-action" aria-label="Подтвердить манёвр" title="Подтвердить манёвр">✓</button><button id="cancelManeuverButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
-          </div>
-          <div id="attackPopup" class="maneuver-popup attack-popup" hidden>
-            <div class="maneuver-popup-title"><span id="actionTitle">План атаки</span><span id="routeBadge">ГОТОВ</span></div>
-            <div id="routeDetails" class="maneuver-details"></div>
-            <div class="maneuver-popup-actions"><button id="confirmButton" class="button primary icon-action" aria-label="Подтвердить атаку" title="Подтвердить атаку">✓</button><button id="cancelButton" class="button icon-action" aria-label="Отменить выбор" title="Отменить выбор">×</button></div>
-          </div>
+          <div id="tooltip" class="hex-tooltip" hidden><div class="hex-tooltip-title"></div><div class="hex-tooltip-content"></div></div>
         </section>
         <section class="command-deck" aria-label="Панель действий активного юнита">
           <div id="energyResource" class="energy-resource"></div>
