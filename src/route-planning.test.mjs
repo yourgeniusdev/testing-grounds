@@ -12,11 +12,12 @@ function unit(overrides = {}) {
     kind: "squadron",
     position: { q: 0, r: 0 },
     currentSpeed: 3,
-    maneuver: 0,
+    heading: 0,
+    maneuver: 5,
     speedSpent: 0,
     speedRemaining: 3,
     maneuverSpent: 0,
-    maneuverRemaining: 0,
+    maneuverRemaining: 5,
     engagedWith: [],
     weapons: [{ id: "weapon-a", firedThisRound: false, cooldownRemaining: 0 }],
     ...overrides
@@ -195,7 +196,7 @@ test("equal-cost alternatives select one reproducible route", () => {
   const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
   const obstruction = { id: "station", kind: "object", type: "station", position: { q: 1, r: 0 } };
   const route = planRoutes(battle(mover, { contents: [obstruction] }), mover, "risky").get("2,0");
-  assert.deepEqual(route?.path, [{ q: 0, r: 0 }, { q: 0, r: 1 }, { q: 1, r: 1 }, { q: 2, r: 0 }]);
+  assert.deepEqual(route?.path, [{ q: 0, r: 0 }, { q: 1, r: -1 }, { q: 2, r: -1 }, { q: 2, r: 0 }]);
 });
 
 test("route selection is structurally stable across rule-irrelevant source ordering", () => {
@@ -251,9 +252,9 @@ test("maneuver options preserve stable public data without mutating battle state
     consequences: option.consequences,
     interception: option.interception
   }, {
-    optionId: "maneuver:1:0",
-    finalState: { hex: { q: 1, r: 0 } },
-    resources: { speed: { spent: 1, remaining: 2, capacity: 3 }, maneuver: { spent: 0, remaining: 0, capacity: 0 } },
+    optionId: "maneuver:1:0:heading:0",
+    finalState: { hex: { q: 1, r: 0 }, heading: 0 },
+    resources: { speed: { spent: 1, remaining: 2, capacity: 3 }, maneuver: { spent: 0, remaining: 5, capacity: 5 } },
     consequences: [{ sourceId: "mines-a", sourceName: "Minefield", probability: 0.5, min: 4, max: 8, effect: "integrity damage" }],
     interception: null
   });
@@ -281,17 +282,54 @@ test("Squadron route preview exposes every expected interception in stable order
   assert.equal(option.interception, "enemy-a");
 });
 
-test("stage 0 keeps squadrons headingless and limits large ships to one turn before each step", () => {
-  const squadron = unit();
-  const squadronRoutes = planRoutes(battle(squadron), squadron, "risky");
-  assert.equal(Object.hasOwn(squadron, "heading"), false);
-  for (const route of squadronRoutes.values()) assert.equal(Object.hasOwn(route, "heading"), false);
-
-  const largeShip = unit({ kind: "capital", heading: 0, maneuver: 3, currentSpeed: 3, speedRemaining: 3 });
-  const largeShipRoutes = planRoutes(battle(largeShip), largeShip, "risky");
-  for (const route of largeShipRoutes.values()) {
-    for (const step of route.steps) assert.ok(Math.abs(step.turn) <= 1);
+test("common routing supports turn-only maneuvers but excludes the empty start state", () => {
+  for (const kind of ["capital", "squadron"]) {
+    const mover = unit({ kind, heading: 0, maneuver: 3, maneuverRemaining: 3, currentSpeed: 0, speedRemaining: 0 });
+    const routes = planRoutes(battle(mover), mover, "risky");
+    assert.equal(routes.has("0,0:0"), false);
+    assert.deepEqual([...routes.values()].map(route => route.heading).sort(), [1, 2, 3, 4, 5]);
+    const reverse = routes.get("0,0:3");
+    assert.equal(reverse.movementCost, 0);
+    assert.equal(reverse.turnsSpent, 3);
+    assert.deepEqual(reverse.actions.map(action => action.type), ["turn", "turn", "turn"]);
   }
+});
+
+test("common routing permits multiple turns before, between, and after moves", () => {
+  const mover = unit({ kind: "capital", heading: 0, maneuver: 3, maneuverRemaining: 3, currentSpeed: 2, speedRemaining: 2 });
+  const routes = planRoutes(battle(mover), mover, "risky");
+  const reverseThenMove = routes.get("-1,0:3");
+  assert.deepEqual(reverseThenMove.actions.map(action => action.type), ["turn", "turn", "turn", "move"]);
+    assert.deepEqual(reverseThenMove.path, [{ q: 0, r: 0 }, { q: -1, r: 0 }]);
+
+  const woven = [...routes.values()].find(route => route.actions.some((action, index) => action.type === "turn" && route.actions[index - 1]?.type === "move" && route.actions.slice(index + 1).some(candidate => candidate.type === "move")));
+  assert.ok(woven);
+  const finalTurn = routes.get("2,0:1");
+  assert.deepEqual(finalTurn.actions.map(action => action.type), ["move", "move", "turn"]);
+});
+
+test("zero maneuver permits only straight movement", () => {
+  const mover = unit({ kind: "capital", heading: 0, maneuver: 0, maneuverRemaining: 0, currentSpeed: 3, speedRemaining: 3 });
+  const routes = planRoutes(battle(mover), mover, "risky");
+  assert.deepEqual([...routes.values()].map(route => `${route.position.q},${route.position.r}:${route.heading}`).sort(), ["1,0:0", "2,0:0", "3,0:0"]);
+});
+
+test("different headings in one hex remain distinct deterministic final states", () => {
+  const mover = unit({ kind: "capital", heading: 0, maneuver: 3, maneuverRemaining: 3, currentSpeed: 1, speedRemaining: 1 });
+  const state = battle(mover);
+  const first = routeShape(planRoutes(state, mover, "risky"));
+  const second = routeShape(planRoutes(state, mover, "risky"));
+  assert.deepEqual(second, first);
+  assert.ok(planRoutes(state, mover, "risky").has("1,0:0"));
+  assert.ok(planRoutes(state, mover, "risky").has("1,0:1"));
+});
+
+test("capital ships and squadrons share heading-constrained routing with category traversal differences", () => {
+  const capital = unit({ kind: "capital", heading: 0, maneuver: 3, maneuverRemaining: 3, currentSpeed: 2, speedRemaining: 2 });
+  const squadron = unit({ kind: "squadron", heading: 0, maneuver: 3, maneuverRemaining: 3, currentSpeed: 2, speedRemaining: 2 });
+  const blocker = unit({ id: "blocker", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 });
+  assert.equal(planRoutes(battle(capital, { units: [blocker] }), capital, "risky").has("2,0:0"), false);
+  assert.equal(planRoutes(battle(squadron, { units: [blocker] }), squadron, "risky").has("2,0:0"), true);
 });
 
 function aaWeapon(overrides = {}) {
@@ -370,11 +408,11 @@ test("risky route ordering is speed then maneuver then expected known harm then 
   assert.deepEqual(harmBeforeGeometry.path, [{ q: 0, r: 0 }, { q: 0, r: 1 }, { q: 1, r: 1 }, { q: 2, r: 0 }]);
 
   const geometry = planRoutes(battle(mover, { contents: [obstruction] }), mover, "risky").get("2,0");
-  assert.deepEqual(geometry.path, [{ q: 0, r: 0 }, { q: 0, r: 1 }, { q: 1, r: 1 }, { q: 2, r: 0 }]);
+  assert.deepEqual(geometry.path, [{ q: 0, r: 0 }, { q: 1, r: -1 }, { q: 2, r: -1 }, { q: 2, r: 0 }]);
 });
 
-test("expected interception terminates a risky route and preserves the singular adapter", () => {
-  const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
+test("expected interception terminates a risky route without publishing later turns", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3, maneuver: 2, maneuverRemaining: 2 });
   const interceptor = unit({ id: "interceptor", sideId: "crimson", position: { q: 2, r: 0 } });
   const blockers = [
     { q: 0, r: 1 },
@@ -391,6 +429,18 @@ test("expected interception terminates a risky route and preserves the singular 
   assert.equal(intercepted.interception, "interceptor");
   assert.equal(routes.has("2,0"), false);
   assert.equal([...routes.values()].some(route => route.path.length > 2), false);
+  assert.equal(routes.matching({ q: 1, r: 0 }).length, 1);
+  assert.equal(routes.get("1,0:1"), undefined);
+});
+
+test("a pass-through capital hex never exposes turn-only stopping states", () => {
+  const mover = unit({ currentSpeed: 2, speedRemaining: 2, maneuver: 2, maneuverRemaining: 2 });
+  const capital = unit({ id: "capital", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 });
+  const routes = planRoutes(battle(mover, { units: [capital] }), mover, "risky");
+
+  assert.equal(routes.matching({ q: 1, r: 0 }).length, 0);
+  assert.equal([...routes.values()].some(route => route.actions.at(-1)?.type === "turn" && route.position.q === 1 && route.position.r === 0), false);
+  assert.ok(routes.get("2,0:0"));
 });
 
 test("AA preview expected harm uses battle geometry, endpoint cover, evasion, and active-layer multiplier", () => {

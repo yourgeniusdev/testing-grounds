@@ -148,7 +148,7 @@ function battle(weapons, targetOverrides = {}) {
 }
 
 {
-  const guns = weapon({ mount: "squadronWeapon", targetKinds: ["capital", "squadron"], shots: 2, damage: 1 });
+  const guns = weapon({ mount: "squadronWeapon", firingArc: "forward", targetKinds: ["capital", "squadron"], shots: 2, damage: 1 });
   const { state, attacker, target } = battle([guns]);
   attacker.kind = "squadron";
   attacker.stack = 3;

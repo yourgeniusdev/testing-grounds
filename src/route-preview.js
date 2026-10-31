@@ -56,10 +56,10 @@ export function aaPreviewDescriptors(state, target, position) {
     for (const weapon of weapons) {
       if (!isKnownTo(weapon, target.sideId) || !weapon.overwatch || weapon.firedThisRound || weapon.cooldownRemaining > 0 || !weapon.targetKinds?.includes("squadron")) continue;
       if (weapon.energyCost > 0 && (!owner.reactor || owner.reactor.currentEnergy < weapon.energyCost)) continue;
-      if (hexDistance(owner.position, position) > weapon.maxRange || !isPositionInFiringArc(owner.position, owner.heading || 0, position, weapon.mount, weapon.orientation)) continue;
+      if (hexDistance(owner.position, position) > weapon.maxRange || !isPositionInFiringArc(owner.position, owner.heading || 0, position, weapon.firingArc ?? weapon.mount, weapon.orientation)) continue;
       const geometry = attackGeometry({ ...state, units: state.units.map(unit => unit.id === target.id ? previewTarget : unit) }, target.id, new Set(), owner);
       const probability = hitChance(weapon, previewTarget, geometry.cover + geometry.endpointCover) / 100;
-      const shots = weapon.shots * (weapon.mount === "squadronWeapon" ? owner.stack || 1 : 1);
+      const shots = weapon.shots * (owner.kind === "squadron" ? owner.stack || 1 : 1);
       const max = shots * weaponDamage(weapon, activeLayer(previewTarget));
       descriptors.push({
         kind: "aa",

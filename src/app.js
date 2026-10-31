@@ -1,6 +1,6 @@
-import { DIRECTIONS, activeUnit, availableFinalHeadings, availableStationaryHeadings, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, movementEvasion, planManeuver, planRoutes, signedTurn, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
+import { DIRECTIONS, activeUnit, axialToOffset, beginActivation, confirmDeployment, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, movementEvasion, planManeuver, planRoutes, signedTurn, unitAt, unitById, useEvasiveManeuver, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { buildManeuverOptions, headingAngle, maneuverResourcePreview, routeConsequenceRows, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
+import { buildManeuverOptions, headingAngle, maneuverPreviewHeading, maneuverResourcePreview, routeConsequenceRows, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
 import { applyAttackStep, attackArc, attackPreview, availableAttackTargets, planAttack, resolvePostEntryAA, skipAttack } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 
@@ -71,6 +71,10 @@ function selectedOption() {
   return ui.hoveredOption || ui.selected?.baseOption || null;
 }
 
+function selectedRoute() {
+  return selectedOption()?.route || null;
+}
+
 function clearManeuverSelection() {
   ui.selected = null;
   ui.hoveredOption = null;
@@ -78,15 +82,10 @@ function clearManeuverSelection() {
   hideTooltip();
 }
 
-function optionHeadings(unit, route) {
-  if (route.heading === undefined) return null;
-  return route.steps.length ? availableFinalHeadings(unit, route) : availableStationaryHeadings(unit);
-}
-
 function optionTarget(option) {
   const target = axialToPixel(option.finalState.hex);
-  if (option.finalState.heading === undefined) return { x: target.x, y: target.y, radius: 17, option };
-  const heading = option.finalState.heading;
+  const heading = maneuverPreviewHeading(activeUnit(state), option);
+  if (heading === undefined) return { x: target.x, y: target.y, radius: 17, option };
   const [dq, dr] = DIRECTIONS[heading];
   const neighbor = axialToPixel({ q: option.finalState.hex.q + dq, r: option.finalState.hex.r + dr });
   const rect = canvas.getBoundingClientRect();
@@ -239,7 +238,7 @@ function renderUnitSummary() {
   const model = unit.kind === "capital" ? unit.hullClassName : unit.squadronModelName;
   const previewSelection = ui.selected ? { ...ui.selected, previewOption: selectedOption() } : null;
   const { speedSpent, speedPreview, maneuverSpent, maneuverPreview } = maneuverResourcePreview(unit, previewSelection, state.stage, signedTurn);
-  const routePreview = ui.selected?.route && state.stage !== "attack" ? ui.selected.route : null;
+  const routePreview = state.stage !== "attack" ? selectedRoute() : null;
   const previewOption = selectedOption();
   const previewHeading = previewOption?.finalState.heading;
   const stationaryTurn = routePreview?.steps.length === 0 && previewHeading !== undefined && previewHeading !== unit.heading;
@@ -256,7 +255,7 @@ function renderUnitSummary() {
 const deliveryNames = { beam: "луч", projectile: "снаряд", missile: "ракета", torpedo: "торпеда" };
 
 function effectiveShots(unit, weapon) {
-  return weapon.mount === "squadronWeapon" ? weapon.shots * unit.stack : weapon.shots;
+  return unit.kind === "squadron" ? weapon.shots * unit.stack : weapon.shots;
 }
 
 function weaponAvailability(unit, weapon) {
@@ -374,7 +373,7 @@ function drawHex(position) {
   let stroke = "rgba(67,89,112,.36)";
   let width = 1;
   if (route && state.lifecycle !== "DeploymentLeft" && state.lifecycle !== "DeploymentRight") {
-    const muted = Boolean(ui.selected?.route && state.stage !== "attack");
+    const muted = Boolean(selectedRoute() && state.stage !== "attack");
     fill = muted ? "rgba(101,244,178,.018)" : "rgba(101,244,178,.052)";
     stroke = muted ? "rgba(101,244,178,.10)" : "rgba(101,244,178,.28)";
   }
@@ -400,7 +399,7 @@ function drawHex(position) {
   if (event?.hazards.length) { fill = "rgba(244,200,97,.20)"; stroke = "rgba(244,200,97,.82)"; width = 2; }
   if (event?.interception) { fill = event.hazards.length ? fill : "rgba(255,158,94,.20)"; stroke = "#ff9e5e"; width = 2.5; }
   if (ui.hovered && key(ui.hovered.q, ui.hovered.r) === key(position.q, position.r)) {
-    if (route && ui.selected?.route) fill = "rgba(101,244,178,.032)";
+    if (route && selectedRoute()) fill = "rgba(101,244,178,.032)";
     stroke = route ? "#65f4b2" : "#8aa0b6"; width = 2;
   }
    if (state.stage === "attack" && ui.selectedWeapons.size && availableAttackTargets(state, ui.selectedWeapons).some(target => key(target.position.q, target.position.r) === key(position.q, position.r))) { fill = "rgba(255,102,125,.14)"; stroke = "#ff667d"; width = 2; }
@@ -429,7 +428,7 @@ function drawEntity(entity, glyph, color, heading = 0) {
 }
 
 function selectedEventAt(position) {
-  const route = ui.selected?.route;
+  const route = selectedRoute();
   if (!route) return null;
   const hazards = [];
   const pathVisits = route.path.filter(point => key(point.q, point.r) === key(position.q, position.r)).length;
@@ -458,22 +457,25 @@ function drawRouteSegment(from, to, color) {
 }
 
 function drawRoute() {
-  if (!shouldDrawRoute(ui.selected)) return;
-  const path = ui.selected.route.path;
-  const hazardIndex = firstHazardPathIndex(ui.selected.route);
+  const route = selectedRoute();
+  if (!shouldDrawRoute({ route })) return;
+  const path = route.path;
+  const hazardIndex = firstHazardPathIndex(route);
   for (let index = 1; index < path.length; index++) drawRouteSegment(path[index - 1], path[index], hazardIndex >= 0 && index > hazardIndex ? "#f4c861" : "#66e4ff");
 }
 
 function drawManeuverGhost() {
   const option = selectedOption();
-  if (!option || option.finalState.heading === undefined) return;
+  if (!option) return;
   const unit = activeUnit(state);
+  const previewHeading = maneuverPreviewHeading(unit, option);
+  if (previewHeading === undefined) return;
   const image = imageFor(unit.glyph, unit.color, unit.stack);
   const { x, y } = axialToPixel(option.finalState.hex);
   const size = VISUALS[unit.glyph].size;
   ctx.save();
   ctx.globalAlpha = ui.hoveredOption ? .55 : .35;
-  ctx.translate(x, y); ctx.rotate(headingAngle(option.finalState.heading));
+  ctx.translate(x, y); ctx.rotate(headingAngle(previewHeading));
   ctx.shadowColor = unit.color; ctx.shadowBlur = 14;
   if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size);
   ctx.restore();
@@ -495,9 +497,10 @@ function drawManeuverOptions() {
     ctx.shadowBlur = 0;
     ctx.fillStyle = active ? "#071019" : "#66e4ff";
     ctx.font = "700 20px ui-monospace,monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    if (target.option.finalState.heading === undefined) ctx.fillText("✓", 0, 1);
+    const previewHeading = maneuverPreviewHeading(activeUnit(state), target.option);
+    if (previewHeading === undefined) ctx.fillText("✓", 0, 1);
     else {
-      ctx.rotate(headingAngle(target.option.finalState.heading));
+      ctx.rotate(headingAngle(previewHeading));
       ctx.fillText("↑", 0, 1);
     }
     ctx.restore();
@@ -660,9 +663,9 @@ function selectHex(position) {
     draw();
     return;
   }
-  const route = ui.routes.get(key(position.q, position.r));
+  const routes = ui.routes.matching?.(position) || [];
   const occupant = unitAt(state, position, activeUnit(state).id);
-  if (!route) {
+  if (!routes.length) {
     if (!occupant) { clearManeuverSelection(); renderUnitSummary(); draw(); }
     return;
   }
@@ -670,10 +673,9 @@ function selectHex(position) {
     clearManeuverSelection(); renderUnitSummary(); draw(); return;
   }
   const unit = activeUnit(state);
-  const options = buildManeuverOptions(unit, route, optionHeadings(unit, route), signedTurn);
-  if (!options.length) { clearManeuverSelection(); refreshRoutes(); renderAll(); return; }
-  const baseOption = options.find(option => option.finalState.heading === route.heading) || options[0];
-  ui.selected = { position, route, options, baseOption, previewOption: baseOption };
+  const options = routes.flatMap(route => buildManeuverOptions(unit, route));
+  const baseOption = options[0];
+  ui.selected = { position, options, baseOption, previewOption: baseOption };
   ui.hoveredOption = null;
   renderUnitSummary(); draw();
 }
@@ -710,7 +712,7 @@ function positionTooltip(event) {
 }
 
 function eventTooltip(position) {
-  const route = ui.selected?.route;
+  const route = selectedRoute();
   if (route && key(position.q, position.r) === key(route.position.q, route.position.r)) {
     const rows = routeConsequenceRows(route);
     if (rows.length) return { title: "ПОСЛЕДСТВИЯ МАРШРУТА", content: rows.map(row => `<article class="tooltip-event ${row.kind}"><b>${row.title}</b><span>${row.detail}</span></article>`).join("") };

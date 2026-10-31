@@ -132,12 +132,48 @@ test("real capital loadouts use reusable weapons in stable hardpoint order and A
 
 test("squadron models and loadouts have agreed stats and stack-scalable base weapons", () => {
   const wasps = buildSquadronProfile("wasps");
-  assert.deepEqual({ speed: wasps.baseSpeed, initiative: wasps.initiative, evasion: wasps.baseEvasion, stack: wasps.stack, unitHealth: wasps.unitHealth }, { speed: 6, initiative: 5, evasion: 10, stack: 3, unitHealth: 5 });
+  assert.deepEqual({ speed: wasps.baseSpeed, maneuver: wasps.maneuver, initiative: wasps.initiative, evasion: wasps.baseEvasion, stack: wasps.stack, unitHealth: wasps.unitHealth }, { speed: 6, maneuver: 5, initiative: 5, evasion: 10, stack: 3, unitHealth: 5 });
+  assert.ok(wasps.maneuver > buildCapitalProfile("swift").maneuver);
   assert.deepEqual(wasps.weapons.map(entry => [entry.catalogWeaponId, entry.shots * wasps.stack]), [["twinNeedleAutocannon", 6]]);
   const mantis = buildSquadronProfile("mantis");
-  assert.deepEqual({ speed: mantis.baseSpeed, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 4, initiative: 3, evasion: 4, stack: 3, unitHealth: 5 });
+  assert.deepEqual({ speed: mantis.baseSpeed, maneuver: mantis.maneuver, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 4, maneuver: 4, initiative: 3, evasion: 4, stack: 3, unitHealth: 5 });
+  assert.ok(mantis.maneuver > buildCapitalProfile("raptor").maneuver);
   assert.deepEqual(mantis.weapons.map(entry => [entry.catalogWeaponId, entry.shots * mantis.stack]), [["needleAutocannon", 3], ["hammerTorpedo", 3]]);
   assert.deepEqual(mantis.weapons.map(entry => entry.targetKinds), [["capital", "squadron"], ["capital"]]);
+});
+
+test("all current squadron slots use forward firing geometry without changing compatibility", () => {
+  for (const loadoutId of ["wasps", "mantis"]) {
+    const profile = buildSquadronProfile(loadoutId);
+    for (const entry of profile.weapons) {
+      assert.equal(entry.hardpointType, "squadronWeapon");
+      assert.equal(entry.mount, "squadronWeapon");
+      assert.equal(entry.firingArc, "forward");
+    }
+  }
+});
+
+test("squadron firing geometry is validated separately from hardpoint compatibility", () => {
+  const missing = cloneConfig();
+  delete missing.squadronModels.wasp.hardpoints[0].firingArc;
+  assert.throws(() => validateConfig(missing), /firingArc.*expected/);
+
+  const unknown = cloneConfig();
+  unknown.squadronModels.mantis.hardpoints[0].firingArc = "squadronWeapon";
+  assert.throws(() => validateConfig(unknown), /unknown firing arc/);
+
+  const capital = cloneConfig();
+  capital.capitalHulls.swiftFrigate.hardpoints[0].firingArc = "forward";
+  assert.throws(() => validateConfig(capital), /only valid on squadronWeapon hardpoints/);
+});
+
+test("squadron maneuver is a validated nonnegative profile value", () => {
+  const missing = cloneConfig();
+  delete missing.squadronModels.wasp.maneuver;
+  assert.throws(() => validateConfig(missing), /maneuver.*finite number/);
+  const negative = cloneConfig();
+  negative.squadronModels.mantis.maneuver = -1;
+  assert.throws(() => validateConfig(negative), /maneuver.*nonnegative/);
 });
 
 test("roles are rejected in hardpoints and installations", () => {

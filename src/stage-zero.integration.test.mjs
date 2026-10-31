@@ -38,6 +38,7 @@ function unit(overrides = {}) {
     sideId: "azure",
     kind: "squadron",
     position: { q: 0, r: 0 },
+    heading: 0,
     currentSpeed: 5,
     maneuver: 0,
     initiative: 5,
@@ -87,10 +88,10 @@ function battle(units, contents = []) {
 
 function optionFor(state, destination, heading) {
   const mover = domain.activeUnit(state);
-  const route = domain.planRoutes(state, mover, "risky").get(destination);
+  const routes = domain.planRoutes(state, mover, "risky");
+  const route = heading === undefined ? routes.get(destination) : routes.get(`${destination}:${heading}`);
   assert.ok(route, `expected route to ${destination}`);
-  const headings = heading === undefined ? null : new Set([heading]);
-  return buildManeuverOptions(mover, route, headings, domain.signedTurn)[0];
+  return buildManeuverOptions(mover, route)[0];
 }
 
 function snapshot(state) {

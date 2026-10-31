@@ -23,23 +23,24 @@ function rotatePosition(position, turns) {
   return { q, r };
 }
 
-export function isPositionInFiringArc(origin, heading, target, mount, orientation) {
+export function isPositionInFiringArc(origin, heading, target, firingArc, orientation) {
   const relative = { q: target.q - origin.q, r: target.r - origin.r };
   if (relative.q === 0 && relative.r === 0) return false;
-  if (mount === "turret" || mount === "squadronWeapon") return true;
+  if (firingArc === "turret") return true;
   const local = rotatePosition(relative, (6 - heading) % 6);
-  if (mount === "line") return local.q > 0 && local.r === 0;
-  if (mount === "battery-left") return local.q >= 0 && local.r < 0 && local.q + local.r <= 0;
-  if (mount === "battery-right") return local.q <= 0 && local.r > 0 && local.q + local.r >= 0;
-  if (mount === "forward") {
-    const oriented = orientation === "aft" ? rotatePosition(local, 3) : local;
-    return ["fore", "aft"].includes(orientation) && oriented.q > 0 && oriented.q + oriented.r > 0;
+  if (firingArc === "line") return local.q > 0 && local.r === 0;
+  if (firingArc === "battery-left") return local.q >= 0 && local.r < 0 && local.q + local.r <= 0;
+  if (firingArc === "battery-right") return local.q <= 0 && local.r > 0 && local.q + local.r >= 0;
+  if (firingArc === "forward") {
+    const facing = orientation ?? "fore";
+    const oriented = facing === "aft" ? rotatePosition(local, 3) : local;
+    return ["fore", "aft"].includes(facing) && oriented.q > 0 && oriented.q + oriented.r > 0;
   }
   return false;
 }
 
 function inArc(attacker, target, weapon) {
-  return isPositionInFiringArc(attacker.position, attacker.heading || 0, target.position, weapon.mount, weapon.orientation);
+  return isPositionInFiringArc(attacker.position, attacker.heading || 0, target.position, weapon.firingArc ?? weapon.mount, weapon.orientation);
 }
 
 function assertSelection(selection) {
@@ -47,7 +48,7 @@ function assertSelection(selection) {
 }
 
 function effectiveWeapon(attacker, weapon) {
-  return weapon.mount === "squadronWeapon" ? { ...weapon, shots: weapon.shots * attacker.stack } : { ...weapon };
+  return attacker.kind === "squadron" ? { ...weapon, shots: weapon.shots * attacker.stack } : { ...weapon };
 }
 
 function selectedWeapons(attacker, selection) {

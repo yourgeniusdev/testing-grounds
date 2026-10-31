@@ -7,6 +7,7 @@ export const SQUADRON_MODELS = deepFreeze({
     kind: "squadron",
     craftType: "fighter",
     baseSpeed: 6,
+    maneuver: 5,
     initiative: 5,
     stack: 3,
     unitHealth: 5,
@@ -15,7 +16,7 @@ export const SQUADRON_MODELS = deepFreeze({
     baseEvasion: 10,
     visualId: "squadron",
     hardpoints: [
-      { id: "autocannon", mount: "squadronWeapon", type: "squadronWeapon" }
+      { id: "autocannon", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" }
     ]
   },
   mantis: {
@@ -24,6 +25,7 @@ export const SQUADRON_MODELS = deepFreeze({
     kind: "squadron",
     craftType: "bomber",
     baseSpeed: 4,
+    maneuver: 4,
     initiative: 3,
     stack: 3,
     unitHealth: 5,
@@ -32,8 +34,8 @@ export const SQUADRON_MODELS = deepFreeze({
     baseEvasion: 4,
     visualId: "squadron",
     hardpoints: [
-      { id: "autocannon", mount: "squadronWeapon", type: "squadronWeapon" },
-      { id: "torpedo", mount: "squadronWeapon", type: "squadronWeapon" }
+      { id: "autocannon", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" },
+      { id: "torpedo", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" }
     ]
   }
 });

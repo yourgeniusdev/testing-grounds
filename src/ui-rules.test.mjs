@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildManeuverOptions, maneuverResourcePreview, routeConsequenceRows } from "./ui-rules.js";
+import { buildManeuverOptions, maneuverPreviewHeading, maneuverResourcePreview, routeConsequenceRows } from "./ui-rules.js";
 
 const signedTurn = (from, to) => {
   let delta = (to - from + 6) % 6;
@@ -35,22 +35,31 @@ test("buildManeuverOptions creates one stable option per available final heading
     { hex: { q: 2, r: -1 }, heading: 1 }
   ]);
   assert.ok(options.every(option => option.route === plannedRoute));
-  assert.deepEqual(options.map(option => option.resources.maneuver.spent), [2, 1, 2]);
+  assert.deepEqual(options.map(option => option.resources.maneuver.spent), [1, 1, 1]);
 });
 
-test("buildManeuverOptions falls back to a heading-free squadron option", () => {
-  const plannedRoute = route({ heading: undefined, movementCost: 3, turnsSpent: 0, interception: "enemy-flight" });
-  const options = buildManeuverOptions({ currentSpeed: 5 }, plannedRoute);
+test("buildManeuverOptions always exposes the route heading", () => {
+  const plannedRoute = route({ heading: 3, movementCost: 3, turnsSpent: 0, interception: "enemy-flight" });
+  const options = buildManeuverOptions({ heading: 3, currentSpeed: 5, maneuver: 4 }, plannedRoute);
 
   assert.deepEqual(options, [{
-    optionId: "maneuver:2:-1",
-    finalState: { hex: { q: 2, r: -1 } },
+    optionId: "maneuver:2:-1:heading:3",
+    finalState: { hex: { q: 2, r: -1 }, heading: 3 },
     route: plannedRoute,
-    resources: { speed: { spent: 3, remaining: 2, capacity: 5 } },
+    resources: { speed: { spent: 3, remaining: 2, capacity: 5 }, maneuver: { spent: 0, remaining: 4, capacity: 4 } },
     consequences: [],
     interceptions: [],
     interception: "enemy-flight"
   }]);
+});
+
+test("heading-free squadron previews retain the runtime heading without mutation", () => {
+  const unit = { heading: 3 };
+  const option = { finalState: { hex: { q: 2, r: -1 } } };
+
+  assert.equal(maneuverPreviewHeading(unit, option), 3);
+  assert.deepEqual(unit, { heading: 3 });
+  assert.deepEqual(option, { finalState: { hex: { q: 2, r: -1 } } });
 });
 
 test("buildManeuverOptions preserves an explicitly empty set of legal options", () => {
@@ -59,11 +68,11 @@ test("buildManeuverOptions preserves an explicitly empty set of legal options", 
   assert.deepEqual(buildManeuverOptions({ currentSpeed: 5, maneuver: 2 }, plannedRoute, new Set(), signedTurn), []);
 });
 
-test("stationary headings spend the full signed turn distance plus evasive maneuver", () => {
-  const unit = { heading: 0, currentSpeed: 3, maneuver: 4, evasiveManeuver: true };
-  const plannedRoute = route({ position: { q: -3, r: 4 }, heading: 0, movementCost: 0, turnsSpent: 0, steps: [] });
+test("stationary route reports the turns already present in the common plan", () => {
+  const unit = { heading: 0, currentSpeed: 3, maneuver: 4, maneuverSpent: 1 };
+  const plannedRoute = route({ position: { q: -3, r: 4 }, heading: 3, movementCost: 0, turnsSpent: 3, steps: [] });
 
-  const [option] = buildManeuverOptions(unit, plannedRoute, new Set([3]), signedTurn);
+  const [option] = buildManeuverOptions(unit, plannedRoute);
 
   assert.deepEqual(option.finalState, { hex: { q: -3, r: 4 }, heading: 3 });
   assert.deepEqual(option.resources, {

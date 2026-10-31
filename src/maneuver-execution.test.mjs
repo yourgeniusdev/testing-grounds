@@ -11,6 +11,7 @@ function unit(overrides = {}) {
     sideId: "azure",
     kind: "squadron",
     position: { q: 0, r: 0 },
+    heading: 0,
     currentSpeed: 3,
     maneuver: 0,
     speedSpent: 0,
@@ -55,14 +56,10 @@ function battle(mover, { units = [], contents = [] } = {}) {
 }
 
 function optionAt(state, mover, destination, heading) {
-  const route = planRoutes(state, mover, "risky").get(destination);
+  const routes = planRoutes(state, mover, "risky");
+  const route = heading === undefined ? routes.get(destination) : routes.get(`${destination}:${heading}`);
   assert.ok(route, `expected route to ${destination}`);
-  const headings = heading === undefined ? null : new Set([heading]);
-  return buildManeuverOptions(mover, route, headings, (from, to) => {
-    let delta = (to - from + 6) % 6;
-    if (delta > 3) delta -= 6;
-    return delta;
-  })[0];
+  return buildManeuverOptions(mover, route)[0];
 }
 
 function recursivelyFrozen(value, seen = new Set()) {
@@ -106,11 +103,11 @@ test("confirmed maneuver plan is recursively immutable and detached from mutable
     finalState: plan.finalState
   }, {
     actorId: "mover",
-    start: { position: { q: 0, r: 0 } },
-    elements: [{ type: "move", from: { q: 0, r: 0 }, to: { q: 1, r: 0 }, travelHeading: 0, cost: 1, consequences: [{ sourceId: "mines", sourceName: "Minefield", probability: 0.5, min: 2, max: 4, effect: "integrity damage" }], final: true }],
+    start: { position: { q: 0, r: 0 }, heading: 0 },
+    elements: [{ type: "move", from: { q: 0, r: 0 }, to: { q: 1, r: 0 }, heading: 0, cost: 1, consequences: [{ sourceId: "mines", sourceName: "Minefield", probability: 0.5, min: 2, max: 4, effect: "integrity damage" }], final: true }],
     costs: { speed: 1, maneuver: 0 },
     consequences: [{ sourceId: "mines", sourceName: "Minefield", probability: 0.5, min: 2, max: 4, effect: "integrity damage" }],
-    finalState: { position: { q: 1, r: 0 } }
+    finalState: { position: { q: 1, r: 0 }, heading: 0 }
   });
   const planReferences = objectReferences(plan);
   for (const reference of objectReferences(state)) assert.equal(planReferences.has(reference), false);
@@ -125,8 +122,8 @@ test("confirmation revalidates executor, start, adjacency, traversal, and resour
     ["executor", ({ state }) => { state.activeUnitId = "other"; }],
     ["start position", ({ mover }) => { mover.position = { q: 0, r: 1 }; }],
     ["start heading", ({ mover }) => { mover.heading = 1; }],
-    ["adjacency", ({ option }) => { option.route.steps[0].to = { q: 3, r: 0 }; }],
-    ["traversal", ({ state }) => { state.scenario.contents.push({ id: "station", kind: "object", type: "station", position: { q: 1, r: 0 } }); }],
+    ["adjacency", ({ option }) => { option.route.actions.find(action => action.type === "move").to = { q: 3, r: 0 }; }],
+    ["traversal", ({ state }) => { state.scenario.contents.push({ id: "station", kind: "object", type: "station", position: { q: 1, r: -1 } }); }],
     ["speed resources", ({ mover }) => { mover.speedRemaining = 0; }],
     ["maneuver resources", ({ mover }) => { mover.maneuverRemaining = 0; }]
   ];
@@ -134,7 +131,7 @@ test("confirmation revalidates executor, start, adjacency, traversal, and resour
   for (const [name, mutate] of cases) await t.test(name, () => {
     const mover = unit({ kind: "capital", heading: 0, maneuver: 2, maneuverRemaining: 2 });
     const state = battle(mover, { units: [unit({ id: "other", position: { q: -3, r: 0 } })] });
-    const option = optionAt(state, mover, "1,-1", 5);
+    const option = optionAt(state, mover, "1,-1", 1);
     mutate({ state, mover, option });
     assert.equal(planManeuver(state, option), null);
   });
@@ -143,7 +140,8 @@ test("confirmation revalidates executor, start, adjacency, traversal, and resour
 test("a completely empty maneuver is rejected", () => {
   const mover = unit({ kind: "capital", heading: 0, maneuver: 2, maneuverRemaining: 2 });
   const state = battle(mover);
-  const option = optionAt(state, mover, "0,0", 0);
+  const route = { position: { ...mover.position }, heading: mover.heading, movementCost: 0, turnsSpent: 0, steps: [], actions: [], consequences: [], previewConsequences: [], path: [{ ...mover.position }] };
+  const [option] = buildManeuverOptions(mover, route);
 
   assert.equal(planManeuver(state, option), null);
 });
@@ -151,7 +149,7 @@ test("a completely empty maneuver is rejected", () => {
 test("preview changes and cancellation remain pure", () => {
   const mover = unit({ kind: "capital", heading: 0, maneuver: 2, maneuverRemaining: 2 });
   const state = battle(mover);
-  const route = planRoutes(state, mover, "risky").get("1,-1");
+  const route = planRoutes(state, mover, "risky").get("1,-1:1");
   const before = structuredClone({ ...state, rng: null });
 
   const options = buildManeuverOptions(mover, route, new Set([0, 1]), (from, to) => {
@@ -170,7 +168,7 @@ test("preview changes and cancellation remain pure", () => {
 test("forged UI cost, endpoint, and heading fields are rejected", () => {
   const mover = unit({ kind: "capital", heading: 0, maneuver: 2, maneuverRemaining: 2 });
   const state = battle(mover);
-  const original = optionAt(state, mover, "1,-1", 5);
+  const original = optionAt(state, mover, "1,-1", 1);
   const forgeries = [
     option => { option.resources.speed.spent = 0; },
     option => { option.route.movementCost = 0; },
@@ -186,6 +184,25 @@ test("forged UI cost, endpoint, and heading fields are rejected", () => {
   assert.deepEqual(mover.position, { q: 0, r: 0 });
   assert.equal(mover.speedSpent, 0);
   assert.equal(mover.maneuverSpent, 0);
+});
+
+test("a destination move remains final when the maneuver ends with a turn", () => {
+  const mover = unit({ kind: "squadron", heading: 0, maneuver: 1, maneuverRemaining: 1, currentSpeed: 1, speedRemaining: 1 });
+  const state = battle(mover);
+  const option = optionAt(state, mover, "1,0", 1);
+  const plan = planManeuver(state, option);
+
+  assert.deepEqual(plan.elements.map(element => ({ type: element.type, final: element.final })), [
+    { type: "move", final: true },
+    { type: "turn", final: undefined }
+  ]);
+  state.units.push(unit({ id: "blocker", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 }));
+
+  const result = executeManeuverElement(state, plan, 0);
+
+  assert.equal(result.status, "stopped");
+  assert.equal(result.reason, "blocked");
+  assert.deepEqual(mover.position, { q: 0, r: 0 });
 });
 
 test("executor charges each move and turn, including the final turn, before applying its transition", () => {
@@ -529,11 +546,11 @@ test("passing through a capital alone creates no interception and route continue
   assert.equal(executeManeuverElement(state, plan, 1).status, "completed");
 });
 
-test("remaining stationary next to an enemy does not create interception", () => {
-  const mover = unit();
+test("turn-only routes do not synthesize interception previews", () => {
+  const mover = unit({ maneuver: 1, maneuverRemaining: 1 });
   const enemy = unit({ id: "enemy", sideId: "crimson", position: { q: 1, r: 0 } });
   const state = battle(mover, { units: [enemy] });
-  const stationary = planRoutes(state, mover, "risky").get("0,0");
+  const stationary = planRoutes(state, mover, "risky").get("0,0:1");
 
   assert.deepEqual(stationary.interceptions, []);
   assert.equal(stationary.interception, null);

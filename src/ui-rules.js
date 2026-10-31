@@ -2,6 +2,10 @@ export function headingAngle(heading) {
   return Math.PI / 2 - heading * Math.PI / 3;
 }
 
+export function maneuverPreviewHeading(unit, option) {
+  return option?.finalState?.heading ?? unit?.heading;
+}
+
 export function shouldAutoEndActivation({ attackImplemented }) {
   return !attackImplemented;
 }
@@ -20,16 +24,14 @@ function turnDistance(from, to, signedTurn) {
 }
 
 export function buildManeuverOptions(unit, route, headings, signedTurn) {
-  const availableHeadings = headings === null || headings === undefined ? [undefined] : [...headings];
+  const availableHeadings = headings === null || headings === undefined ? [route.heading] : [...headings];
   return availableHeadings.map(heading => {
-    const finalState = { hex: { ...route.position } };
-    if (heading !== undefined) finalState.heading = heading;
-    const headingTurns = turnDistance(route.steps?.length ? route.heading : unit.heading, heading, signedTurn);
-    const maneuverSpent = (route.turnsSpent || 0) + headingTurns + (unit.evasiveManeuver ? 1 : 0);
-    const resources = { speed: resourceState(route.movementCost || 0, unit.currentSpeed || 0) };
+    const finalState = { hex: { ...route.position }, heading };
+    const maneuverSpent = (unit.maneuverSpent || 0) + (route.turnsSpent || 0);
+    const resources = { speed: resourceState((unit.speedSpent || 0) + (route.movementCost || 0), unit.currentSpeed || 0) };
     if (Number.isFinite(unit.maneuver)) resources.maneuver = resourceState(maneuverSpent, unit.maneuver);
     return {
-      optionId: `maneuver:${route.position.q}:${route.position.r}${heading === undefined ? "" : `:heading:${heading}`}`,
+      optionId: `maneuver:${route.position.q}:${route.position.r}:heading:${heading}`,
       finalState,
       route,
       resources,

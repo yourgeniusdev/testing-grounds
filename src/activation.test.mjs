@@ -1,20 +1,52 @@
 import assert from "node:assert/strict";
 import {
   activeUnit,
-  applyStationaryRotation,
   beginActivation,
   createBattleState,
+  createScenario,
+  deployUnit,
   destroyUnit,
   endActivation,
   executeManeuverElement,
   planManeuver,
   planRoutes,
-  skipMovement,
-  signedTurn,
   useEvasiveManeuver,
   waitActiveUnit
 } from "./domain.js";
 import { buildManeuverOptions } from "./ui-rules.js";
+
+{
+  const scenario = createScenario();
+  for (const unit of scenario.units) {
+    assert.equal(unit.heading, unit.sideId === "azure" ? 0 : 3);
+    assert.ok(Number.isInteger(unit.heading) && unit.heading >= 0 && unit.heading < 6);
+  }
+}
+
+{
+  const state = createBattleState();
+  const atlas = state.units.find(unit => unit.id === "atlas");
+  const wasps = state.units.find(unit => unit.id === "wasps");
+  const bastion = state.units.find(unit => unit.id === "bastion");
+  const mantis = state.units.find(unit => unit.id === "mantis");
+  assert.deepEqual(
+    { maneuver: wasps.maneuver, maneuverSpent: wasps.maneuverSpent, maneuverRemaining: wasps.maneuverRemaining, heading: wasps.heading },
+    { maneuver: 5, maneuverSpent: 0, maneuverRemaining: 5, heading: 0 }
+  );
+  assert.deepEqual(
+    { maneuver: mantis.maneuver, maneuverSpent: mantis.maneuverSpent, maneuverRemaining: mantis.maneuverRemaining, heading: mantis.heading },
+    { maneuver: 4, maneuverSpent: 0, maneuverRemaining: 4, heading: 3 }
+  );
+  assert.equal(deployUnit(state, atlas.id, { ...atlas.position }, 4), true);
+  assert.equal(atlas.heading, 0);
+  assert.equal(deployUnit(state, wasps.id, { ...wasps.position }, 4), true);
+  assert.equal(wasps.heading, 0);
+  state.lifecycle = "DeploymentRight";
+  assert.equal(deployUnit(state, bastion.id, { ...bastion.position }, 1), true);
+  assert.equal(bastion.heading, 3);
+  assert.equal(deployUnit(state, mantis.id, { ...mantis.position }, 1), true);
+  assert.equal(mantis.heading, 3);
+}
 
 function activationState() {
   const state = createBattleState();
@@ -88,8 +120,8 @@ function activationState() {
   assert.equal(atlas.canWait, true);
   assert.equal(atlas.speedSpent, 0);
   assert.equal(atlas.maneuverSpent, 0);
-  const route = planRoutes(state, atlas, "safe").get(`${atlas.position.q + 2},${atlas.position.r}`);
-  const option = buildManeuverOptions(atlas, route, new Set([(atlas.heading + 1) % 6]), signedTurn)[0];
+  const route = planRoutes(state, atlas, "safe").get(`${atlas.position.q + 2},${atlas.position.r}:${(atlas.heading + 1) % 6}`);
+  const option = buildManeuverOptions(atlas, route)[0];
   const plan = planManeuver(state, option);
   for (let index = 0; index < plan.elements.length; index++) executeManeuverElement(state, plan, index);
   assert.equal(atlas.canWait, false);
@@ -102,32 +134,34 @@ function activationState() {
 {
   const { state, atlas } = activationState();
   beginActivation(state);
-  assert.equal(applyStationaryRotation(state, atlas.heading), true);
-  assert.equal(atlas.canWait, false);
-  assert.equal(atlas.maneuverSpent, 0);
-  assert.equal(atlas.maneuverRemaining, atlas.maneuver);
+  atlas.currentSpeed = 0;
+  atlas.speedRemaining = 0;
+  const routes = planRoutes(state, atlas, "risky");
+  assert.equal(routes.has(`${atlas.position.q},${atlas.position.r}:${atlas.heading}`), false);
+  const targetHeading = (atlas.heading + 2) % 6;
+  const route = routes.get(`${atlas.position.q},${atlas.position.r}:${targetHeading}`);
+  const [option] = buildManeuverOptions(atlas, route);
+  const before = structuredClone({ heading: atlas.heading, maneuverSpent: atlas.maneuverSpent, stage: state.stage });
+  const plan = planManeuver(state, option);
+  assert.deepEqual({ heading: atlas.heading, maneuverSpent: atlas.maneuverSpent, stage: state.stage }, before);
+  assert.deepEqual(plan.elements.map(element => element.type), ["turn", "turn"]);
+  assert.ok(plan.elements.every(Object.isFrozen));
+  for (let index = 0; index < plan.elements.length; index++) executeManeuverElement(state, plan, index);
+  assert.equal(atlas.heading, targetHeading);
+  assert.equal(atlas.speedSpent, 0);
+  assert.equal(atlas.maneuverSpent, 2);
+  assert.equal(state.stage, "attack");
 }
 
 {
   const { state, atlas } = activationState();
   beginActivation(state);
-  assert.equal(applyStationaryRotation(state, (atlas.heading + 1) % 6), true);
-  assert.equal(atlas.canWait, false);
-  assert.equal(atlas.speedSpent, 0);
-  assert.equal(atlas.speedRemaining, atlas.currentSpeed);
-  assert.equal(atlas.maneuverSpent, 1);
-  assert.equal(atlas.maneuverRemaining, atlas.maneuver - 1);
-}
-
-{
-  const { state, atlas } = activationState();
-  beginActivation(state);
-  skipMovement(state);
-  assert.equal(atlas.canWait, false);
-  assert.equal(atlas.speedSpent, 0);
-  assert.equal(atlas.speedRemaining, atlas.currentSpeed);
-  assert.equal(atlas.maneuverSpent, 0);
-  assert.equal(atlas.maneuverRemaining, atlas.maneuver);
+  atlas.currentSpeed = 0;
+  atlas.speedRemaining = 0;
+  const route = { position: { ...atlas.position }, heading: atlas.heading, movementCost: 0, turnsSpent: 0, steps: [], actions: [], consequences: [], previewConsequences: [], path: [{ ...atlas.position, heading: atlas.heading }] };
+  const [emptyOption] = buildManeuverOptions(atlas, route);
+  assert.equal(planManeuver(state, emptyOption), null);
+  assert.equal(state.stage, "system");
 }
 
 {

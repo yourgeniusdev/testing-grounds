@@ -5,6 +5,10 @@ export const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 export const ARROWS = ["→", "↗", "↖", "←", "↙", "↘"];
 export const EVASION_BY_STEPS = [0, 5, 9, 12, 14, 15];
 
+function deploymentHeading(sideId) {
+  return sideId === "azure" ? 0 : sideId === "crimson" ? 3 : null;
+}
+
 export function key(q, r) {
   return `${q},${r}`;
 }
@@ -38,18 +42,18 @@ export function movementEvasion(stepCount, evasiveManeuver = false) {
 
 export function createScenario() {
   const unitInstances = [
-    { id: "atlas", loadoutId: "atlas", name: "Крейсер «Атлас»", sideId: "azure", color: "#66e4ff", col: -5, row: -2, heading: 0, initialEnergy: 4 },
-    { id: "swift", loadoutId: "swift", name: "Фрегат «Стриж»", sideId: "azure", color: "#66e4ff", col: -5, row: 2, heading: 0, initialEnergy: 4 },
+    { id: "atlas", loadoutId: "atlas", name: "Крейсер «Атлас»", sideId: "azure", color: "#66e4ff", col: -5, row: -2, initialEnergy: 4 },
+    { id: "swift", loadoutId: "swift", name: "Фрегат «Стриж»", sideId: "azure", color: "#66e4ff", col: -5, row: 2, initialEnergy: 4 },
     { id: "wasps", loadoutId: "wasps", name: "Эскадрилья «Осы»", callsign: "Осы", sideId: "azure", color: "#66e4ff", col: -5, row: 0 },
-    { id: "bastion", loadoutId: "bastion", name: "Линкор «Бастион»", sideId: "crimson", color: "#ff667d", col: 5, row: -2, heading: 3, initialEnergy: 6 },
-    { id: "raptor", loadoutId: "raptor", name: "Эсминец «Раптор»", sideId: "crimson", color: "#ff667d", col: 5, row: 2, heading: 3, initialEnergy: 4 },
+    { id: "bastion", loadoutId: "bastion", name: "Линкор «Бастион»", sideId: "crimson", color: "#ff667d", col: 5, row: -2, initialEnergy: 6 },
+    { id: "raptor", loadoutId: "raptor", name: "Эсминец «Раптор»", sideId: "crimson", color: "#ff667d", col: 5, row: 2, initialEnergy: 4 },
     { id: "mantis", loadoutId: "mantis", name: "Эскадрилья «Мантисы»", callsign: "Мантисы", sideId: "crimson", color: "#ff7d9f", col: 5, row: 0 }
   ];
   const units = unitInstances.map(instance => {
     const { col, row, initialEnergy, ...data } = instance;
     const profile = initialEnergy === undefined ? buildSquadronProfile(instance.loadoutId) : buildCapitalProfile(instance.loadoutId);
     const reactor = profile.reactor ? { ...profile.reactor, currentEnergy: initialEnergy } : undefined;
-    return placed(col, row, { ...profile, ...data, ...(reactor ? { reactor } : {}) });
+    return placed(col, row, { ...profile, ...data, heading: deploymentHeading(instance.sideId), ...(reactor ? { reactor } : {}) });
   });
   const contents = [
     placed(-2, -1, { id: "asteroids-a", kind: "terrain", type: "asteroidField", label: "Астероидное поле", hazard: { probability: 0.35, min: 4, max: 10, effect: "урон целостности" } }),
@@ -117,14 +121,14 @@ export function deploymentZone(state, sideId) {
   return cells;
 }
 
-export function deployUnit(state, unitId, position, heading = null) {
+export function deployUnit(state, unitId, position, _heading = null) {
   const sideId = deploymentSide(state);
   const unit = unitById(state, unitId);
   if (!sideId || !unit || unit.sideId !== sideId || state.deployment[sideId === "azure" ? "left" : "right"]) return false;
   if (!deploymentZone(state, sideId).some(cell => key(cell.q, cell.r) === key(position.q, position.r))) return false;
   const occupant = unitAt(state, position, unit.id);
   if (occupant) return false;
-  if (heading !== null && unit.kind === "capital") unit.heading = heading;
+  unit.heading = deploymentHeading(sideId);
   unit.position = { ...position };
   recordEvent(state, "deployment-place", { actorId: unit.id, subjectIds: [unit.id], after: { position: unit.position, heading: unit.heading ?? null } });
   return true;
@@ -361,69 +365,50 @@ export function planManeuver(state, option) {
   const unit = activeUnit(state);
   const route = option?.route;
   if (!unit || state.lifecycle === "Finished" || state.stage === "attack" || !route || !option.finalState?.hex) return null;
-  if (!samePosition(route.path?.[0], unit.position) || !samePosition(option.finalState.hex, route.position)) return null;
-  if (unit.kind === "capital" && route.path[0].heading !== unit.heading) return null;
-  const start = { position: { ...unit.position } };
-  if (unit.kind === "capital") start.heading = unit.heading;
+  if (!samePosition(route.path?.[0], unit.position) || !samePosition(option.finalState.hex, route.position) || option.finalState.heading !== route.heading) return null;
+  const start = { position: { ...unit.position }, heading: unit.heading };
   const elements = [];
   const consequences = [];
   let position = { ...unit.position };
   let heading = unit.heading;
   let speedCost = 0;
   let maneuverCost = 0;
-  for (let index = 0; index < route.steps.length; index++) {
-    const step = route.steps[index];
-    if (!samePosition(step.from, position) || hexDistance(position, step.to) !== 1) return null;
-    if (unit.kind === "capital") {
-      if (step.headingBeforeMove !== heading || step.turn !== signedTurn(heading, step.heading) || Math.abs(step.turn) > 1) return null;
-      const [dq, dr] = DIRECTIONS[step.heading];
-      if (step.to.q !== position.q + dq || step.to.r !== position.r + dr) return null;
-      const turns = turnElements(position, heading, step.heading, "before-move");
-      elements.push(...turns);
-      maneuverCost += turns.length;
-      heading = step.heading;
-    } else {
-      const direction = DIRECTIONS.findIndex(([dq, dr]) => step.to.q === position.q + dq && step.to.r === position.r + dr);
-      if (direction < 0 || step.heading !== direction) return null;
+  for (const action of route.actions || []) {
+    if (action.type === "turn") {
+      if (!samePosition(action.position, position) || action.headingBefore !== heading || Math.abs(signedTurn(heading, action.heading)) !== 1 || action.cost !== 1) return null;
+      elements.push({ ...action, position: { ...action.position } });
+      heading = action.heading;
+      maneuverCost++;
+      continue;
     }
-    const rule = traversal(state, unit, step.to);
-    const finalMove = index === route.steps.length - 1;
-    if (!rule.canEnter || (finalMove && !rule.canStop)) return null;
+    if (action.type !== "move" || !samePosition(action.from, position) || action.heading !== heading || hexDistance(position, action.to) !== 1) return null;
+    const [dq, dr] = DIRECTIONS[heading];
+    if (action.to.q !== position.q + dq || action.to.r !== position.r + dr) return null;
+    const rule = traversal(state, unit, action.to);
+    if (!rule.canEnter) return null;
     speedCost += rule.cost;
     const knownConsequences = rule.consequences.map(consequence => ({ ...consequence }));
     consequences.push(...knownConsequences);
-    elements.push({ type: "move", from: { ...position }, to: { ...step.to }, ...(unit.kind === "capital" ? { heading } : { travelHeading: step.heading }), cost: rule.cost, consequences: knownConsequences, final: finalMove });
-    position = { ...step.to };
+    elements.push({ type: "move", from: { ...position }, to: { ...action.to }, heading, cost: rule.cost, consequences: knownConsequences, final: false });
+    position = { ...action.to };
   }
-  if (!samePosition(position, route.position) || route.movementCost !== speedCost || (route.turnsSpent || 0) !== maneuverCost || !sameValue(route.consequences || [], consequences)) return null;
-  if (unit.kind === "capital") {
-    if (route.steps.length && route.heading !== heading) return null;
-    const finalHeading = option.finalState.heading;
-    if (!Number.isInteger(finalHeading) || finalHeading < 0 || finalHeading > 5) return null;
-    const finalTurnDistance = Math.abs(signedTurn(heading, finalHeading));
-    if (route.steps.length && finalTurnDistance > 1) return null;
-    const finalTurns = turnElements(position, heading, finalHeading, route.steps.length ? "final" : "stationary");
-    elements.push(...finalTurns);
-    maneuverCost += finalTurns.length;
-    heading = finalHeading;
-  } else if (option.finalState.heading !== undefined || route.heading !== undefined) return null;
-  if (!elements.length) return null;
+  if (!elements.length || !samePosition(position, route.position) || heading !== route.heading || route.movementCost !== speedCost || route.turnsSpent !== maneuverCost || !sameValue(route.consequences || [], consequences)) return null;
+  const finalMove = elements.findLast(element => element.type === "move");
+  if (finalMove) finalMove.final = true;
+  if (!traversal(state, unit, position).canStop) return null;
   const plannedSpeedSpent = unit.speedSpent + speedCost;
   const plannedManeuverSpent = unit.maneuverSpent + maneuverCost;
-  if (expectedResourceSpent(option, "speed") !== plannedSpeedSpent || expectedResourceSpent(option, "maneuver") !== plannedManeuverSpent && Number.isFinite(unit.maneuver)) return null;
+  if (expectedResourceSpent(option, "speed") !== plannedSpeedSpent || expectedResourceSpent(option, "maneuver") !== plannedManeuverSpent) return null;
   if (speedCost > unit.speedRemaining || maneuverCost > unit.maneuverRemaining) return null;
-  const finalState = { position: { ...position } };
-  if (unit.kind === "capital") finalState.heading = heading;
-  const plan = {
+  return deepFreeze({
     id: `${state.scenario.id}:${state.roundNumber || 0}:${unit.id}:maneuver:${state.sequence || 0}:${option.optionId || "option"}`,
     actorId: unit.id,
     start,
     elements,
     costs: { speed: speedCost, maneuver: maneuverCost },
     consequences,
-    finalState
-  };
-  return deepFreeze(plan);
+    finalState: { position: { ...position }, heading }
+  });
 }
 
 function finishManeuver(state, unit, progress) {
@@ -447,7 +432,7 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
   if (!plan || !unit || unit.id !== plan.actorId || state.lifecycle === "Finished") return { status: "invalid" };
   let progress = state.maneuverApplication;
   if (!progress || progress.planId !== plan.id) {
-    if (elementIndex !== 0 || !samePosition(unit.position, plan.start.position) || unit.kind === "capital" && unit.heading !== plan.start.heading) return { status: "invalid" };
+    if (elementIndex !== 0 || !samePosition(unit.position, plan.start.position) || unit.heading !== plan.start.heading) return { status: "invalid" };
     progress = { planId: plan.id, nextElement: 0, executedMoves: 0, executedTurns: 0, finished: false };
     state.maneuverApplication = progress;
   }
@@ -457,14 +442,14 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
     finishManeuver(state, unit, progress);
     return { status: "completed", executedElements: progress.nextElement, transition: null, hazardOutcomes: [] };
   }
-  const before = { position: { ...unit.position }, ...(unit.kind === "capital" ? { heading: unit.heading } : {}) };
+  const before = { position: { ...unit.position }, heading: unit.heading };
   let actualSpeedCost = 0;
   let actualConsequences = [];
   let hazardOutcomes = [];
   let effectOutcomes = [];
   let interceptionIds = [];
   if (element.type === "turn") {
-    if (unit.kind !== "capital" || !samePosition(unit.position, element.position) || unit.heading !== element.headingBefore) return stopManeuver(state, unit, progress, "state-changed");
+    if (!samePosition(unit.position, element.position) || unit.heading !== element.headingBefore) return stopManeuver(state, unit, progress, "state-changed");
     if (unit.maneuverRemaining < element.cost) return stopManeuver(state, unit, progress, "insufficient-maneuver");
     unit.maneuverSpent += element.cost;
     unit.maneuverRemaining -= element.cost;
@@ -472,7 +457,7 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
     progress.executedTurns++;
   } else if (element.type === "move") {
     if (!samePosition(unit.position, element.from) || hexDistance(unit.position, element.to) !== 1) return stopManeuver(state, unit, progress, "state-changed");
-    if (unit.kind === "capital" && unit.heading !== element.heading) return stopManeuver(state, unit, progress, "heading-changed");
+    if (unit.heading !== element.heading) return stopManeuver(state, unit, progress, "heading-changed");
     const preliminaryRule = traversal(state, unit, element.to);
     if (!preliminaryRule.canEnter || element.final && !preliminaryRule.canStop) return stopManeuver(state, unit, progress, "blocked");
     if (unit.speedRemaining < preliminaryRule.cost) return stopManeuver(state, unit, progress, "insufficient-speed");
@@ -489,7 +474,7 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
     unit.position = { ...element.to };
     progress.executedMoves++;
     unit.movementEvasion = unit.evasionLocked ? 0 : movementEvasion(progress.executedMoves, unit.evasiveManeuver);
-    const afterEntry = { position: { ...unit.position }, ...(unit.kind === "capital" ? { heading: unit.heading } : {}) };
+    const afterEntry = { position: { ...unit.position }, heading: unit.heading };
     const moveEvent = recordEvent(state, "maneuver-move", { actorId: unit.id, subjectIds: [unit.id], planId: plan.id, elementIndex, causeEventId: exitEvent.eventId, before, after: afterEntry });
     effects.resolveEntry?.({ state, unit, plan, element, elementIndex, causeEventId: moveEvent.eventId });
     if (!state.units.includes(unit)) return { status: "destroyed", reason: "entry-destruction", executedElements: progress.nextElement, transition: null, hazardOutcomes: [] };
@@ -516,7 +501,7 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
   } else return stopManeuver(state, unit, progress, "unknown-element");
   unit.canWait = false;
   progress.nextElement++;
-  const after = { position: { ...unit.position }, ...(unit.kind === "capital" ? { heading: unit.heading } : {}) };
+  const after = { position: { ...unit.position }, heading: unit.heading };
   const transition = deepFreeze({ elementIndex, type: element.type, before, after, speedCost: actualSpeedCost, maneuverCost: element.type === "turn" ? element.cost : 0, consequences: actualConsequences });
   if (element.type === "turn") recordEvent(state, "maneuver-turn", { actorId: unit.id, subjectIds: [unit.id], planId: plan.id, elementIndex, before, after });
   if (interceptionIds.length) return { ...stopManeuver(state, unit, progress, "interception", transition, hazardOutcomes), effectOutcomes };
@@ -528,8 +513,11 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
   return { status: "executed", executedElements: progress.nextElement, transition, hazardOutcomes, effectOutcomes };
 }
 
+const routeCodes = new WeakMap();
+
 function routeCode(route) {
-  return route.steps.map(step => `${step.to.q}:${step.to.r}:${step.heading ?? 0}`).join("|");
+  if (!routeCodes.has(route)) routeCodes.set(route, route.actions.map(action => action.type === "turn" ? `t:${action.heading}` : `m:${action.to.q}:${action.to.r}:${action.heading}`).join("|"));
+  return routeCodes.get(route);
 }
 
 function expectedDamage(consequences) {
@@ -538,6 +526,36 @@ function expectedDamage(consequences) {
 
 function compareRoutes(a, b) {
   return a.movementCost - b.movementCost || a.turnsSpent - b.turnsSpent || expectedDamage(a.previewConsequences || a.consequences) - expectedDamage(b.previewConsequences || b.consequences) || routeCode(a).localeCompare(routeCode(b));
+}
+
+function enqueueRoute(queue, route) {
+  queue.push(route);
+  let index = queue.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    if (compareRoutes(queue[parent], route) <= 0) break;
+    queue[index] = queue[parent];
+    index = parent;
+  }
+  queue[index] = route;
+}
+
+function dequeueRoute(queue) {
+  const first = queue[0];
+  const last = queue.pop();
+  if (!queue.length) return first;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= queue.length) break;
+    const right = left + 1;
+    const child = right < queue.length && compareRoutes(queue[right], queue[left]) < 0 ? right : left;
+    if (compareRoutes(queue[child], last) >= 0) break;
+    queue[index] = queue[child];
+    index = child;
+  }
+  queue[index] = last;
+  return first;
 }
 
 function isSafe(route) {
@@ -558,103 +576,82 @@ function interceptionIds(preview) {
   return preview.interceptions.map(consequence => consequence.sourceId);
 }
 
-export function planRoutes(state, unit, policy) {
-  if (unit.kind === "squadron" && unit.engagedWith?.length) return new Map();
-  return unit.kind === "capital" ? planCapitalRoutes(state, unit, policy) : planSquadronRoutes(state, unit, policy);
+class ManeuverRouteMap extends Map {
+  matching(position) {
+    const positionKey = typeof position === "string" ? position : key(position.q, position.r);
+    return [...super.values()].filter(route => key(route.position.q, route.position.r) === positionKey).sort(compareRoutes);
+  }
+
+  get(routeKey) {
+    return super.get(routeKey) || (!routeKey.includes(":") ? this.matching(routeKey)[0] : undefined);
+  }
+
+  has(routeKey) {
+    return super.has(routeKey) || (!routeKey.includes(":") && this.matching(routeKey).some(route => route.stoppable));
+  }
 }
 
-function planCapitalRoutes(state, unit, policy) {
-  const maneuverBudget = unit.maneuver - (unit.evasiveManeuver ? 1 : 0);
-  const start = { position: unit.position, heading: unit.heading, movementCost: 0, turnsSpent: 0, steps: [], consequences: [], previewConsequences: [], path: [{ ...unit.position, heading: unit.heading }] };
+export function planRoutes(state, unit, policy) {
+  if (unit.kind === "squadron" && unit.engagedWith?.length) return new ManeuverRouteMap();
+  const maneuverBudget = unit.maneuverRemaining ?? unit.maneuver ?? 0;
+  const speedBudget = unit.speedRemaining ?? unit.currentSpeed ?? 0;
+  const startPosition = { ...unit.position };
+  const startHeading = Number.isInteger(unit.heading) ? unit.heading : 0;
+  const start = { position: startPosition, heading: startHeading, movementCost: 0, turnsSpent: 0, steps: [], actions: [], consequences: [], previewConsequences: [], path: [{ ...startPosition }], visited: new Set([key(startPosition.q, startPosition.r)]), interceptions: [], interception: null, stoppable: true };
   const queue = [start];
-  const results = new Map([[key(unit.position.q, unit.position.r), start]]);
-  const seen = new Map();
+  const seen = new Map([[`${key(startPosition.q, startPosition.r)}:${startHeading}:0:${key(startPosition.q, startPosition.r)}`, start]]);
+  const results = new ManeuverRouteMap();
   while (queue.length) {
-    const route = queue.shift();
-    if (route.movementCost >= unit.currentSpeed) continue;
-    for (const turn of [-1, 0, 1]) {
-      const turnsSpent = route.turnsSpent + Math.abs(turn);
-      if (turnsSpent > maneuverBudget) continue;
-      const heading = (route.heading + turn + 6) % 6;
-      const [dq, dr] = DIRECTIONS[heading];
-      const to = { q: route.position.q + dq, r: route.position.r + dr };
-      if (!inside(state, to)) continue;
-      const rule = traversal(state, unit, to);
-      if (!rule.canEnter) continue;
-      const movementCost = route.movementCost + rule.cost;
-      if (movementCost > unit.currentSpeed) continue;
-      const consequences = [...route.consequences, ...rule.consequences];
-      const preview = stepPreview(state, unit, to, rule.contents, route.steps.length + 1);
-      const previewConsequences = [...route.previewConsequences, ...preview.descriptors];
-      const next = { position: to, heading, movementCost, turnsSpent, steps: [...route.steps, { from: route.position, to, headingBeforeMove: route.heading, turn, heading }], consequences, previewConsequences, path: [...route.path, { ...to, heading }] };
-      if (policy === "safe" && !isSafe(next)) continue;
-      const stateKey = `${key(to.q, to.r)}:${heading}:${turnsSpent}:${next.movementCost}`;
-      if (seen.has(stateKey) && compareRoutes(seen.get(stateKey), next) <= 0) continue;
+    const route = dequeueRoute(queue);
+    if (route.turnsSpent < maneuverBudget && !route.interceptions.length && (route.actions.length === 0 || route.stoppable)) {
+      for (const direction of [-1, 1]) {
+        const heading = (route.heading + direction + 6) % 6;
+        const action = { type: "turn", position: { ...route.position }, headingBefore: route.heading, heading, cost: 1 };
+        const next = { ...route, heading, turnsSpent: route.turnsSpent + 1, actions: [...route.actions, action], interceptions: [...route.interceptions] };
+        const stateKey = `${key(next.position.q, next.position.r)}:${heading}:${next.movementCost}:${[...next.visited].sort().join("|")}`;
+        const previousSeen = seen.get(stateKey);
+        if (!previousSeen || compareRoutes(next, previousSeen) < 0) {
+          seen.set(stateKey, next);
+          enqueueRoute(queue, next);
+        }
+        const destinationKey = `${key(next.position.q, next.position.r)}:${heading}`;
+        const isInitialState = samePosition(next.position, startPosition) && heading === startHeading;
+        const previous = results.get(destinationKey);
+        if (!isInitialState && (!previous || compareRoutes(next, previous) < 0)) results.set(destinationKey, next);
+      }
+    }
+    if (route.movementCost >= speedBudget || route.interceptions.length) continue;
+    const [dq, dr] = DIRECTIONS[route.heading];
+    const to = { q: route.position.q + dq, r: route.position.r + dr };
+    const toKey = key(to.q, to.r);
+    if (!inside(state, to) || route.visited.has(toKey)) continue;
+    const rule = traversal(state, unit, to);
+    if (!rule.canEnter) continue;
+    const movementCost = route.movementCost + rule.cost;
+    if (movementCost > speedBudget) continue;
+    const consequences = [...route.consequences, ...rule.consequences];
+    const preview = stepPreview(state, unit, to, rule.contents, route.steps.length + 1);
+    const previewConsequences = [...route.previewConsequences, ...preview.descriptors];
+    const interceptions = interceptionIds(preview);
+    const step = { from: { ...route.position }, to, heading: route.heading };
+    const visited = new Set(route.visited).add(toKey);
+    const next = { position: to, heading: route.heading, movementCost, turnsSpent: route.turnsSpent, steps: [...route.steps, step], actions: [...route.actions, { type: "move", ...step }], consequences, previewConsequences, path: [...route.path, { ...to }], visited, interceptions, interception: interceptions[0] ?? null, stoppable: rule.canStop };
+    if (policy === "safe" && !isSafe(next)) continue;
+    const stateKey = `${toKey}:${next.heading}:${movementCost}:${[...visited].sort().join("|")}`;
+    const previousSeen = seen.get(stateKey);
+    if (!previousSeen || compareRoutes(next, previousSeen) < 0) {
       seen.set(stateKey, next);
       queue.push(next);
-      if (!rule.canStop) continue;
-      const destinationKey = key(to.q, to.r);
+    }
+    if (rule.canStop) {
+      const destinationKey = `${toKey}:${next.heading}`;
       const previous = results.get(destinationKey);
       if (!previous || compareRoutes(next, previous) < 0) results.set(destinationKey, next);
+    } else {
+      for (let heading = 0; heading < 6; heading++) results.delete(`${toKey}:${heading}`);
     }
   }
   return results;
-}
-
-function planSquadronRoutes(state, unit, policy) {
-  const start = { position: unit.position, movementCost: 0, turnsSpent: 0, steps: [], consequences: [], previewConsequences: [], path: [{ ...unit.position }], interceptions: [], interception: null };
-  const queue = [start];
-  const results = new Map([[key(unit.position.q, unit.position.r), start]]);
-  const seen = new Map();
-  while (queue.length) {
-    queue.sort(compareRoutes);
-    const route = queue.shift();
-    for (let heading = 0; heading < 6; heading++) {
-      const [dq, dr] = DIRECTIONS[heading];
-      const to = { q: route.position.q + dq, r: route.position.r + dr };
-      if (!inside(state, to) || route.path.some(position => position.q === to.q && position.r === to.r)) continue;
-      const rule = traversal(state, unit, to);
-      if (!rule.canEnter) continue;
-      const cost = route.movementCost + rule.cost;
-      if (cost > unit.currentSpeed) continue;
-      const consequences = [...route.consequences, ...(rule.consequences || [])];
-      const preview = stepPreview(state, unit, to, rule.contents, route.steps.length + 1);
-      const previewConsequences = [...route.previewConsequences, ...preview.descriptors];
-      const interceptions = interceptionIds(preview);
-      const next = { position: to, movementCost: cost, turnsSpent: 0, steps: [...route.steps, { from: route.position, to, heading }], consequences, previewConsequences, path: [...route.path, { ...to }], interceptions, interception: interceptions[0] ?? null };
-      if (policy === "safe" && !isSafe(next)) continue;
-      const destinationKey = key(to.q, to.r);
-      if (rule.canStop) {
-        const previous = results.get(destinationKey);
-        if (!previous || compareRoutes(next, previous) < 0) results.set(destinationKey, next);
-      }
-      if (interceptions.length) continue;
-      const stateKey = `${destinationKey}:${cost}`;
-      const previousSeen = seen.get(stateKey);
-      if (!previousSeen || compareRoutes(next, previousSeen) < 0) {
-        seen.set(stateKey, next);
-        queue.push(next);
-      }
-    }
-  }
-  return results;
-}
-
-export function availableFinalHeadings(unit, route) {
-  const options = new Set([route.heading]);
-  const maneuverBudget = unit.maneuver - (unit.evasiveManeuver ? 1 : 0);
-  if (route.turnsSpent < maneuverBudget) {
-    options.add((route.heading + 1) % 6);
-    options.add((route.heading + 5) % 6);
-  }
-  return options;
-}
-
-export function availableStationaryHeadings(unit) {
-  const options = new Set();
-  const maneuverBudget = unit.maneuver - (unit.evasiveManeuver ? 1 : 0);
-  for (let heading = 0; heading < 6; heading++) if (Math.abs(signedTurn(unit.heading, heading)) <= maneuverBudget) options.add(heading);
-  return options;
 }
 
 export function beginActivation(state) {
@@ -698,34 +695,6 @@ export function waitActiveUnit(state) {
   state.activeUnitId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated) || unit.id;
   beginActivation(state);
   return true;
-}
-
-export function applyStationaryRotation(state, heading) {
-  const unit = activeUnit(state);
-  if (unit.kind !== "capital" || !availableStationaryHeadings(unit).has(heading)) return false;
-  const turnsSpent = Math.abs(signedTurn(unit.heading, heading));
-  const rotated = heading !== unit.heading;
-  unit.heading = heading;
-  unit.canWait = false;
-  unit.speedSpent = 0;
-  unit.speedRemaining = unit.currentSpeed;
-  unit.maneuverSpent = turnsSpent + (unit.evasiveManeuver ? 1 : 0);
-  unit.maneuverRemaining = Math.max(0, unit.maneuver - unit.maneuverSpent);
-  unit.movementEvasion = 0;
-  unit.evasionLocked = rotated;
-  state.stage = "attack";
-  return true;
-}
-
-export function skipMovement(state) {
-  const unit = activeUnit(state);
-  unit.canWait = false;
-  unit.speedSpent = 0;
-  unit.speedRemaining = unit.currentSpeed;
-  unit.maneuverSpent = unit.kind === "capital" && unit.evasiveManeuver ? 1 : 0;
-  unit.maneuverRemaining = Math.max(0, (unit.maneuver ?? 0) - unit.maneuverSpent);
-  unit.movementEvasion = 0;
-  state.stage = "attack";
 }
 
 export function endActivation(state) {

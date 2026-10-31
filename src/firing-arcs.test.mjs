@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attackPreview, isPositionInFiringArc } from "./battle.js";
-import { createBattleState, hexDistance, key, unitById } from "./domain.js";
+import { attackArc, attackPreview, isPositionInFiringArc } from "./battle.js";
+import { DIRECTIONS, createBattleState, hexDistance, key, unitById } from "./domain.js";
 
 const origin = { q: 0, r: 0 };
 const positions = [];
@@ -55,10 +55,8 @@ test("spinal arc is constrained to exact longitudinal line", () => {
   assert.equal(isPositionInFiringArc(origin, 0, { q: 1, r: 1 }, "line"), false);
 });
 
-test("turret and squadron weapon cover every direction", () => {
-  for (const mount of ["turret", "squadronWeapon"]) {
-    for (const position of positions) assert.equal(isPositionInFiringArc(origin, 4, position, mount), true, `${mount} ${key(position.q, position.r)}`);
-  }
+test("turret geometry covers every direction", () => {
+  for (const position of positions) assert.equal(isPositionInFiringArc(origin, 4, position, "turret"), true, key(position.q, position.r));
 });
 
 test("real Atlas forward hardpoint carries orientation into runtime geometry", () => {
@@ -75,4 +73,85 @@ test("real Atlas forward hardpoint carries orientation into runtime geometry", (
   assert.equal(attackPreview(state, target.id, new Set([forward.id])).included.length, 1);
   target.position = { q: -2, r: 0 };
   assert.equal(attackPreview(state, target.id, new Set([forward.id])).included.length, 0);
+});
+
+for (const squadronId of ["wasps", "mantis"]) {
+  test(`${squadronId} slots accept forward and reject aft targets for all headings`, () => {
+    const state = createBattleState();
+    const attacker = unitById(state, squadronId);
+    const capitalTarget = state.units.find(unit => unit.sideId !== attacker.sideId && unit.kind === "capital");
+    const squadronTarget = state.units.find(unit => unit.sideId !== attacker.sideId && unit.kind === "squadron");
+    state.activeUnitId = attacker.id;
+    state.stage = "attack";
+    attacker.position = { q: 0, r: 0 };
+    for (const weapon of attacker.weapons) {
+      const target = weapon.targetKinds.length === 1 ? capitalTarget : squadronTarget;
+      for (let heading = 0; heading < DIRECTIONS.length; heading++) {
+        const [dq, dr] = DIRECTIONS[heading];
+        attacker.heading = heading;
+        target.position = { q: dq, r: dr };
+        assert.equal(attackPreview(state, target.id, new Set([weapon.id])).included.length, 1, `${weapon.id} heading ${heading} fore`);
+        target.position = { q: -dq, r: -dr };
+        const preview = attackPreview(state, target.id, new Set([weapon.id]));
+        assert.equal(preview.included.length, 0, `${weapon.id} heading ${heading} aft`);
+        assert.equal(preview.excluded[0].reason, "Вне сектора");
+      }
+    }
+  });
+}
+
+test("selected squadron slot UI arc uses the same forward geometry as target validation", () => {
+  const state = createBattleState();
+  const attacker = unitById(state, "mantis");
+  const target = unitById(state, "atlas");
+  const weapon = attacker.weapons.find(candidate => candidate.id === "mantis-torpedo");
+  state.activeUnitId = attacker.id;
+  state.stage = "attack";
+  attacker.position = { q: 0, r: 0 };
+  attacker.heading = 2;
+  target.position = { q: 0, r: -2 };
+  const selection = new Set([weapon.id]);
+  const arc = attackArc(state, selection);
+  assert.equal(arc.has(key(target.position.q, target.position.r)), true);
+  assert.equal(attackPreview(state, target.id, selection).included.length, 1);
+  target.position = { q: 0, r: 2 };
+  assert.equal(arc.has(key(target.position.q, target.position.r)), false);
+  assert.equal(attackPreview(state, target.id, selection).included.length, 0);
+});
+
+test("squadron slot shots scale with surviving stack independently of forward geometry", () => {
+  const state = createBattleState();
+  const attacker = unitById(state, "mantis");
+  const target = unitById(state, "atlas");
+  state.activeUnitId = attacker.id;
+  state.stage = "attack";
+  attacker.position = { q: 0, r: 0 };
+  attacker.heading = 0;
+  target.position = { q: 1, r: 0 };
+  for (const weapon of attacker.weapons) {
+    for (const stack of [3, 2, 1]) {
+      attacker.stack = stack;
+      const preview = attackPreview(state, target.id, new Set([weapon.id]));
+      assert.equal(preview.shots, weapon.shots * stack, `${weapon.id} stack ${stack}`);
+    }
+  }
+});
+
+test("Mantis torpedo retains its target restriction and combat characteristics", () => {
+  const state = createBattleState();
+  const attacker = unitById(state, "mantis");
+  const capitalTarget = unitById(state, "atlas");
+  const squadronTarget = unitById(state, "wasps");
+  const weapon = attacker.weapons.find(candidate => candidate.id === "mantis-torpedo");
+  state.activeUnitId = attacker.id;
+  state.stage = "attack";
+  attacker.position = { q: 0, r: 0 };
+  attacker.heading = 0;
+  capitalTarget.position = { q: 1, r: 0 };
+  squadronTarget.position = { q: 1, r: 0 };
+  assert.deepEqual({ targetKinds: weapon.targetKinds, effectiveRange: weapon.effectiveRange, maxRange: weapon.maxRange, cooldownRounds: weapon.cooldownRounds, damage: weapon.damage }, { targetKinds: ["capital"], effectiveRange: 2, maxRange: 3, cooldownRounds: 1, damage: 8 });
+  assert.equal(attackPreview(state, capitalTarget.id, new Set([weapon.id])).included.length, 1);
+  const squadronPreview = attackPreview(state, squadronTarget.id, new Set([weapon.id]));
+  assert.equal(squadronPreview.included.length, 0);
+  assert.equal(squadronPreview.excluded[0].reason, "Недопустимый тип цели");
 });

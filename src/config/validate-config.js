@@ -1,5 +1,6 @@
 const HARDPOINT_MOUNTS = ["turret", "battery-left", "battery-right", "line", "forward", "squadronWeapon"];
 const HARDPOINT_TYPES = ["turret", "battery", "spinal", "forward", "squadronWeapon"];
+const FIRING_ARCS = ["forward"];
 const MOUNTS_BY_TYPE = {
   turret: ["turret"],
   battery: ["battery-left", "battery-right"],
@@ -72,6 +73,10 @@ const validateHardpoints = (owner, path) => {
     if (!HARDPOINT_TYPES.includes(hardpoint.type)) fail(`${hardpointPath}.type`, `unknown hardpoint type "${hardpoint.type}"`);
     if (!MOUNTS_BY_TYPE[hardpoint.type].includes(hardpoint.mount)) fail(`${hardpointPath}.mount`, `mount "${hardpoint.mount}" is incompatible with ${hardpoint.type} hardpoint type`);
     if (hardpoint.type === "squadronWeapon" && owner.kind !== "squadron") fail(`${hardpointPath}.type`, "squadronWeapon hardpoints require a squadron owner");
+    if (hardpoint.type === "squadronWeapon") {
+      validateString(hardpoint.firingArc, `${hardpointPath}.firingArc`);
+      if (!FIRING_ARCS.includes(hardpoint.firingArc)) fail(`${hardpointPath}.firingArc`, `unknown firing arc "${hardpoint.firingArc}"`);
+    } else if ("firingArc" in hardpoint) fail(`${hardpointPath}.firingArc`, "firingArc is only valid on squadronWeapon hardpoints");
     if (hardpoint.type === "forward" && !["fore", "aft"].includes(hardpoint.orientation)) fail(`${hardpointPath}.orientation`, 'expected "fore" or "aft"');
     if (hardpoint.type !== "forward" && "orientation" in hardpoint) fail(`${hardpointPath}.orientation`, "orientation is only valid on forward hardpoints");
   }
@@ -229,7 +234,8 @@ export function validateConfig(config) {
     const path = `squadronModels.${modelId}`;
     validateString(model.displayName, `${path}.displayName`);
     validateString(model.craftType, `${path}.craftType`);
-    validateNumbers(model, path, ["baseSpeed", "initiative", "stack", "unitHealth", "shield", "armor", "baseEvasion"]);
+    validateNumbers(model, path, ["baseSpeed", "maneuver", "initiative", "stack", "unitHealth", "shield", "armor", "baseEvasion"]);
+    if (model.maneuver < 0) fail(`${path}.maneuver`, "expected a nonnegative number");
     validateHardpoints(model, path);
     requiredReference(visuals, model.visualId, `${path}.visualId`, "visual");
   }
