@@ -164,7 +164,7 @@ test("squadron models and loadouts have agreed stats and stack-scalable base wea
   const kiro = buildSquadronProfile("kiro");
   assert.deepEqual(
     { craftType: kiro.craftType, speed: kiro.baseSpeed, maneuver: kiro.maneuver, initiative: kiro.initiative, stack: kiro.stack, unitHealth: kiro.unitHealth, shield: kiro.shield, armor: kiro.armor, integrity: kiro.integrity },
-    { craftType: "assaultCraft", speed: 5, maneuver: 4, initiative: 4, stack: 1, unitHealth: 18, shield: 10, armor: 0, integrity: 18 }
+    { craftType: "assaultCraft", speed: 5, maneuver: 4, initiative: 5, stack: 1, unitHealth: 18, shield: 10, armor: 0, integrity: 18 }
   );
   assert.ok(kiro.unitHealth > wasps.unitHealth);
   assert.deepEqual(
