@@ -305,6 +305,7 @@ export function confirmWeaponAttackAction(state, attackerId, slotId, targetId, r
   const plan = Object.freeze({ ...planned, actionContext: context });
   spendActivationResource(attacker, "energy", weapon.energyCost || 0);
   beginWeaponCooldown(weapon);
+  attacker.canWait = false;
   state.activeAction = Object.freeze({ ...action, status: "resolving", actionId: declaration.eventId, planId: plan.id });
   state.lifecycle = "ActionResolution";
   state.stage = "action-resolution";

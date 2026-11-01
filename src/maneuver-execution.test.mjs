@@ -101,7 +101,8 @@ test("confirmed maneuver plan is recursively immutable and detached from mutable
 
   assert.ok(plan);
   assert.equal(recursivelyFrozen(plan), true);
-  assert.deepEqual({ mover, hazard }, before);
+  assert.deepEqual({ mover: { ...mover, canWait: true }, hazard }, before);
+  assert.equal(mover.canWait, false);
   assert.deepEqual({
     actorId: plan.actorId,
     start: plan.start,

@@ -1,4 +1,4 @@
-import { DIRECTIONS, activeUnit, axialToOffset, beginActionPlanning, beginActivation, cancelActionPlanning, confirmDeployment, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, planRoutes, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
+import { DIRECTIONS, activeUnit, axialToOffset, beginActionPlanning, cancelActionPlanning, confirmDeployment, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, planRoutes, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
 import { buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, headingAngle, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourcePresentation, routeConsequenceRows, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, shouldShowManeuverRoutes, systemActionPresentation } from "./ui-rules.js";
 import { applyAttackStep, availableWeaponAttackTargets, confirmWeaponAttackAction, previewWeaponAttack, resolvePostEntryAA, weaponAttackArc } from "./battle.js";
@@ -10,7 +10,7 @@ const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBatt
 const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 const tooltipTitle = el.tooltip.querySelector(".hex-tooltip-title");
 const tooltipContent = el.tooltip.querySelector(".hex-tooltip-content");
-const stageNames = { "wait-decision": "ОЖИДАНИЕ", "action-choice": "ДЕЙСТВИЯ", "action-planning": "ПЛАНИРОВАНИЕ", "action-resolution": "ВЫПОЛНЕНИЕ", deployment: "РАССТАНОВКА" };
+const stageNames = { "action-choice": "ДЕЙСТВИЯ", "action-planning": "ПЛАНИРОВАНИЕ", "action-resolution": "ВЫПОЛНЕНИЕ", deployment: "РАССТАНОВКА" };
 const entityImages = new Map();
 let state = createBattleState();
 let ui = { policy: "risky", selectedWeaponId: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, tooltipInside: false, tooltipTimer: null, animation: null, lastActiveUnit: null, geometry: { size: 38, cx: 0, cy: 0, dpr: 1 } };
@@ -153,19 +153,19 @@ function renderHeader() {
   el.stageLabel.textContent = deploying ? "РАССТАНОВКА" : finished ? "ИТОГ" : stageNames[state.stage];
   el.confirmDeploymentButton.hidden = !deploying;
   el.confirmDeploymentButton.disabled = Boolean(ui.animation);
-  el.waitButton.hidden = deploying || finished || state.lifecycle !== "WaitDecision";
+  el.waitButton.hidden = deploying || finished || !unit?.canWait || unit.hasWaited || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
   el.endActivationButton.hidden = deploying || finished;
-  el.endActivationButton.innerHTML = state.lifecycle === "WaitDecision" ? '<span class="action-icon">▶</span><span class="action-tooltip"><b>Начать</b><small>Начать активацию без ожидания.</small></span>' : '<span class="action-icon">■</span><span class="action-tooltip"><b>Завершить</b><small>Завершить текущую активацию.</small></span>';
+  el.endActivationButton.innerHTML = '<span class="action-icon">■</span><span class="action-tooltip"><b>Завершить</b><small>Завершить текущую активацию.</small></span>';
   el.turnPlaceholders.innerHTML = finished ? placeholderSlots(2) : "";
   el.actionPlaceholders.innerHTML = unit && !finished ? "" : placeholderSlots(2);
-  el.routePolicyButton.hidden = !unit || finished || state.lifecycle === "WaitDecision";
-  el.evasionButton.hidden = !unit || finished || state.lifecycle === "WaitDecision";
-  el.engineBoostButton.hidden = !unit || finished || state.lifecycle === "WaitDecision";
+  el.routePolicyButton.hidden = !unit || finished;
+  el.evasionButton.hidden = !unit || finished;
+  el.engineBoostButton.hidden = !unit || finished;
   el.routePolicyButton.setAttribute("aria-label", state.lifecycle === "ActionChoice" ? "Совершить манёвр" : "Политика маршрута");
   if (!unit) return;
   const isSquadron = unit.kind === "squadron";
   el.waitButton.disabled = Boolean(ui.animation);
-  el.endActivationButton.disabled = Boolean(ui.animation) || finished || !["WaitDecision", "ActionChoice", "ActionPlanning"].includes(state.lifecycle);
+  el.endActivationButton.disabled = Boolean(ui.animation) || finished || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
   const maneuver = maneuverActionPresentation(state, unit);
   const evasive = systemActionPresentation(state, unit, "evasive-maneuver");
   const engineBoost = systemActionPresentation(state, unit, "reactor-to-engines");
@@ -846,17 +846,11 @@ el.engineBoostButton.addEventListener("click", () => chooseSystemAction("reactor
 el.waitButton.addEventListener("click", () => {
   const unit = activeUnit(state);
   if (waitActiveUnit(state)) addLog(`${unit.name} ждёт и переносится в конец очереди.`, "system");
-  else if (beginActivation(state)) addLog(`${unit.name} начинает активацию.`, unit.sideId);
   refresh();
 });
 el.endActivationButton.addEventListener("click", () => {
   if (ui.animation) return;
   const unit = activeUnit(state);
-  if (state.lifecycle === "WaitDecision") {
-    if (beginActivation(state)) addLog(`${unit.name} начинает активацию.`, unit.sideId);
-    refresh();
-    return;
-  }
   const result = endActivation(state);
   if (!result) return;
   ui.selected = null;

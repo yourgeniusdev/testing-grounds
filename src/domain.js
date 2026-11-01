@@ -209,9 +209,7 @@ export function confirmDeployment(state, sideId) {
   else {
     const randomKeys = Object.fromEntries(state.units.map((unit, index) => [unit.id, ((index * 37 + 17) % 97) / 97]));
     state.initiativeOrder = [...state.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || randomKeys[a.id] - randomKeys[b.id]).map(unit => unit.id);
-    state.activeUnitId = state.initiativeOrder[0] || null;
-    state.lifecycle = "WaitDecision";
-    state.stage = "wait-decision";
+    grantActivationPriority(state, state.initiativeOrder[0] || null);
   }
   return true;
 }
@@ -238,13 +236,25 @@ export function applyDamage(state, unit, amount, cause = "damage", startLayer = 
   return { amount: amount - remaining, destroyed: unit.integrity === 0, event };
 }
 
-function enterWaitDecision(state, unitId) {
+function grantActivationPriority(state, unitId) {
   state.activeUnitId = unitId;
   state.activeAction = null;
   state.maneuverApplication = null;
   state.attackApplication = null;
-  state.lifecycle = unitId ? "WaitDecision" : "Finished";
-  state.stage = unitId ? "wait-decision" : "finished";
+  if (!unitId) {
+    state.lifecycle = "Finished";
+    state.stage = "finished";
+    return;
+  }
+  const unit = activeUnit(state);
+  if (unit.activationStartedThisRound) {
+    state.lifecycle = "ActionChoice";
+    state.stage = "action-choice";
+    return;
+  }
+  state.lifecycle = "WaitDecision";
+  state.stage = "wait-decision";
+  beginActivation(state);
 }
 
 function startNewRound(state) {
@@ -257,7 +267,7 @@ function startNewRound(state) {
     resetUnitWeaponsForNewRound(candidate);
   }
   state.initiativeOrder = [...state.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || a.id.localeCompare(b.id)).map(candidate => candidate.id);
-  enterWaitDecision(state, state.initiativeOrder[0] || null);
+  grantActivationPriority(state, state.initiativeOrder[0] || null);
 }
 
 export function destroyUnit(state, unit, context = {}) {
@@ -281,7 +291,7 @@ export function destroyUnit(state, unit, context = {}) {
     }
   } else if (wasActive) {
     const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated) || null;
-    if (nextId) enterWaitDecision(state, nextId);
+    if (nextId) grantActivationPriority(state, nextId);
     else startNewRound(state);
   }
   const destructionEvent = recordEvent(state, "destroy", { subjectIds: [unit.id], after: { winner: state.winner, debrisId: debris.id, activeUnitId: state.activeUnitId }, ...context });
@@ -881,6 +891,7 @@ export function confirmManeuverAction(state, option) {
   const plan = deepFreeze({ ...planned, actionId: declaration.eventId, actionContext: context });
   state.activeAction = Object.freeze({ ...action, status: "resolving", actionId: declaration.eventId, planId: plan.id });
   state.maneuverApplication = { planId: plan.id, nextElement: 0, executedMoves: 0, executedTurns: 0, completedElements: [], finished: false };
+  unit.canWait = false;
   state.lifecycle = "ActionResolution";
   state.stage = "action-resolution";
   return plan;
@@ -964,6 +975,7 @@ export function confirmSystemAction(state, _preview = null) {
     unit.speedRemaining = Math.max(0, unit.currentSpeed - unit.speedSpent);
   }
   unit.usedSystemActions.push(definition.id);
+  unit.canWait = false;
   const result = deepFreeze({ actionId: declaration.eventId, actorId: unit.id, systemActionId: definition.id, costs: { ...definition.cost } });
   recordEvent(state, "system-action-resolve", { actorId: unit.id, subjectIds: [unit.id], actionId: declaration.eventId, actionType: action.type, actionReason: action.reason, systemActionId: definition.id, costs: result.costs });
   state.activeAction = null;
@@ -974,12 +986,13 @@ export function confirmSystemAction(state, _preview = null) {
 
 export function waitActiveUnit(state) {
   const unit = activeUnit(state);
-  if (!unit || state.lifecycle !== "WaitDecision" || unit.activationStartedThisRound || unit.hasWaited || unit.canWait === false) return false;
+  if (!unit || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle) || state.activeAction?.status === "resolving" || unit.hasWaited || unit.canWait === false) return false;
+  if (state.lifecycle === "ActionPlanning") cancelActionPlanning(state);
   unit.hasWaited = true;
   unit.canWait = false;
   state.initiativeOrder = [...state.initiativeOrder.filter(id => id !== unit.id), unit.id];
   const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated && !unitById(state, id).hasWaited) || unit.id;
-  enterWaitDecision(state, nextId);
+  grantActivationPriority(state, nextId);
   return true;
 }
 
@@ -1004,7 +1017,7 @@ export function endActivation(state) {
   unit.hasActivated = true;
   const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated);
   if (nextId) {
-    enterWaitDecision(state, nextId);
+    grantActivationPriority(state, nextId);
     return { newRound: false };
   }
   startNewRound(state);

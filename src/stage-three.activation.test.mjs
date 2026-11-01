@@ -7,6 +7,7 @@ import {
   beginActionPlanning,
   beginActivation,
   cancelActionPlanning,
+  confirmDeployment,
   confirmManeuverAction,
   confirmSystemAction,
   createBattleState,
@@ -51,20 +52,49 @@ function damagingStayEffect(id, position, amount = 1) {
   };
 }
 
-test("wait decision precedes activation start and waiting is free", () => {
-  const { state, atlas, swift } = activationBattle();
+test("final deployment automatically starts the first activation exactly once", () => {
+  const state = createBattleState();
+  const firstId = [...state.units]
+    .sort((left, right) => right.initiative - left.initiative || right.currentSpeed - left.currentSpeed || ((state.units.indexOf(left) * 37 + 17) % 97) / 97 - ((state.units.indexOf(right) * 37 + 17) % 97) / 97)[0].id;
+  const first = unitById(state, firstId);
+  first.reactor && (first.reactor.currentEnergy = 0);
+
+  assert.equal(confirmDeployment(state, "azure"), true);
+  assert.equal(confirmDeployment(state, "crimson"), true);
+
+  assert.equal(activeUnit(state), first);
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(state.stage, "action-choice");
+  assert.equal(first.activationStartedThisRound, true);
+  assert.equal(state.events.filter(event => event.action === "activation-start" && event.actorId === first.id).length, 1);
+});
+
+test("automatic activation start leaves wait available and waiting does not restart later", () => {
+  const { state, atlas, swift, bastion } = activationBattle();
   atlas.speedSpent = 2;
   atlas.speedRemaining = 1;
   atlas.maneuverSpent = 1;
   atlas.maneuverRemaining = 1;
-  const before = structuredClone({ unit: atlas, events: state.events, sequence: state.sequence });
 
+  assert.equal(beginActivation(state), true);
+  assert.equal(atlas.reactor.currentEnergy, 3);
   assert.equal(waitActiveUnit(state), true);
 
   assert.equal(activeUnit(state), swift);
-  assert.equal(state.lifecycle, "WaitDecision");
-  assert.equal(swift.activationStartedThisRound, false);
-  assert.deepEqual({ unit: atlas, events: state.events, sequence: state.sequence }, { ...before, unit: { ...before.unit, hasWaited: true, canWait: false } });
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(swift.activationStartedThisRound, true);
+  assert.equal(atlas.hasWaited, true);
+  assert.equal(atlas.canWait, false);
+
+  assert.deepEqual(endActivation(state), { newRound: false });
+  assert.equal(activeUnit(state), bastion);
+  assert.deepEqual(endActivation(state), { newRound: false });
+  assert.equal(activeUnit(state), atlas);
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(atlas.reactor.currentEnergy, 3);
+  assert.equal(atlas.speedSpent, 0);
+  assert.equal(atlas.maneuverSpent, 0);
+  assert.equal(state.events.filter(event => event.action === "activation-start" && event.actorId === atlas.id).length, 1);
 });
 
 test("activation start occurs once and enters the unified action choice", () => {
@@ -84,6 +114,16 @@ test("activation start occurs once and enters the unified action choice", () => 
   assert.equal(atlas.speedRemaining, 1);
 });
 
+test("planning and canceling previews preserve wait eligibility", () => {
+  const { state, atlas } = activationBattle();
+  beginActivation(state);
+
+  assert.ok(beginActionPlanning(state, { type: "maneuver", reason: "player-choice" }));
+  assert.equal(cancelActionPlanning(state), true);
+  assert.equal(atlas.canWait, true);
+  assert.equal(waitActiveUnit(state), true);
+});
+
 test("planning and cancellation are pure and only one action may be planned or resolved", () => {
   const { state, atlas } = activationBattle();
   beginActivation(state);
@@ -98,6 +138,8 @@ test("planning and cancellation are pure and only one action may be planned or r
   const route = planRoutes(state, atlas, "safe").get("1,0:0");
   const plan = confirmManeuverAction(state, buildManeuverOptions(atlas, route)[0]);
   assert.ok(plan);
+  assert.equal(atlas.canWait, false);
+  assert.equal(waitActiveUnit(state), false);
   assert.equal(state.lifecycle, "ActionResolution");
   assert.equal(beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: atlas.weapons[0].id }), null);
   assert.equal(cancelActionPlanning(state), false);
@@ -136,6 +178,8 @@ test("maneuver and weapon actions return to choice with stable action context", 
   beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: slot.id });
   const attack = confirmWeaponAttackAction(state, atlas.id, slot.id, bastion.id, () => 100, () => 0);
   assert.ok(attack);
+  assert.equal(atlas.canWait, false);
+  assert.equal(waitActiveUnit(state), false);
   assert.notEqual(attack.actionContext.actionId, maneuverContext.actionId);
   assert.deepEqual(attack.actionContext, {
     actionId: attack.actionContext.actionId,
@@ -185,7 +229,7 @@ test("system action planning is pure and confirmation revalidates actor, cost, a
   assert.equal(atlas.maneuverSpent, atlas.maneuver);
 });
 
-test("confirmed system actions pay once, apply immediately, and return to common choice", () => {
+test("confirmed system actions pay once, remove wait, and return to common choice", () => {
   const { state, atlas } = activationBattle();
   beginActivation(state);
 
@@ -196,6 +240,8 @@ test("confirmed system actions pay once, apply immediately, and return to common
   assert.equal(atlas.evasiveManeuver, true);
   assert.equal(atlas.maneuverSpent, 1);
   assert.equal(atlas.maneuverRemaining, atlas.maneuver - 1);
+  assert.equal(atlas.canWait, false);
+  assert.equal(waitActiveUnit(state), false);
   assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(state.stage, "action-choice");
   assert.equal(confirmSystemAction(state, resolved), null);
@@ -337,14 +383,11 @@ test("a later turn-only maneuver conservatively locks accumulated Evasion until 
   assert.equal(atlas.movementEvasion, 0);
 
   endActivation(state);
-  beginActivation(state);
   endActivation(state);
-  beginActivation(state);
   endActivation(state);
-  beginActivation(state);
   endActivation(state);
   assert.equal(activeUnit(state), atlas);
-  assert.equal(beginActivation(state), true);
+  assert.equal(atlas.activationStartedThisRound, true);
   assert.equal(atlas.evasionLocked, false);
   assert.equal(atlas.activationMovement.steps, 0);
   assert.equal(atlas.movementEvasion, 0);
@@ -635,7 +678,8 @@ test("a lethal stay effect terminates the maneuver action and activation without
   assert.equal(result.reason, "stay-effect");
   assert.equal(state.units.includes(atlas), false);
   assert.equal(activeUnit(state), swift);
-  assert.equal(state.lifecycle, "WaitDecision");
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(swift.activationStartedThisRound, true);
   assert.equal(state.activeAction, null);
   assert.equal(state.maneuverApplication, null);
   const stay = state.events.find(event => event.action === "location-stay-effect");
@@ -783,7 +827,7 @@ test("explicit end cancels an unconfirmed preview without paying for it", () => 
 
   assert.deepEqual(endActivation(state), { newRound: false });
   assert.equal(activeUnit(state), swift);
-  assert.deepEqual({ resources: activationResources(atlas), slot, events: state.events.filter(event => event.action !== "activation-end") }, before);
+  assert.deepEqual({ resources: activationResources(atlas), slot, events: state.events.filter(event => !["activation-end", "activation-start"].includes(event.action) || event.action === "activation-start" && event.actorId === atlas.id) }, before);
 });
 
 test("activation may end immediately and active-unit destruction leaves initiative coherent", () => {
@@ -793,8 +837,8 @@ test("activation may end immediately and active-unit destruction leaves initiati
   assert.deepEqual(endActivation(immediate.state), { newRound: false });
   assert.equal(immediate.atlas.reactor.currentEnergy, energy);
   assert.equal(activeUnit(immediate.state), immediate.swift);
-  assert.equal(immediate.state.lifecycle, "WaitDecision");
-  assert.equal(immediate.swift.activationStartedThisRound, false);
+  assert.equal(immediate.state.lifecycle, "ActionChoice");
+  assert.equal(immediate.swift.activationStartedThisRound, true);
 
   const resolving = activationBattle();
   beginActivation(resolving.state);
@@ -803,8 +847,8 @@ test("activation may end immediately and active-unit destruction leaves initiati
   confirmManeuverAction(resolving.state, buildManeuverOptions(resolving.atlas, route)[0]);
   destroyUnit(resolving.state, resolving.atlas);
   assert.equal(activeUnit(resolving.state), resolving.swift);
-  assert.equal(resolving.state.lifecycle, "WaitDecision");
+  assert.equal(resolving.state.lifecycle, "ActionChoice");
   assert.equal(resolving.state.activeAction, null);
   assert.equal(resolving.state.maneuverApplication, null);
-  assert.equal(resolving.swift.activationStartedThisRound, false);
+  assert.equal(resolving.swift.activationStartedThisRound, true);
 });

@@ -185,8 +185,9 @@ test("hazard destruction completes the active action and advances valid initiati
   assert.equal(state.activeUnitId, ally.id);
   assert.equal(domain.activeUnit(state), ally);
   assert.deepEqual(state.initiativeOrder, [ally.id, enemy.id]);
-  assert.equal(state.lifecycle, "WaitDecision");
-  assert.equal(state.stage, "wait-decision");
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(state.stage, "action-choice");
+  assert.equal(ally.activationStartedThisRound, true);
   assert.deepEqual(result.destruction.debris.position, { q: 1, r: 0 });
 });
 

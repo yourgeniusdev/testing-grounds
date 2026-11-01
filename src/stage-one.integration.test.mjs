@@ -71,7 +71,8 @@ test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and ne
     "deployment-place",
     "deployment-place",
     "deployment-place",
-    "deployment-confirm"
+    "deployment-confirm",
+    "activation-start"
   ]);
 
   beginActivation(state);
@@ -104,9 +105,9 @@ test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and ne
   assert.deepEqual(activation, { newRound: false });
   assert.equal(wasps.hasActivated, true);
   assert.equal(activeUnit(state).id, "swift");
-  assert.equal(activeUnit(state).activationStartedThisRound, false);
-  assert.equal(state.lifecycle, "WaitDecision");
-  assert.equal(state.stage, "wait-decision");
+  assert.equal(activeUnit(state).activationStartedThisRound, true);
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(state.stage, "action-choice");
 });
 
 test("a squadron maneuver final heading controls every weapon slot arc", () => {

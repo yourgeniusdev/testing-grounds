@@ -73,7 +73,7 @@ function activationState() {
     { speedSpent: atlas.speedSpent, speedRemaining: atlas.speedRemaining, maneuverSpent: atlas.maneuverSpent, maneuverRemaining: atlas.maneuverRemaining },
     { speedSpent: 0, speedRemaining: atlas.currentSpeed, maneuverSpent: 0, maneuverRemaining: atlas.maneuver }
   );
-  assert.equal(waitActiveUnit(state), false);
+  assert.equal(waitActiveUnit(state), true);
 }
 
 {
@@ -100,7 +100,7 @@ function activationState() {
   assert.equal(atlas.maneuverSpent, 1);
   assert.equal(atlas.maneuverRemaining, atlas.maneuver - 1);
   assert.equal(atlas.evasiveManeuver, true);
-  assert.equal(atlas.canWait, true);
+  assert.equal(atlas.canWait, false);
   assert.equal(waitActiveUnit(state), false);
 }
 
@@ -168,10 +168,10 @@ function activationState() {
   assert.equal(result.newRound, true);
   assert.equal(atlas.activationStartedThisRound, false);
   assert.equal(activeUnit(state), swift);
-  assert.equal(swift.activationStartedThisRound, false);
-  assert.equal(state.lifecycle, "WaitDecision");
-  assert.equal(swift.speedSpent, 2);
-  assert.equal(swift.speedRemaining, 1);
+  assert.equal(swift.activationStartedThisRound, true);
+  assert.equal(state.lifecycle, "ActionChoice");
+  assert.equal(swift.speedSpent, 0);
+  assert.equal(swift.speedRemaining, swift.currentSpeed);
 }
 
 {
@@ -202,10 +202,10 @@ function activationState() {
     assert.equal(survivor.hasActivated, false);
     assert.equal(survivor.hasWaited, false);
   }
-  assert.equal(activatedAlly.activationStartedThisRound, false);
+  assert.equal(activatedAlly.activationStartedThisRound, true);
   assert.equal(enemy.activationStartedThisRound, false);
-  assert.equal(activatedAlly.speedSpent, 2);
-  assert.equal(state.lifecycle, "WaitDecision");
+  assert.equal(activatedAlly.speedSpent, 0);
+  assert.equal(state.lifecycle, "ActionChoice");
 }
 
 console.log("activation checks passed");
