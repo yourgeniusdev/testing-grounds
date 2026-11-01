@@ -1,4 +1,5 @@
 import { buildCapitalProfile, buildSquadronProfile, SYSTEM_ACTIONS } from "./config/index.js";
+import { availabilityReason, createAvailability, insufficientResourceReasons } from "./availability-contract.js";
 import { aaPreviewDescriptors, guaranteedEffectPreviewDescriptor, hazardPreviewDescriptor, interceptionPreviewDescriptors, isKnownTo } from "./route-preview.js";
 
 export const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
@@ -52,7 +53,7 @@ export function movementEvasionFromFacts(unit) {
 }
 
 export function currentEvasion(unit) {
-  return unit?.evasionLocked ? 0 : (unit?.baseEvasion || 0) + movementEvasionFromFacts(unit);
+  return unit?.evasionLocked ? 0 : (unit?.baseEvasion || 0) + movementEvasionFromFacts(unit) + (unit?.disengageEvasionPenalty || 0);
 }
 
 function updateMovementEvasion(unit) {
@@ -60,8 +61,8 @@ function updateMovementEvasion(unit) {
   return unit.movementEvasion;
 }
 
-function resourceState(spent, capacity, available = capacity) {
-  return { spent, remaining: Math.min(Math.max(0, capacity - spent), Math.max(0, available)), capacity };
+function resourceState(spent, capacity) {
+  return { spent, remaining: Math.max(0, capacity - spent), capacity };
 }
 
 export function activationResources(unit) {
@@ -74,12 +75,12 @@ export function activationResources(unit) {
   const speedCapacity = unit?.activationResourceCounters ? speedMaximum : Math.min(speedMaximum, speedSpent + (unit?.speedRemaining ?? speedMaximum));
   const maneuverCapacity = unit?.activationResourceCounters ? maneuverMaximum : Math.min(maneuverMaximum, maneuverSpent + (unit?.maneuverRemaining ?? maneuverMaximum));
   const activationEnergyBudget = unit?.activationEnergyBudget ?? energySpent + storedEnergy;
-  const reactorCapacity = unit?.reactor?.capacity ?? activationEnergyBudget;
-  const energyCapacity = unit?.reactor ? Math.min(activationEnergyBudget, reactorCapacity) : 0;
+  const reactorMaximum = unit?.reactor ? Math.min(activationEnergyBudget, unit.reactor.capacity) : 0;
+  const energyCapacity = Math.min(reactorMaximum, energySpent + storedEnergy);
   return {
     speed: resourceState(speedSpent, speedCapacity),
     maneuver: resourceState(maneuverSpent, maneuverCapacity),
-    energy: resourceState(energySpent, energyCapacity, storedEnergy)
+    energy: resourceState(energySpent, energyCapacity)
   };
 }
 
@@ -140,6 +141,30 @@ export function weaponReadiness(weapon) {
   return { ready: true, reason: null };
 }
 
+export function overwatchAvailability(unit, weapon) {
+  const baseResources = activationResources(unit);
+  const storedEnergy = unit?.reactor?.currentEnergy || 0;
+  const resources = { ...baseResources, energy: { spent: 0, remaining: storedEnergy, capacity: unit?.reactor?.capacity || 0 } };
+  const reasons = [];
+  const eligible = Boolean(weapon?.targetKinds?.includes("squadron"));
+  const weaponState = weapon ? weaponReadiness(weapon) : { ready: false, reason: "Оружейный слот отсутствует" };
+  if (!weapon) reasons.push(availabilityReason("action.invalid", "Оружейный слот отсутствует"));
+  else {
+    if (!eligible) reasons.push(availabilityReason("overwatch.ineligible", "Слот не может атаковать эскадрильи"));
+    if (!weaponState.ready) reasons.push(availabilityReason("action.not-ready", weaponState.reason, { firedThisRound: Boolean(weapon.firedThisRound), cooldownRemaining: weapon.cooldownRemaining || 0 }));
+    if (weapon.energyCost > 0 && !unit?.reactor) reasons.push(availabilityReason("resource.unavailable", "Требуется реактор", { resource: "energy" }));
+    reasons.push(...insufficientResourceReasons(resources, { energy: weapon.energyCost || 0 }));
+    if (!weapon.overwatch) reasons.push(availabilityReason("overwatch.inactive", "Наблюдение не сохранено: завершите активацию с готовым слотом"));
+  }
+  return createAvailability({
+    action: { type: "overwatch-reaction", actorId: unit?.id || null, slotId: weapon?.id || null },
+    reasons,
+    cost: { energy: weapon?.energyCost || 0 },
+    resources,
+    readiness: { eligible, active: Boolean(weapon?.overwatch), ready: weaponState.ready, state: !eligible ? "ineligible" : !weaponState.ready ? weapon?.firedThisRound ? "fired" : "cooldown" : weapon?.overwatch ? "overwatch" : "ready", reason: reasons[0]?.message || null }
+  });
+}
+
 export function beginWeaponCooldown(weapon) {
   const readiness = weaponReadiness(weapon);
   if (!readiness.ready) return false;
@@ -152,7 +177,6 @@ export function beginWeaponCooldown(weapon) {
 export function advanceWeaponRound(weapon) {
   if (weapon.firedThisRound) weapon.firedThisRound = false;
   else if (weapon.cooldownRemaining > 0) weapon.cooldownRemaining--;
-  weapon.overwatch = false;
   return weapon;
 }
 
@@ -160,12 +184,23 @@ export function resetUnitWeaponsForNewRound(unit) {
   for (const weapon of unit.weapons) advanceWeaponRound(weapon);
 }
 
+export function clearUnitOverwatch(unit) {
+  for (const weapon of unit?.weapons || []) weapon.overwatch = false;
+}
+
+export function confirmOwnAction(unit) {
+  if (!unit) return false;
+  clearUnitOverwatch(unit);
+  unit.canWait = false;
+  return true;
+}
+
 export function createBattleState() {
   const scenario = createScenario();
   const randomKeys = Object.fromEntries(scenario.units.map((unit, index) => [unit.id, ((index * 37 + 17) % 97) / 97]));
   const initiativeOrder = [...scenario.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || randomKeys[a.id] - randomKeys[b.id]).map(unit => unit.id);
   const units = scenario.units.map(unit => ({ ...unit, position: { ...unit.position }, reactor: unit.reactor ? { ...unit.reactor } : null, weapons: unit.weapons.map(initializeWeaponState), criticals: [], hasActivated: false, hasWaited: false, canWait: true, activationStartedThisRound: false, activationMovement: { elements: [], steps: 0, turns: 0 }, movementEvasion: 0, evasiveManeuver: false, engineBoostActive: false, usedSystemActions: [], evasionLocked: false, speedSpent: 0, speedRemaining: unit.currentSpeed, maneuverSpent: 0, maneuverRemaining: unit.maneuver ?? 0, energySpent: 0, unitHealth: unit.kind === "squadron" ? unit.unitHealth : null, maxUnits: unit.kind === "squadron" ? unit.stack : null, deployed: true }));
-  return { scenario, units, roundNumber: 1, lifecycle: "DeploymentLeft", stage: "deployment", initiativeOrder: [], activeUnitId: units[0]?.id || null, activeAction: null, maneuverApplication: null, attackApplication: null, winner: null, log: [], events: [], sequence: 0, rng: Math.random, deployment: { left: false, right: false } };
+  return { scenario, units, roundNumber: 1, lifecycle: "DeploymentLeft", initiativeOrder: [], activeUnitId: units[0]?.id || null, activeAction: null, maneuverApplication: null, attackApplication: null, reactionApplication: null, winner: null, log: [], events: [], actionContexts: {}, sequence: 0, rng: Math.random, deployment: { left: false, right: false } };
 }
 
 function deploymentSide(state) {
@@ -215,9 +250,97 @@ export function confirmDeployment(state, sideId) {
 }
 
 export function recordEvent(state, action, data = {}) {
-  const event = Object.freeze({ eventId: `${state.scenario.id}-${++state.sequence}`, battleId: state.scenario.id, round: state.roundNumber, lifecycle: state.lifecycle || state.stage, action, ...data });
+  const eventOrder = ++state.sequence;
+  const journalOrder = state.journalSequence = (state.journalSequence ?? 0) + 1;
+  const eventId = `${state.scenario.id}-${eventOrder}`;
+  const actionId = data.actionId || (action === "activation-action-confirm" || action === "aa-reaction-declare" ? eventId : null);
+  const actionContext = state.actionContexts?.[actionId] || state.actionContexts?.[data.maneuverActionId];
+  const activationId = data.activationId || (action === "activation-start" ? eventId : actionContext?.activationId || (actionId ? activeUnit(state)?.activationId : null));
+  const event = Object.freeze({
+    eventId,
+    eventOrder,
+    journalOrder,
+    battleId: state.scenario.id,
+    round: state.roundNumber,
+    lifecycle: state.lifecycle,
+    action,
+    ...data,
+    ...(activationId ? { activationId } : {}),
+    ...(actionId ? { actionId } : {}),
+    ...(actionId && !data.actionType && actionContext?.actionType ? { actionType: actionContext.actionType } : {}),
+    ...(actionId && !data.actionReason && actionContext?.reason ? { actionReason: actionContext.reason } : {})
+  });
   state.events.push(event);
+  if ((action === "activation-action-confirm" || action === "aa-reaction-declare") && actionId) {
+    state.actionContexts ??= {};
+    state.actionContexts[actionId] = Object.freeze({ actionId, activationId: activationId || null, actionType: event.actionType, actorId: event.actorId, reason: event.actionReason });
+  }
   return event;
+}
+
+const MANEUVER_STOP_REASONS = {
+  "state-changed": "состояние юнита изменилось",
+  "heading-changed": "курс юнита изменился",
+  blocked: "следующий шаг заблокирован",
+  "insufficient-speed": "недостаточно Скорости",
+  "insufficient-maneuver": "недостаточно Манёвренности",
+  interception: "возник Перехват",
+  "continuation-forbidden": "эффект запретил продолжение",
+  "unknown-element": "неизвестный элемент маршрута",
+  "exit-destruction": "разрешение эффекта при выходе",
+  "entry-destruction": "разрешение эффекта при входе",
+  hazard: "срабатывание опасности",
+  reaction: "срабатывание реакции ПВО",
+  "stay-effect": "срабатывание эффекта нахождения"
+};
+
+function eventUnitName(state, event, id = event.actorId) {
+  const declaration = (state.events || []).find(candidate => candidate.actionId === event.actionId && candidate.action === "activation-action-confirm");
+  return event.actorName || declaration?.actorName || unitById(state, id)?.name || id || "Юнит";
+}
+
+function maneuverEventMessage(state, event) {
+  const name = eventUnitName(state, event);
+  if (event.action === "activation-action-confirm" && event.actionType === "disengage") return `${name}: Отрыв подтверждён (Скорость ${event.costs?.speed || 0}; шанс ${event.chance}%).`;
+  if (event.action === "disengage-resolve") return event.success ? `${name}: Отрыв успешен (${event.roll}/${event.chance}); все связи сняты.` : `${name}: Отрыв не удался (${event.roll}/${event.chance}); связи сохранены.`;
+  if (event.action === "activation-action-confirm") return `${name}: манёвр подтверждён (${event.plannedElements} элем.; Скорость ${event.plannedCosts?.speed || 0}; Манёвренность ${event.plannedCosts?.maneuver || 0}).`;
+  if (event.action === "maneuver-turn") return `${name}: поворот, курс ${event.before?.heading} → ${event.after?.heading}.`;
+  if (event.action === "maneuver-move") return `${name}: шаг ${key(event.before.position.q, event.before.position.r)} → ${key(event.after.position.q, event.after.position.r)}.`;
+  if (event.action === "hazard-check") return event.after?.hit ? `${name}: опасность «${event.sourceName || event.sourceId}» срабатывает (${event.after.damage} урона).` : `${name}: опасность «${event.sourceName || event.sourceId}» не срабатывает.`;
+  if (event.action === "route-effect") return `${name}: эффект «${event.effect}».`;
+  if (event.action === "aa-reaction-declare") return `${event.actorName || event.actorId}: реакция ПВО по ${event.targetName || event.subjectIds?.[0]}; готовность слота «${event.slotId}» израсходована.`;
+  if (event.action === "aa-reaction-miss") return `${event.actorName || event.actorId}: реакция ПВО по ${event.targetName || event.subjectIds?.[0]} — промах (${event.random?.roll}/${event.chance}).`;
+  if (event.action === "interception-create") return `${name}: Перехват с ${event.linkedNames?.join(", ") || event.linkedIds?.join(", ")}.`;
+  if (event.action === "destroy") return `${event.subjectName || event.subjectIds?.[0]} уничтожен.`;
+  if (event.action === "debris-create") return `На позиции уничтожения создано поле обломков.`;
+  if (event.action === "victory") return `Победа флотилии ${event.after?.winner || event.actorId}.`;
+  if (event.action === "location-stay-effect") return `${name}: эффект нахождения «${event.effect}».`;
+  if (event.action === "maneuver-complete") return `${name}: манёвр завершён штатно; выполнено элементов: ${event.executedElements}.`;
+  if (event.action === "maneuver-stop") return `${name}: манёвр прекращён досрочно — ${MANEUVER_STOP_REASONS[event.reason] || event.reason}.`;
+  return null;
+}
+
+export function buildManeuverLog(state, eventCursor = 0) {
+  const maneuverActionIds = new Set((state.events || []).filter(event => event.action === "activation-action-confirm" && ["maneuver", "disengage"].includes(event.actionType)).map(event => event.actionId));
+  const includedEventIds = new Set();
+  const events = (state.events || []).filter(event => {
+    const included = maneuverActionIds.has(event.actionId) || maneuverActionIds.has(event.maneuverActionId) || includedEventIds.has(event.causeEventId);
+    if (included) includedEventIds.add(event.eventId);
+    return included && event.eventOrder > eventCursor;
+  });
+  return events
+    .map(event => ({ event, message: maneuverEventMessage(state, event) }))
+    .filter(entry => entry.message)
+    .map(({ event, message }) => Object.freeze({ id: event.eventId, eventId: event.eventId, eventOrder: event.eventOrder, journalOrder: event.journalOrder ?? event.eventOrder, actionId: event.actionId || event.maneuverActionId, causeEventId: event.causeEventId || null, round: event.round, message, tone: ["destroy", "maneuver-stop"].includes(event.action) ? "danger" : event.action === "maneuver-complete" ? "safe" : "neutral" }));
+}
+
+export function buildBattleLog(state, eventCursor = 0) {
+  const eventEntries = buildManeuverLog(state, eventCursor);
+  const eventIds = new Set(eventEntries.map(entry => entry.eventId));
+  const legacyEntries = (state.log || []).filter(entry => !entry.sourceEventId || !eventIds.has(entry.sourceEventId));
+  return [...legacyEntries.map((entry, index) => ({ entry, index })), ...eventEntries.map((entry, index) => ({ entry, index }))]
+    .sort((left, right) => (right.entry.journalOrder ?? -1) - (left.entry.journalOrder ?? -1) || left.index - right.index)
+    .map(candidate => candidate.entry);
 }
 
 export function applyDamage(state, unit, amount, cause = "damage", startLayer = "shield", context = {}) {
@@ -243,17 +366,14 @@ function grantActivationPriority(state, unitId) {
   state.attackApplication = null;
   if (!unitId) {
     state.lifecycle = "Finished";
-    state.stage = "finished";
     return;
   }
   const unit = activeUnit(state);
   if (unit.activationStartedThisRound) {
     state.lifecycle = "ActionChoice";
-    state.stage = "action-choice";
     return;
   }
   state.lifecycle = "WaitDecision";
-  state.stage = "wait-decision";
   beginActivation(state);
 }
 
@@ -270,33 +390,105 @@ function startNewRound(state) {
   grantActivationPriority(state, state.initiativeOrder[0] || null);
 }
 
+function destructionStopReason(context) {
+  if (context.destructionReason) return context.destructionReason;
+  if (context.actionType === "reaction-attack") return "reaction";
+  if (String(context.cause || "").startsWith("hazard:")) return "hazard";
+  return "active-unit-destroyed";
+}
+
+function terminateDestroyedUnitAction(state, unit, context, destructionEvent) {
+  const action = state.activeAction;
+  if (action?.actorId !== unit.id) return null;
+  if (action.type === "maneuver" && action.status === "resolving") {
+    const progress = state.maneuverApplication;
+    const event = recordEvent(state, "maneuver-stop", {
+      actorId: unit.id,
+      actorName: unit.name,
+      subjectIds: [unit.id],
+      activationId: unit.activationId,
+      actionId: action.actionId,
+      actionType: "maneuver",
+      actionReason: action.reason,
+      planId: action.planId,
+      outcome: "stopped",
+      reason: destructionStopReason(context),
+      executedElements: progress?.completedElements?.length || progress?.nextElement || 0,
+      executedMoves: progress?.executedMoves || 0,
+      executedTurns: progress?.executedTurns || 0,
+      finalState: { position: { ...unit.position }, heading: unit.heading },
+      causeEventId: destructionEvent.eventId
+    });
+    if (progress) {
+      progress.finished = true;
+      progress.outcomeEventId = event.eventId;
+    }
+    return event;
+  }
+  return recordEvent(state, "activation-action-stop", {
+    actorId: unit.id,
+    actorName: unit.name,
+    subjectIds: [unit.id],
+    activationId: unit.activationId,
+    actionId: action.actionId,
+    actionType: action.type,
+    actionReason: action.reason,
+    planId: action.planId,
+    reason: "active-unit-destroyed",
+    causeEventId: destructionEvent.eventId
+  });
+}
+
 export function destroyUnit(state, unit, context = {}) {
   if (!state.units.includes(unit)) return null;
   const wasActive = state.activeUnitId === unit.id;
+  const eventContext = { ...context };
+  delete eventContext.destructionReason;
   const debris = { id: `debris-${unit.id}-${state.roundNumber}`, kind: "terrain", type: "debrisField", label: `Обломки ${unit.name}`, position: { ...unit.position }, hazard: { probability: 0.25, min: 2, max: 7, effect: "урон целостности" } };
   state.units = state.units.filter(candidate => candidate.id !== unit.id);
   state.initiativeOrder = state.initiativeOrder.filter(id => id !== unit.id);
   for (const candidate of state.units) candidate.engagedWith = candidate.engagedWith?.filter(id => id !== unit.id) || candidate.engagedWith;
   state.scenario.contents.push(debris);
   const sides = [...new Set(state.units.map(candidate => candidate.sideId))];
-  if (sides.length === 1) {
-    state.winner = sides[0];
+  const winner = sides.length === 1 ? sides[0] : null;
+  if (winner) state.winner = winner;
+  const destructionEvent = recordEvent(state, "destroy", {
+    subjectIds: [unit.id],
+    subjectName: unit.name,
+    activationId: unit.activationId,
+    after: { winner, debrisId: debris.id },
+    ...eventContext
+  });
+  const actionTerminationEvent = wasActive ? terminateDestroyedUnitAction(state, unit, context, destructionEvent) : null;
+  const debrisEvent = recordEvent(state, "debris-create", {
+    actorId: null,
+    subjectIds: [debris.id],
+    position: { ...debris.position },
+    planId: context.planId || state.activeAction?.planId,
+    ...(context.elementIndex !== undefined ? { elementIndex: context.elementIndex } : {}),
+    causeEventId: actionTerminationEvent?.eventId || destructionEvent.eventId
+  });
+  const victoryEvent = winner ? recordEvent(state, "victory", {
+    actorId: winner,
+    subjectIds: state.units.filter(candidate => candidate.sideId === winner).map(candidate => candidate.id),
+    after: { winner },
+    causeEventId: debrisEvent.eventId
+  }) : null;
+  if (wasActive || winner) {
+    state.activeAction = null;
+    state.maneuverApplication = null;
+    state.attackApplication = null;
+  }
+  if (state.reactionApplication?.targetId === unit.id || state.reactionApplication?.ownerId === unit.id || winner) state.reactionApplication = null;
+  if (winner) {
     state.lifecycle = "Finished";
-    state.stage = "finished";
     state.activeUnitId = null;
-    if (wasActive) {
-      state.activeAction = null;
-      state.maneuverApplication = null;
-      state.attackApplication = null;
-    }
   } else if (wasActive) {
     const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated) || null;
     if (nextId) grantActivationPriority(state, nextId);
     else startNewRound(state);
   }
-  const destructionEvent = recordEvent(state, "destroy", { subjectIds: [unit.id], after: { winner: state.winner, debrisId: debris.id, activeUnitId: state.activeUnitId }, ...context });
-  if (context.planId) recordEvent(state, "debris-create", { actorId: null, subjectIds: [debris.id], position: { ...debris.position }, planId: context.planId, elementIndex: context.elementIndex, causeEventId: destructionEvent.eventId });
-  return { destroyed: true, unitId: unit.id, debris, winner: state.winner };
+  return { destroyed: true, unitId: unit.id, debris, winner, destructionEvent, actionTerminationEvent, debrisEvent, victoryEvent };
 }
 
 export function resolveRouteEffects(state, unit, contents, context = null) {
@@ -340,6 +532,7 @@ export function resolveLocationStayEffects(state, unit, cause) {
     const event = recordEvent(state, "location-stay-effect", {
       actorId: null,
       subjectIds: [unit.id],
+      subjectName: unit.name,
       sourceId: outcome.sourceId,
       effect: outcome.effect,
       execute: outcome.execute,
@@ -382,6 +575,7 @@ export function resolveHazardConsequences(state, unit, consequences, random = st
       subjectIds: [unit.id],
       position: { ...unit.position },
       sourceId: consequence.sourceId,
+      sourceName: consequence.sourceName,
       random: { probability: probabilityRoll, damage: damageRoll },
       after: { hit, damage },
       ...context
@@ -391,8 +585,9 @@ export function resolveHazardConsequences(state, unit, consequences, random = st
       continue;
     }
     const actionContext = context ? { planId: context.planId, elementIndex: context.elementIndex, actionId: context.actionId, actionType: context.actionType, actionReason: context.actionReason } : {};
-    const damageResult = applyDamage(state, unit, damage, `hazard:${consequence.sourceId}`, "integrity", context ? { ...actionContext, causeEventId: checkEvent.eventId } : {});
-    const destruction = unit.integrity === 0 ? destroyUnit(state, unit, context ? { ...actionContext, causeEventId: damageResult.event.eventId } : {}) : null;
+    const damageCause = `hazard:${consequence.sourceId}`;
+    const damageResult = applyDamage(state, unit, damage, damageCause, "integrity", context ? { ...actionContext, causeEventId: checkEvent.eventId } : {});
+    const destruction = unit.integrity === 0 ? destroyUnit(state, unit, context ? { ...actionContext, cause: damageCause, destructionReason: "hazard", causeEventId: damageResult.event.eventId } : { cause: damageCause }) : null;
     const outcome = { consequence, hit: true, damage, destroyed: Boolean(destruction), winner: destruction?.winner || null };
     if (context) outcome.destruction = destruction;
     outcomes.push(outcome);
@@ -457,7 +652,7 @@ export function resolvePostEntryInterceptions(state, unit, context = {}) {
     const linked = unitById(state, linkedId);
     linked.engagedWith = [...new Set([...(linked.engagedWith || []), unit.id])].sort((left, right) => left.localeCompare(right));
   }
-  if (context.planId) recordEvent(state, "interception-create", { actorId: unit.id, subjectIds: [unit.id, ...linkedIds], linkedIds, ...context });
+  if (context.planId) recordEvent(state, "interception-create", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...linkedIds], linkedIds, linkedNames: linkedIds.map(id => unitById(state, id)?.name || id), ...context });
   return linkedIds;
 }
 
@@ -469,7 +664,7 @@ function traversal(state, unit, position, visibilityFiltered = true) {
   const consequences = [...contents].sort(compareIds).map(content => consequenceFor(content, unit, visibilityFiltered)).filter(Boolean);
   if (object) return { canEnter: false, canStop: false, object, cost, consequences, contents };
   if (occupant && unit.kind === "capital") return { canEnter: false, canStop: false, occupant, cost, consequences, contents };
-  if (occupant?.kind === "squadron" && unit.kind === "squadron") return { canEnter: false, canStop: false, interceptedBy: occupant, cost, consequences, contents };
+  if (occupant?.kind === "squadron" && unit.kind === "squadron") return { canEnter: false, canStop: false, occupant, cost, consequences, contents };
   return { canEnter: true, canStop: !occupant, occupant, cost, consequences, contents };
 }
 
@@ -508,7 +703,7 @@ function expectedResourceSpent(option, name) {
 function plannedManeuver(state, option) {
   const unit = activeUnit(state);
   const route = option?.route;
-  if (!unit || !route || !option.finalState?.hex) return null;
+  if (!unit || unit.kind === "squadron" && unit.engagedWith?.length || !route || !option.finalState?.hex) return null;
   if (!samePosition(route.path?.[0], unit.position) || !samePosition(option.finalState.hex, route.position) || option.finalState.heading !== route.heading) return null;
   const start = { position: { ...unit.position }, heading: unit.heading };
   const elements = [];
@@ -580,6 +775,31 @@ function recordCompletedElement(unit, progress, plan, elementIndex, transition) 
   updateMovementEvasion(unit);
 }
 
+function recordManeuverOutcome(state, unit, progress, plan, outcome, reason, causeEventId = null) {
+  if (progress.outcomeEventId) return state.events.find(event => event.eventId === progress.outcomeEventId) || null;
+  const actionEvents = state.events.filter(event => event.actionId === plan.actionId || event.maneuverActionId === plan.actionId);
+  const causedEventIds = new Set(actionEvents.map(event => event.eventId));
+  for (const event of state.events) if (causedEventIds.has(event.causeEventId)) causedEventIds.add(event.eventId);
+  const lastCauseEventId = [...state.events].reverse().find(event => causedEventIds.has(event.eventId))?.eventId || causeEventId;
+  const event = recordEvent(state, outcome === "completed" ? "maneuver-complete" : "maneuver-stop", {
+    actorId: unit.id,
+    subjectIds: [unit.id],
+    actionId: plan.actionId,
+    actionType: plan.actionContext?.actionType || "maneuver",
+    actionReason: plan.actionContext?.reason,
+    planId: plan.id,
+    outcome,
+    reason,
+    executedElements: progress.nextElement,
+    executedMoves: progress.executedMoves,
+    executedTurns: progress.executedTurns,
+    finalState: { position: { ...unit.position }, heading: unit.heading },
+    ...(lastCauseEventId ? { causeEventId: lastCauseEventId } : {})
+  });
+  progress.outcomeEventId = event.eventId;
+  return event;
+}
+
 function finishManeuver(state, unit, progress, plan) {
   unit.canWait = false;
   if (!progress.executedMoves && progress.executedTurns) {
@@ -591,23 +811,62 @@ function finishManeuver(state, unit, progress, plan) {
   if (started) unit.hasResolvedManeuverThisActivation = true;
   const stayResolution = started ? resolveLocationStayEffects(state, unit, {
     type: "maneuver",
-    eventId: plan.actionId,
+    eventId: progress.lastEventId || plan.actionId,
     actionId: plan.actionId,
     actionReason: plan.actionContext?.reason,
     planId: plan.id
   }) : { outcomes: [], destruction: null };
-  if (stayResolution.destruction) return stayResolution;
+  if (stayResolution.destruction) {
+    recordManeuverOutcome(state, unit, progress, plan, "stopped", "stay-effect", state.events.at(-1)?.eventId);
+    return stayResolution;
+  }
   state.maneuverApplication = null;
   state.activeAction = null;
-  state.stage = "action-choice";
   state.lifecycle = "ActionChoice";
   return stayResolution;
 }
 
 function stopManeuver(state, unit, progress, plan, reason, transition = null, hazardOutcomes = []) {
+  const causeEventId = state.events.at(-1)?.actionId === plan.actionId ? state.events.at(-1).eventId : null;
   const stayResolution = finishManeuver(state, unit, progress, plan);
   if (stayResolution.destruction) return executionResult(progress, { status: "destroyed", reason: "stay-effect", transition, hazardOutcomes, stayOutcomes: stayResolution.outcomes, destruction: stayResolution.destruction });
+  recordManeuverOutcome(state, unit, progress, plan, "stopped", reason, causeEventId);
   return executionResult(progress, { status: "stopped", reason, transition, hazardOutcomes, stayOutcomes: stayResolution.outcomes });
+}
+
+function finalizeMovePostEntry(state, unit, progress, plan, element, elementIndex, transition, hazardOutcomes, effectOutcomes, reactionOutcomes = [], effects = {}) {
+  if (!state.units.includes(unit)) {
+    progress.nextElement++;
+    progress.finished = true;
+    unit.canWait = false;
+    const destruction = reactionOutcomes.find(outcome => outcome.destruction)?.destruction || state.events.findLast(event => event.action === "destroy" && event.subjectIds?.includes(unit.id)) || null;
+    return executionResult(progress, { status: "destroyed", reason: "reaction", transition, hazardOutcomes, effectOutcomes, reactionOutcomes, destruction });
+  }
+  const actionContext = { actionId: plan.actionId, actionType: plan.actionContext?.actionType || "maneuver", actionReason: plan.actionContext?.reason };
+  const interceptionIds = resolvePostEntryInterceptions(state, unit, { planId: plan.id, elementIndex, causeEventId: progress.lastEventId, ...actionContext });
+  unit.canWait = false;
+  progress.nextElement++;
+  if (interceptionIds.length) return { ...stopManeuver(state, unit, progress, plan, "interception", transition, hazardOutcomes), effectOutcomes, reactionOutcomes };
+  if (effects.canContinue && !effects.canContinue({ state, unit, plan, element, elementIndex })) return { ...stopManeuver(state, unit, progress, plan, "continuation-forbidden", transition, hazardOutcomes), effectOutcomes, reactionOutcomes };
+  if (progress.nextElement === plan.elements.length) {
+    const stayResolution = finishManeuver(state, unit, progress, plan);
+    if (stayResolution.destruction) return executionResult(progress, { status: "destroyed", reason: "stay-effect", transition, hazardOutcomes, effectOutcomes, reactionOutcomes, stayOutcomes: stayResolution.outcomes, destruction: stayResolution.destruction });
+    recordManeuverOutcome(state, unit, progress, plan, "completed", "route-complete", state.events.at(-1)?.actionId === plan.actionId ? state.events.at(-1).eventId : null);
+    return executionResult(progress, { status: "completed", transition, hazardOutcomes, effectOutcomes, reactionOutcomes, stayOutcomes: stayResolution.outcomes });
+  }
+  return executionResult(progress, { status: "executed", transition, hazardOutcomes, effectOutcomes, reactionOutcomes });
+}
+
+export function resumeManeuverPostEntry(state, plan, effects = {}) {
+  const unit = activeUnit(state);
+  const progress = state.maneuverApplication;
+  const pending = progress?.pendingPostEntry;
+  if (!unit || !pending || progress.planId !== plan?.id || progress.finished || pending.elementIndex !== progress.nextElement) return { status: "invalid" };
+  const reaction = effects.resolvePostEntry?.({ state, unit, plan, element: pending.element, elementIndex: pending.elementIndex, causeEventId: pending.causeEventId });
+  if (reaction?.pending) return executionResult(progress, { status: "reaction-pending", transition: pending.transition, hazardOutcomes: pending.hazardOutcomes, effectOutcomes: pending.effectOutcomes, reactionPlan: reaction.plan });
+  const reactionOutcomes = [...pending.reactionOutcomes, ...(Array.isArray(reaction) ? reaction : [])];
+  delete progress.pendingPostEntry;
+  return finalizeMovePostEntry(state, unit, progress, plan, pending.element, pending.elementIndex, pending.transition, pending.hazardOutcomes, pending.effectOutcomes, reactionOutcomes, effects);
 }
 
 export function executeManeuverElement(state, plan, elementIndex, effects = {}) {
@@ -621,6 +880,7 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
   if (!element) {
     const stayResolution = finishManeuver(state, unit, progress, plan);
     if (stayResolution.destruction) return executionResult(progress, { status: "destroyed", reason: "stay-effect", transition: null, hazardOutcomes: [], stayOutcomes: stayResolution.outcomes, destruction: stayResolution.destruction });
+    recordManeuverOutcome(state, unit, progress, plan, "completed", "route-complete");
     return executionResult(progress, { status: "completed", transition: null, hazardOutcomes: [], stayOutcomes: stayResolution.outcomes });
   }
   const before = { position: { ...unit.position }, heading: unit.heading };
@@ -629,7 +889,6 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
   let actualConsequences = [];
   let hazardOutcomes = [];
   let effectOutcomes = [];
-  let interceptionIds = [];
   let transition = null;
   if (element.type === "turn") {
     if (!samePosition(unit.position, element.position) || unit.heading !== element.headingBefore) return stopManeuver(state, unit, progress, plan, "state-changed");
@@ -642,9 +901,13 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
     const preliminaryRule = traversal(state, unit, element.to);
     if (!preliminaryRule.canEnter || element.final && !preliminaryRule.canStop) return stopManeuver(state, unit, progress, plan, "blocked");
     if (activationResources(unit).speed.remaining < preliminaryRule.cost) return stopManeuver(state, unit, progress, plan, "insufficient-speed");
-    const exitEvent = recordEvent(state, "maneuver-exit", { actorId: unit.id, subjectIds: [unit.id], position: { ...unit.position }, planId: plan.id, elementIndex, ...actionContext });
+    const exitEvent = recordEvent(state, "maneuver-exit", { actorId: unit.id, subjectIds: [unit.id], position: { ...unit.position }, planId: plan.id, elementIndex, causeEventId: progress.lastEventId || plan.actionId, ...actionContext });
     effects.resolveExit?.({ state, unit, plan, element, elementIndex, causeEventId: exitEvent.eventId });
-    if (!state.units.includes(unit)) return executionResult(progress, { status: "destroyed", reason: "exit-destruction", transition: null, hazardOutcomes: [] });
+    if (!state.units.includes(unit)) {
+      progress.finished = true;
+      recordManeuverOutcome(state, unit, progress, plan, "stopped", "exit-destruction", state.events.at(-1)?.eventId);
+      return executionResult(progress, { status: "destroyed", reason: "exit-destruction", transition: null, hazardOutcomes: [] });
+    }
     const rule = traversal(state, unit, element.to, false);
     if (!rule.canEnter || element.final && !rule.canStop) return stopManeuver(state, unit, progress, plan, "blocked");
     actualSpeedCost = rule.cost;
@@ -656,8 +919,14 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
     transition = deepFreeze({ elementIndex, type: element.type, before, after: afterEntry, speedCost: actualSpeedCost, maneuverCost: 0, consequences: actualConsequences });
     recordCompletedElement(unit, progress, plan, elementIndex, transition);
     const moveEvent = recordEvent(state, "maneuver-move", { actorId: unit.id, subjectIds: [unit.id], planId: plan.id, elementIndex, causeEventId: exitEvent.eventId, before, after: afterEntry, ...actionContext });
+    progress.lastEventId = moveEvent.eventId;
     effects.resolveEntry?.({ state, unit, plan, element, elementIndex, causeEventId: moveEvent.eventId });
-    if (!state.units.includes(unit)) return executionResult(progress, { status: "destroyed", reason: "entry-destruction", transition, hazardOutcomes: [] });
+    if (!state.units.includes(unit)) {
+      progress.nextElement++;
+      progress.finished = true;
+      recordManeuverOutcome(state, unit, progress, plan, "stopped", "entry-destruction", state.events.at(-1)?.eventId);
+      return executionResult(progress, { status: "destroyed", reason: "entry-destruction", transition, hazardOutcomes: [] });
+    }
     hazardOutcomes = resolveHazardConsequences(state, unit, actualConsequences, state.rng, { planId: plan.id, elementIndex, causeEventId: moveEvent.eventId, ...actionContext });
     const lethalOutcome = hazardOutcomes.find(outcome => outcome.destroyed);
     if (lethalOutcome) {
@@ -667,29 +936,25 @@ export function executeManeuverElement(state, plan, elementIndex, effects = {}) 
       return executionResult(progress, { status: "destroyed", reason: "hazard", transition, hazardOutcomes, effectOutcomes, destruction: lethalOutcome.destruction });
     }
     effectOutcomes = resolveRouteEffects(state, unit, rule.contents, { planId: plan.id, elementIndex, causeEventId: moveEvent.eventId, ...actionContext });
-    const reactionOutcomes = effects.resolvePostEntry?.({ state, unit, plan, element, elementIndex, causeEventId: moveEvent.eventId }) || [];
-    if (!state.units.includes(unit)) {
-      progress.nextElement++;
-      progress.finished = true;
-      unit.canWait = false;
-      const destruction = reactionOutcomes.find(outcome => outcome.destruction)?.destruction || state.scenario.contents.find(content => content.id.startsWith(`debris-${unit.id}-`)) && { debris: state.scenario.contents.find(content => content.id.startsWith(`debris-${unit.id}-`)) };
-      return executionResult(progress, { status: "destroyed", reason: "reaction", transition, hazardOutcomes, effectOutcomes, reactionOutcomes, destruction });
+    const reaction = effects.resolvePostEntry?.({ state, unit, plan, element, elementIndex, causeEventId: moveEvent.eventId }) || [];
+    if (reaction?.pending) {
+      progress.pendingPostEntry = { element, elementIndex, transition, hazardOutcomes, effectOutcomes, reactionOutcomes: [], causeEventId: moveEvent.eventId };
+      return executionResult(progress, { status: "reaction-pending", transition, hazardOutcomes, effectOutcomes, reactionPlan: reaction.plan });
     }
-    interceptionIds = resolvePostEntryInterceptions(state, unit, { planId: plan.id, elementIndex, causeEventId: moveEvent.eventId, ...actionContext });
+    return finalizeMovePostEntry(state, unit, progress, plan, element, elementIndex, transition, hazardOutcomes, effectOutcomes, reaction, effects);
   } else return stopManeuver(state, unit, progress, plan, "unknown-element");
   unit.canWait = false;
   progress.nextElement++;
   const after = { position: { ...unit.position }, heading: unit.heading };
   transition ??= deepFreeze({ elementIndex, type: element.type, before, after, speedCost: actualSpeedCost, maneuverCost: element.type === "turn" ? element.cost : 0, consequences: actualConsequences });
-  if (element.type === "turn") {
-    recordCompletedElement(unit, progress, plan, elementIndex, transition);
-    recordEvent(state, "maneuver-turn", { actorId: unit.id, subjectIds: [unit.id], planId: plan.id, elementIndex, before, after, ...actionContext });
-  }
-  if (interceptionIds.length) return { ...stopManeuver(state, unit, progress, plan, "interception", transition, hazardOutcomes), effectOutcomes };
+  recordCompletedElement(unit, progress, plan, elementIndex, transition);
+  const turnEvent = recordEvent(state, "maneuver-turn", { actorId: unit.id, subjectIds: [unit.id], planId: plan.id, elementIndex, causeEventId: progress.lastEventId || plan.actionId, before, after, ...actionContext });
+  progress.lastEventId = turnEvent.eventId;
   if (effects.canContinue && !effects.canContinue({ state, unit, plan, element, elementIndex })) return { ...stopManeuver(state, unit, progress, plan, "continuation-forbidden", transition, hazardOutcomes), effectOutcomes };
   if (progress.nextElement === plan.elements.length) {
     const stayResolution = finishManeuver(state, unit, progress, plan);
     if (stayResolution.destruction) return executionResult(progress, { status: "destroyed", reason: "stay-effect", transition, hazardOutcomes, effectOutcomes, stayOutcomes: stayResolution.outcomes, destruction: stayResolution.destruction });
+    recordManeuverOutcome(state, unit, progress, plan, "completed", "route-complete", state.events.at(-1)?.actionId === plan.actionId ? state.events.at(-1).eventId : null);
     return executionResult(progress, { status: "completed", transition, hazardOutcomes, effectOutcomes, stayOutcomes: stayResolution.outcomes });
   }
   return executionResult(progress, { status: "executed", transition, hazardOutcomes, effectOutcomes });
@@ -753,7 +1018,7 @@ function stepPreview(state, unit, position, contents, executedMoves) {
   const previewUnit = { ...unit, activationMovement: { elements: previewElements, steps: previewElements.filter(element => element.type === "move").length, turns: previewElements.filter(element => element.type === "turn").length } };
   const reactions = aaPreviewDescriptors(state, previewUnit, position);
   const interceptions = interceptionPreviewDescriptors(state, unit, position);
-  return { descriptors: [...hazards, ...effects, ...reactions, ...interceptions], interceptions };
+  return { descriptors: [...hazards, ...effects, ...reactions, ...interceptions].map(descriptor => ({ ...descriptor, position: { ...position } })), interceptions };
 }
 
 function interceptionIds(preview) {
@@ -858,17 +1123,19 @@ export function planRoutes(state, unit, policy) {
 }
 
 function actionContext(state, action, eventId) {
-  return Object.freeze({ actionId: eventId, actionType: action.type, actorId: activeUnit(state).id, reason: action.reason });
+  const actor = activeUnit(state);
+  return Object.freeze({ activationId: actor.activationId, actionId: eventId, actionType: action.type, actorId: actor.id, reason: action.reason });
 }
 
 export function beginActionPlanning(state, action) {
   const unit = activeUnit(state);
-  if (!unit || state.lifecycle !== "ActionChoice" || state.activeAction || !action || !["maneuver", "weapon-attack", "system-action"].includes(action.type) || !action.reason) return null;
+  if (!unit || state.lifecycle !== "ActionChoice" || state.activeAction || !action || !["maneuver", "weapon-attack", "system-action", "disengage"].includes(action.type) || !action.reason) return null;
   if (action.type === "system-action" && (!SYSTEM_ACTIONS[action.systemActionId] || unit.kind !== "capital")) return null;
+  if (action.type === "weapon-attack" && !unit.weapons.some(weapon => weapon.id === action.slotId)) return null;
+  if (!actionAvailability(state, action, unit).available) return null;
   const planning = deepFreeze({ status: "planning", type: action.type, actorId: unit.id, reason: action.reason, ...(action.slotId ? { slotId: action.slotId } : {}), ...(action.systemActionId ? { systemActionId: action.systemActionId } : {}) });
   state.activeAction = planning;
   state.lifecycle = "ActionPlanning";
-  state.stage = "action-planning";
   return planning;
 }
 
@@ -876,7 +1143,6 @@ export function cancelActionPlanning(state) {
   if (state.lifecycle !== "ActionPlanning" || state.activeAction?.status !== "planning") return false;
   state.activeAction = null;
   state.lifecycle = "ActionChoice";
-  state.stage = "action-choice";
   return true;
 }
 
@@ -888,7 +1154,6 @@ export function switchActionPlanning(state, action) {
   if (next) return next;
   state.activeAction = previous;
   state.lifecycle = "ActionPlanning";
-  state.stage = "action-planning";
   return null;
 }
 
@@ -896,16 +1161,18 @@ export function confirmManeuverAction(state, option) {
   const action = state.activeAction;
   const unit = activeUnit(state);
   if (!unit || state.lifecycle !== "ActionPlanning" || action?.status !== "planning" || action.type !== "maneuver" || action.actorId !== unit.id) return null;
-  const planned = plannedManeuver(state, option);
-  if (!planned) return null;
-  const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, subjectIds: [unit.id], actionType: action.type, actionReason: action.reason });
+  const availability = actionAvailability(state, { type: "maneuver", option });
+  if (!availability.available) return null;
+  const planned = availability.details.plan;
+  const continuationEventId = unit.disengageContinuationEventId || null;
+  const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id], actionType: action.type, actionReason: action.reason, planId: planned.id, plannedElements: planned.elements.length, plannedCosts: { ...planned.costs }, start: { position: { ...planned.start.position }, heading: planned.start.heading }, finalState: { position: { ...planned.finalState.position }, heading: planned.finalState.heading }, ...(continuationEventId ? { causeEventId: continuationEventId, continuationOfEventId: continuationEventId } : {}) });
+  if (continuationEventId) delete unit.disengageContinuationEventId;
   const context = actionContext(state, action, declaration.eventId);
   const plan = deepFreeze({ ...planned, actionId: declaration.eventId, actionContext: context });
   state.activeAction = Object.freeze({ ...action, status: "resolving", actionId: declaration.eventId, planId: plan.id });
-  state.maneuverApplication = { planId: plan.id, nextElement: 0, executedMoves: 0, executedTurns: 0, completedElements: [], finished: false };
-  unit.canWait = false;
+  state.maneuverApplication = { planId: plan.id, nextElement: 0, executedMoves: 0, executedTurns: 0, completedElements: [], lastEventId: declaration.eventId, outcomeEventId: null, finished: false };
+  confirmOwnAction(unit);
   state.lifecycle = "ActionResolution";
-  state.stage = "action-resolution";
   return plan;
 }
 
@@ -915,10 +1182,12 @@ export function beginActivation(state) {
   state.lifecycle = "ActivationStart";
   unit.activationStartedThisRound = true;
   unit.canWait = true;
+  delete unit.disengageContinuationEventId;
   unit.evasionLocked = false;
   unit.activationMovement = { elements: [], steps: 0, turns: 0 };
   unit.movementEvasion = 0;
   unit.evasiveManeuver = false;
+  unit.disengageEvasionPenalty = 0;
   if (unit.engineBoostActive) unit.currentSpeed = Math.max(0, unit.currentSpeed - 1);
   unit.engineBoostActive = false;
   unit.usedSystemActions = [];
@@ -936,19 +1205,163 @@ export function beginActivation(state) {
     unit.reactor.currentEnergy = Math.min(unit.reactor.capacity, unit.reactor.currentEnergy + unit.reactor.rechargeRate);
     unit.activationEnergyBudget = unit.reactor.currentEnergy;
   }
-  recordEvent(state, "activation-start", { actorId: unit.id, subjectIds: [unit.id] });
-  state.stage = "action-choice";
+  const activationEvent = recordEvent(state, "activation-start", { actorId: unit.id, subjectIds: [unit.id] });
+  unit.activationId = activationEvent.eventId;
   state.lifecycle = "ActionChoice";
   return true;
 }
 
 export function actionCostReasons(unit, cost) {
-  const resources = activationResources(unit);
+  return insufficientResourceReasons(activationResources(unit), cost).map(reason => reason.message);
+}
+
+function commonAvailabilityReasons(state, unit) {
   const reasons = [];
-  if ((cost.speed || 0) > resources.speed.remaining) reasons.push(`Недостаточно Скорости: требуется ${cost.speed}, доступно ${resources.speed.remaining}`);
-  if ((cost.maneuver || 0) > resources.maneuver.remaining) reasons.push(`Недостаточно Манёвренности: требуется ${cost.maneuver}, доступно ${resources.maneuver.remaining}`);
-  if ((cost.energy || 0) > resources.energy.remaining) reasons.push(`Недостаточно энергии: требуется ${cost.energy}, доступно ${resources.energy.remaining}`);
+  if (state.winner || state.lifecycle === "Finished") reasons.push(availabilityReason("battle.finished", "Бой завершён"));
+  if (!unit) reasons.push(availabilityReason("actor.missing", "Активный юнит отсутствует"));
+  if (state.lifecycle === "ActionResolution" || state.attackApplication || state.maneuverApplication || state.activeAction?.status === "resolving") reasons.push(availabilityReason("action.another-resolving", "Разрешается другое действие"));
   return reasons;
+}
+
+export function actionAvailability(state, request, explicitUnit = null) {
+  const stateActiveUnit = state?.units ? activeUnit(state) : null;
+  const unit = explicitUnit || stateActiveUnit;
+  const evaluatingActiveUnit = Boolean(stateActiveUnit && unit === stateActiveUnit);
+  const action = typeof request === "string" ? { type: request } : request || {};
+  const resources = activationResources(unit);
+  const reasons = evaluatingActiveUnit ? commonAvailabilityReasons(state, unit) : [];
+  let cost = {};
+  let capacityChange = { speed: action.preview?.speedCapacity || 0, maneuver: action.preview?.maneuverCapacity || 0 };
+  let readiness = null;
+  let details = null;
+  if (!unit) return createAvailability({ action, reasons, cost, resources });
+  if (action.type === "maneuver") {
+    if (unit.kind === "squadron" && unit.engagedWith?.length) reasons.push(availabilityReason("maneuver.intercepted", "Обычный манёвр запрещён: эскадрилья связана Перехватом, требуется Отрыв", { linkedIds: [...unit.engagedWith].sort() }));
+    else if (action.option) {
+      const plan = plannedManeuver(state, action.option);
+      if (!plan) reasons.push(availabilityReason("action.invalid", "Маршрут устарел или подменён"));
+      else {
+        cost = plan.costs;
+        details = { plan };
+      }
+    } else if (!hasLegalManeuverRoute(state, unit)) {
+      if (resources.speed.remaining <= 0 && resources.maneuver.remaining <= 0) reasons.push(...insufficientResourceReasons(resources, { speed: 1, maneuver: 1 }));
+      reasons.push(availabilityReason("maneuver.no-route", "Нет допустимого маршрута"));
+    }
+  } else if (action.type === "disengage") {
+    const preview = disengagePreview(state, unit);
+    cost = { speed: preview.speedCost };
+    details = preview;
+    const declaredIds = [...new Set(unit.engagedWith || [])];
+    if (unit.kind !== "squadron" || !declaredIds.length) reasons.push(availabilityReason("disengage.not-intercepted", unit.kind === "squadron" ? "Эскадрилья не связана Перехватом" : "Отрыв доступен только эскадрилье"));
+    else if (preview.linkedIds.length !== declaredIds.length) reasons.push(availabilityReason("disengage.invalid-links", "Связи Перехвата несимметричны или недействительны", { declaredIds: declaredIds.sort(), validIds: preview.linkedIds }));
+    reasons.push(...insufficientResourceReasons(resources, cost));
+  } else if (action.type === "weapon-attack") {
+    const weapon = unit.weapons?.find(candidate => candidate.id === action.slotId);
+    if (!weapon) reasons.push(availabilityReason("action.invalid", "Оружейный слот отсутствует", { slotId: action.slotId || null }));
+    else {
+      cost = { energy: weapon.energyCost || 0 };
+      const weaponState = weaponReadiness(weapon);
+      readiness = { ready: weaponState.ready, state: weaponState.ready ? "ready" : weapon.firedThisRound ? "fired" : "cooldown", cooldownRemaining: weapon.cooldownRemaining || 0 };
+      if (!weaponState.ready) reasons.push(availabilityReason("action.not-ready", weaponState.reason, { firedThisRound: Boolean(weapon.firedThisRound), cooldownRemaining: weapon.cooldownRemaining || 0 }));
+      if (weapon.energyCost > 0 && !unit.reactor) reasons.push(availabilityReason("resource.unavailable", "Требуется реактор", { resource: "energy" }));
+      reasons.push(...insufficientResourceReasons(resources, cost));
+    }
+  } else if (action.type === "system-action") {
+    const definition = SYSTEM_ACTIONS[action.systemActionId];
+    if (definition) {
+      cost = definition.cost;
+      capacityChange = { speed: definition.preview?.speedCapacity || 0, maneuver: definition.preview?.maneuverCapacity || 0 };
+    }
+    if (!definition || unit.kind && unit.kind !== "capital") reasons.push(availabilityReason("action.invalid", "Недоступно этому юниту", { systemActionId: action.systemActionId || null }));
+    else {
+      reasons.push(...insufficientResourceReasons(resources, cost));
+      if (definition.id === "evasive-maneuver" && unit.evasiveManeuver) reasons.push(availabilityReason("action.not-ready", "Манёвр уклонения уже активен", { readiness: "already-active" }));
+      if (definition.oncePerActivation && unit.usedSystemActions?.includes(definition.id)) reasons.push(availabilityReason("action.not-ready", "Уже использовано в этой активации", { readiness: "used-this-activation" }));
+      if (definition.id === "reactor-to-engines" && !(unit.reactor && unit.engineId)) reasons.push(availabilityReason("resource.unavailable", "Требуется реактор и двигатель", { resource: "energy" }));
+      readiness = { ready: !reasons.some(reason => ["action.not-ready", "resource.unavailable"].includes(reason.code)), state: unit.usedSystemActions?.includes(definition.id) ? "used" : "ready" };
+    }
+  } else if (action.type === "end-activation") {
+    cost = {};
+  } else reasons.push(availabilityReason("action.invalid", "Неизвестное действие", { type: action.type || null }));
+  return createAvailability({ action, reasons, cost, resources, capacityChange, readiness, details });
+}
+
+function validDisengageLinks(state, unit) {
+  if (unit?.kind !== "squadron") return [];
+  return [...new Set(unit.engagedWith || [])]
+    .map(id => unitById(state, id))
+    .filter(linked => linked?.kind === "squadron" && linked.sideId !== unit.sideId && hexDistance(unit.position, linked.position) === 1 && linked.engagedWith?.includes(unit.id))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function disengageAllies(state, unit, enemies) {
+  const enemyIds = new Set(enemies.map(enemy => enemy.id));
+  return state.units
+    .filter(candidate => candidate.id !== unit.id && candidate.kind === "squadron" && candidate.sideId === unit.sideId && hexDistance(unit.position, candidate.position) === 1)
+    .filter(candidate => validDisengageLinks(state, candidate).some(enemy => enemyIds.has(enemy.id)))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function disengagePreview(state, unit = activeUnit(state)) {
+  const linkedEnemies = validDisengageLinks(state, unit);
+  const allies = disengageAllies(state, unit, linkedEnemies);
+  const initiative = new Map(state.initiativeOrder.map((id, index) => [id, index]));
+  const nearest = [...linkedEnemies].sort((left, right) => (right.stack || 0) - (left.stack || 0) || (initiative.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (initiative.get(right.id) ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))[0] || null;
+  const speedCost = linkedEnemies.length;
+  const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (nearest?.stack || 1) - 1) * 10 - Math.max(0, linkedEnemies.length - 1) * 10 + allies.length * 10));
+  return deepFreeze({
+    actorId: unit?.id || null,
+    linkedIds: linkedEnemies.map(linked => linked.id),
+    linkedNames: linkedEnemies.map(linked => linked.name || linked.id),
+    allyIds: allies.map(ally => ally.id),
+    nearestId: nearest?.id || null,
+    speedCost,
+    chance,
+    evasionPenalty: -10
+  });
+}
+
+export function disengageReasons(state, unit = activeUnit(state)) {
+  if (unit && unit !== activeUnit(state)) {
+    if (unit.kind !== "squadron") return ["Отрыв доступен только эскадрилье"];
+    const declaredIds = [...new Set(unit.engagedWith || [])];
+    const preview = disengagePreview(state, unit);
+    if (!declaredIds.length) return ["Эскадрилья не связана Перехватом"];
+    if (preview.linkedIds.length !== declaredIds.length) return ["Связи Перехвата несимметричны или недействительны"];
+    return actionCostReasons(unit, { speed: preview.speedCost });
+  }
+  return actionAvailability(state, { type: "disengage" }).reasons.map(reason => reason.message);
+}
+
+export function confirmDisengageAction(state, rollD100 = () => Math.floor(Math.random() * 100) + 1) {
+  const action = state.activeAction;
+  const unit = activeUnit(state);
+  if (!unit || state.lifecycle !== "ActionPlanning" || action?.status !== "planning" || action.type !== "disengage" || action.actorId !== unit.id) return null;
+  const availability = actionAvailability(state, { type: "disengage" });
+  if (!availability.available) return null;
+  const preview = availability.details;
+  const before = deepFreeze({ position: { ...unit.position }, heading: unit.heading, speedSpent: unit.speedSpent || 0, maneuverSpent: unit.maneuverSpent || 0, linkedIds: [...preview.linkedIds] });
+  const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...preview.linkedIds], actionType: action.type, actionReason: action.reason, costs: { speed: preview.speedCost }, chance: preview.chance, start: { position: { ...unit.position }, heading: unit.heading } });
+  if (!spendActivationResource(unit, "speed", preview.speedCost)) return null;
+  const roll = rollD100();
+  const success = Number.isFinite(roll) && roll >= 1 && roll <= preview.chance;
+  unit.disengageEvasionPenalty = (unit.disengageEvasionPenalty || 0) - 10;
+  if (success) {
+    for (const linkedId of preview.linkedIds) {
+      const linked = unitById(state, linkedId);
+      if (linked) linked.engagedWith = (linked.engagedWith || []).filter(id => id !== unit.id);
+    }
+    unit.engagedWith = [];
+  }
+  confirmOwnAction(unit);
+  const after = deepFreeze({ position: { ...unit.position }, heading: unit.heading, speedSpent: unit.speedSpent || 0, maneuverSpent: unit.maneuverSpent || 0, linkedIds: [...(unit.engagedWith || [])] });
+  const resolution = recordEvent(state, "disengage-resolve", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...preview.linkedIds], actionId: declaration.eventId, actionType: action.type, actionReason: action.reason, causeEventId: declaration.eventId, random: { roll }, success, chance: preview.chance, costs: { speed: preview.speedCost }, evasionPenalty: -10, removedLinkIds: success ? [...preview.linkedIds] : [], before, after });
+  unit.disengageContinuationEventId = success ? resolution.eventId : null;
+  const result = deepFreeze({ actionId: declaration.eventId, eventId: resolution.eventId, activationId: unit.activationId, actorId: unit.id, success, roll, chance: preview.chance, costs: { speed: preview.speedCost }, before, after });
+  state.activeAction = null;
+  state.lifecycle = "ActionChoice";
+  return result;
 }
 
 function canPaySystemAction(unit, definition) {
@@ -973,7 +1386,9 @@ export function confirmSystemAction(state, _preview = null) {
   const action = state.activeAction;
   const unit = activeUnit(state);
   const definition = SYSTEM_ACTIONS[action?.systemActionId];
-  if (!unit || state.lifecycle !== "ActionPlanning" || action?.status !== "planning" || action.type !== "system-action" || action.actorId !== unit.id || !definition || !systemActionCondition(unit, definition)) return null;
+  if (!unit || state.lifecycle !== "ActionPlanning" || action?.status !== "planning" || action.type !== "system-action" || action.actorId !== unit.id || !definition) return null;
+  const availability = actionAvailability(state, { type: "system-action", systemActionId: definition.id });
+  if (!availability.available) return null;
   const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, subjectIds: [unit.id], actionType: action.type, actionReason: action.reason, systemActionId: definition.id });
   spendActivationResource(unit, "maneuver", definition.cost.maneuver || 0);
   spendActivationResource(unit, "energy", definition.cost.energy || 0);
@@ -987,12 +1402,11 @@ export function confirmSystemAction(state, _preview = null) {
     unit.speedRemaining = Math.max(0, unit.currentSpeed - unit.speedSpent);
   }
   unit.usedSystemActions.push(definition.id);
-  unit.canWait = false;
+  confirmOwnAction(unit);
   const result = deepFreeze({ actionId: declaration.eventId, actorId: unit.id, systemActionId: definition.id, costs: { ...definition.cost } });
   recordEvent(state, "system-action-resolve", { actorId: unit.id, subjectIds: [unit.id], actionId: declaration.eventId, actionType: action.type, actionReason: action.reason, systemActionId: definition.id, costs: result.costs });
   state.activeAction = null;
   state.lifecycle = "ActionChoice";
-  state.stage = "action-choice";
   return result;
 }
 
@@ -1000,6 +1414,7 @@ export function waitActiveUnit(state) {
   const unit = activeUnit(state);
   if (!unit || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle) || state.activeAction?.status === "resolving" || unit.hasWaited || unit.canWait === false) return false;
   if (state.lifecycle === "ActionPlanning") cancelActionPlanning(state);
+  delete unit.disengageContinuationEventId;
   unit.hasWaited = true;
   unit.canWait = false;
   state.initiativeOrder = [...state.initiativeOrder.filter(id => id !== unit.id), unit.id];
@@ -1009,7 +1424,8 @@ export function waitActiveUnit(state) {
 }
 
 export function endActivation(state) {
-  if (state.winner || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle) || state.attackApplication || state.maneuverApplication) return null;
+  const availability = actionAvailability(state, { type: "end-activation" });
+  if (!availability.available || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle)) return null;
   if (state.lifecycle === "ActionPlanning" && state.activeAction?.status !== "planning") return null;
   const unit = activeUnit(state);
   if (state.lifecycle === "ActionPlanning") cancelActionPlanning(state);
@@ -1020,12 +1436,17 @@ export function endActivation(state) {
     if (stayResolution.destruction) return { destroyed: true, destruction: stayResolution.destruction, stayOutcomes: stayResolution.outcomes };
   }
   unit.canWait = false;
+  delete unit.disengageContinuationEventId;
   if (unit.engineBoostActive) {
     unit.currentSpeed = Math.max(0, unit.currentSpeed - 1);
     unit.speedRemaining = Math.max(0, unit.currentSpeed - unit.speedSpent);
     unit.engineBoostActive = false;
   }
-  for (const weapon of unit.weapons) weapon.overwatch = weaponReadiness(weapon).ready && weapon.targetKinds.includes("squadron");
+  for (const weapon of unit.weapons) {
+    weapon.overwatch = false;
+    const availability = overwatchAvailability(unit, weapon);
+    weapon.overwatch = availability.readiness.eligible && availability.readiness.ready && !availability.reasons.some(reason => ["resource.unavailable", "resource.insufficient"].includes(reason.code));
+  }
   unit.hasActivated = true;
   const nextId = state.initiativeOrder.find(id => !unitById(state, id).hasActivated);
   if (nextId) {

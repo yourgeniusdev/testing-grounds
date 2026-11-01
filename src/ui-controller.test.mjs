@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { beginActivation, createBattleState, unitById } from "./domain.js";
-import { cancelPendingAction, pendingWeaponId, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
+import { cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
 
 function setup() {
   const state = createBattleState();
@@ -40,6 +40,28 @@ test("controller cancellation clears canonical planning and transients together"
   assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(pendingWeaponId(state), null);
   assert.equal(ui.selected, null);
+});
+
+test("UI recalculation clears stale route and target previews before rebuilding current routes", () => {
+  const { state, atlas, ui } = setup();
+  selectPendingAction(state, ui, { type: "maneuver", reason: "player-choice" });
+  ui.selected = { targetId: "stale-target" };
+  ui.hoveredOption = { optionId: "stale-route" };
+  ui.optionTargets = [{ optionId: "stale-route" }];
+  ui.hoveredWeapon = atlas.weapons[0].id;
+  let plannedWith = null;
+
+  const routes = recalculateActionUi(state, ui, atlas, (current, unit, policy) => {
+    plannedWith = { current, unit, policy };
+    return new Map([["current", {}]]);
+  }, "safe");
+
+  assert.equal(routes, ui.routes);
+  assert.equal(ui.routes.has("current"), true);
+  assert.deepEqual({ selected: ui.selected, hoveredOption: ui.hoveredOption, optionTargets: ui.optionTargets, hoveredWeapon: ui.hoveredWeapon, tooltipHex: ui.tooltipHex }, {
+    selected: null, hoveredOption: null, optionTargets: [], hoveredWeapon: null, tooltipHex: null
+  });
+  assert.deepEqual(plannedWith, { current: state, unit: atlas, policy: "safe" });
 });
 
 test("canvas cancellation ignores interactions that progress the active plan", () => {

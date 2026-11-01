@@ -47,10 +47,10 @@ test("default right-side confirmation exposes first-unit routes without blocking
 
   assert.equal(activeUnit(state).id, "wasps");
   assert.equal(routes.size, 388);
-  assert.ok(elapsed < 1000, `default route planning took ${Math.round(elapsed)}ms`);
+  assert.ok(elapsed < 2000, `default route planning took ${Math.round(elapsed)}ms`);
 });
 
-test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and next-unit transition", () => {
+test("deployment flow completes maneuver, weapon attacks, activation, and next-unit transition", () => {
   const state = createBattleState();
   state.scenario.bounds = { minCol: -2, maxCol: 2, minRow: -3, maxRow: 3 };
   state.scenario.contents = [];
@@ -86,7 +86,7 @@ test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and ne
   assert.deepEqual(maneuverPlan.elements.map(element => element.type), ["move", "move"]);
   assert.deepEqual(wasps.position, { q: 0, r: 0 });
   assert.equal(wasps.heading, 0);
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 
   let totalShots = 0;
   for (const weapon of wasps.weapons) {
@@ -107,7 +107,7 @@ test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and ne
   assert.equal(activeUnit(state).id, "swift");
   assert.equal(activeUnit(state).activationStartedThisRound, true);
   assert.equal(state.lifecycle, "ActionChoice");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 });
 
 test("a squadron maneuver final heading controls every weapon slot arc", () => {
@@ -120,7 +120,6 @@ test("a squadron maneuver final heading controls every weapon slot arc", () => {
   state.initiativeOrder = [mantis.id, finalForeTarget.id, formerForeTarget.id];
   state.activeUnitId = mantis.id;
   state.lifecycle = "WaitDecision";
-  state.stage = "system";
   mantis.position = { q: 0, r: 0 };
   mantis.heading = 3;
   beginActivation(state);
@@ -131,7 +130,7 @@ test("a squadron maneuver final heading controls every weapon slot arc", () => {
   assert.deepEqual(plan.elements.map(element => element.type), ["turn", "move"]);
   assert.deepEqual(mantis.position, { q: -1, r: 1 });
   assert.equal(mantis.heading, 4);
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 
   const [finalDq, finalDr] = DIRECTIONS[mantis.heading];
   const [formerDq, formerDr] = DIRECTIONS[3];

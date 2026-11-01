@@ -1,32 +1,32 @@
-import { DIRECTIONS, activeUnit, axialToOffset, confirmDeployment, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, planRoutes, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
+import { DIRECTIONS, actionAvailability, activeUnit, axialToOffset, buildBattleLog, confirmDeployment, confirmDisengageAction, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, overwatchAvailability, planRoutes, resumeManeuverPostEntry, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, headingAngle, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
-import { cancelPendingAction, pendingWeaponId, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
-import { applyAttackStep, availableWeaponAttackTargets, confirmWeaponAttackAction, previewWeaponAttack, resolvePostEntryAA, weaponAttackArc } from "./battle.js";
+import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
+import { applyAttackStep, applyReactionStep, availableWeaponAttackTargets, confirmWeaponAttackAction, planPostEntryAA, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import { VISUALS } from "./config/index.js";
+import { movementAnimationContinuation, planMovementAnimationSegment, reactionAnimationContinuation, sampleMovementAnimationSegment } from "./movement-animation.js";
 
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
-const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "stageLabel", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "engineBoostButton", "engineBoostTooltip", "attackWeaponActions", "combatLog", "clearLogButton"];
+const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "disengageButton", "disengageIcon", "disengageTooltip", "engineBoostButton", "engineBoostTooltip", "attackWeaponActions", "combatLog", "clearLogButton"];
 const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 const tooltipTitle = el.tooltip.querySelector(".hex-tooltip-title");
 const tooltipContent = el.tooltip.querySelector(".hex-tooltip-content");
-const stageNames = { "action-choice": "ДЕЙСТВИЯ", "action-planning": "ПЛАНИРОВАНИЕ", "action-resolution": "ВЫПОЛНЕНИЕ", deployment: "РАССТАНОВКА" };
 const entityImages = new Map();
 let state = createBattleState();
 let ui = { policy: "risky", hoveredAction: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, tooltipInside: false, tooltipTimer: null, animation: null, lastActiveUnit: null, geometry: { size: 38, cx: 0, cy: 0, dpr: 1 } };
 
 function addLog(message, tone = "neutral") {
-  state.log.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, round: state.roundNumber, message, tone });
+  const journalOrder = state.journalSequence = (state.journalSequence ?? 0) + 1;
+  state.log.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, journalOrder, round: state.roundNumber, message, tone });
   state.log = state.log.slice(0, 80);
   renderLog();
 }
 
 function resetBattle() {
   state = createBattleState();
-  ui = { ...ui, hoveredAction: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, animation: null };
+  ui = { ...ui, hoveredAction: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, animation: null, logEventCursor: 0 };
   state.activeUnitId = state.units.find(unit => unit.sideId === "azure")?.id || null;
-  state.stage = "deployment";
   addLog("Расстановка: разместите и подтвердите левую сторону.", "system");
   refresh();
 }
@@ -126,12 +126,8 @@ function optionAtPoint(point) {
 
 function refreshRoutes() {
   const unit = activeUnit(state);
-  ui.routes = shouldShowManeuverRoutes(state) ? planRoutes(state, unit, ui.policy) : new Map();
-  ui.selected = null;
-  ui.hoveredOption = null;
-  ui.optionTargets = [];
+  recalculateActionUi(state, ui, unit, planRoutes, ui.policy);
   hideTooltip();
-  ui.hoveredWeapon = ui.hoveredWeapon && activeUnit(state)?.weapons.some(weapon => weapon.id === ui.hoveredWeapon) ? ui.hoveredWeapon : null;
 }
 
 function refresh() {
@@ -171,27 +167,31 @@ function renderHeader() {
   const finished = state.lifecycle === "Finished" || Boolean(state.winner);
   el.roundNumber.textContent = state.roundNumber;
   el.modeLabel.textContent = deploying ? `РАССТАНОВКА · ${state.lifecycle === "DeploymentLeft" ? "ЛЕВАЯ СТОРОНА" : "ПРАВАЯ СТОРОНА"}` : finished ? "БОЙ ЗАВЕРШЁН" : ui.animation ? "ВЫПОЛНЕНИЕ МАНЁВРА" : state.lifecycle === "ActionChoice" ? "ВЫБОР ДЕЙСТВИЯ" : state.activeAction?.type === "weapon-attack" ? "АТАКА ОРУЖИЕМ" : state.activeAction?.type === "system-action" ? "СИСТЕМНОЕ ДЕЙСТВИЕ" : state.activeAction?.type === "maneuver" ? "ПЛАНИРОВАНИЕ МАНЁВРА" : "АКТИВАЦИЯ";
-  el.stageLabel.textContent = deploying ? "РАССТАНОВКА" : finished ? "ИТОГ" : stageNames[state.stage];
   el.confirmDeploymentButton.hidden = !deploying;
   el.confirmDeploymentButton.disabled = Boolean(ui.animation);
   el.waitButton.hidden = deploying || finished || !unit?.canWait || unit.hasWaited || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
   el.endActivationButton.hidden = deploying || finished;
-  el.endActivationButton.innerHTML = '<span class="action-icon">■</span><span class="action-tooltip"><b>Завершить</b><small>Завершить текущую активацию.</small></span>';
+  const endAvailability = actionAvailability(state, { type: "end-activation" });
+  const endReason = endAvailability.reasons.map(reason => reason.message).join(" · ");
+  el.endActivationButton.innerHTML = `<span class="action-icon">■</span><span class="action-tooltip"><b>Завершить активацию</b><small>${endReason || "Завершить текущую активацию."}</small></span>`;
   el.turnPlaceholders.innerHTML = finished ? placeholderSlots(2) : "";
   el.actionPlaceholders.innerHTML = unit && !finished ? "" : placeholderSlots(2);
   el.routePolicyButton.hidden = !unit || finished;
   el.evasionButton.hidden = !unit || finished;
+  el.disengageButton.hidden = !unit || finished || unit.kind !== "squadron" || !unit.engagedWith?.length;
   el.engineBoostButton.hidden = !unit || finished;
-  el.routePolicyButton.setAttribute("aria-label", state.lifecycle === "ActionChoice" ? "Совершить манёвр" : "Политика маршрута");
+  el.routePolicyButton.setAttribute("aria-label", state.lifecycle === "ActionChoice" ? "Совершить манёвр" : "Настроить маршрут манёвра");
   if (!unit) return;
   const isSquadron = unit.kind === "squadron";
   el.waitButton.disabled = Boolean(ui.animation);
-  el.endActivationButton.disabled = Boolean(ui.animation) || finished || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
+  el.endActivationButton.disabled = Boolean(ui.animation) || !endAvailability.available || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
   const maneuver = maneuverActionPresentation(state, unit);
   const evasive = systemActionPresentation(state, unit, "evasive-maneuver");
+  const disengage = disengageActionPresentation(state, unit);
   const engineBoost = systemActionPresentation(state, unit, "reactor-to-engines");
   const maneuverTile = actionTilePresentation({ selected: maneuver.selected, confirmation: "field", icon: ui.policy === "safe" ? "⬡" : "⚠" });
   const evasiveTile = actionTilePresentation({ selected: evasive.selected, confirmation: "tile", icon: isSquadron ? "✣" : "◇", resolved: unit.evasiveManeuver });
+  const disengageTile = actionTilePresentation({ selected: disengage.selected, confirmation: "tile", icon: "↝" });
   const engineBoostTile = actionTilePresentation({ selected: engineBoost.selected, confirmation: "tile", icon: "»", resolved: unit.engineBoostActive });
   el.routePolicyIcon.textContent = maneuverTile.icon;
   el.routePolicyButton.className = `action-slot ${maneuverTile.className}`.trim();
@@ -200,14 +200,20 @@ function renderHeader() {
   el.routePolicyTooltip.innerHTML = maneuverReason ? `<b>Совершить манёвр</b><small>${maneuverReason}</small>` : maneuver.selected ? (ui.policy === "safe" ? "<b>Безопасный маршрут</b><small>Выберите конечный гекс. Другая плитка или клик вне маршрута переключит/отменит выбор.</small>" : "<b>Рискованный маршрут</b><small>Выберите конечный гекс. Другая плитка или клик вне маршрута переключит/отменит выбор.</small>") : "<b>Совершить манёвр</b><small>Выберите действие, затем конечный гекс маршрута. Фиксированная цена появится после выбора маршрута.</small>";
   el.evasionIcon.textContent = evasiveTile.icon;
   el.evasionTooltip.innerHTML = isSquadron ? "<b>Рассеивание</b><small>Эффект для эскадрилий будет добавлен позже.</small>" : evasive.reasons?.length ? `<b>Манёвр уклонения</b><small>${evasive.reasons.join(" · ")}</small>` : evasive.selected ? "<b>Манёвр уклонения</b><small>Нажмите ещё раз, чтобы подтвердить. Другая плитка переключит выбор; клик вне действий или Esc отменит.</small>" : "<b>Манёвр уклонения</b><small>1 очко манёвренности · бонус движения ×1.5</small>";
+  el.disengageIcon.textContent = disengageTile.icon;
+  const linkedNames = disengage.preview?.linkedNames?.join(", ") || "нет";
+  el.disengageTooltip.innerHTML = disengage.reasons?.length ? `<b>Отрыв</b><small>${disengage.reasons.join(" · ")} · текущие связи: ${linkedNames}</small>` : disengage.selected ? `<b>Отрыв</b><small>Подтвердить: ${disengage.preview.chance}% · Скорость ${disengage.preview.speedCost} · связи: ${linkedNames} · Уклонение −10 независимо от результата.</small>` : `<b>Отрыв</b><small>${disengage.preview?.chance}% · Скорость ${disengage.preview?.speedCost} · связи: ${linkedNames}.</small>`;
   el.engineBoostButton.querySelector(".action-icon").textContent = engineBoostTile.icon;
   el.engineBoostTooltip.innerHTML = engineBoost.reasons?.length ? `<b>Форсаж двигателя</b><small>${engineBoost.reasons.join(" · ")}</small>` : engineBoost.selected ? "<b>Форсаж двигателя</b><small>Нажмите ещё раз, чтобы подтвердить. Другая плитка переключит выбор; клик вне действий или Esc отменит.</small>" : "<b>Форсаж двигателя</b><small>1 энергия · Скорость +1 до конца активации</small>";
   el.routePolicyButton.disabled = Boolean(ui.animation) || !(maneuver.canSelect || maneuver.selected);
   el.evasionButton.disabled = Boolean(ui.animation) || !(evasive.canSelect || evasive.canConfirm);
+  el.disengageButton.disabled = Boolean(ui.animation) || !(disengage.canSelect || disengage.canConfirm);
   el.engineBoostButton.disabled = Boolean(ui.animation) || !(engineBoost.canSelect || engineBoost.canConfirm);
   el.evasionButton.className = `action-slot ${evasiveTile.className}`.trim();
+  el.disengageButton.className = `action-slot ${disengageTile.className}`.trim();
   el.engineBoostButton.className = `action-slot ${engineBoostTile.className}`.trim();
   el.evasionButton.setAttribute("aria-pressed", evasiveTile.ariaPressed);
+  el.disengageButton.setAttribute("aria-pressed", disengageTile.ariaPressed);
   el.engineBoostButton.setAttribute("aria-pressed", engineBoostTile.ariaPressed);
 }
 
@@ -234,7 +240,7 @@ function healthBar(label, value, max, tone, incomingDamage = 0) {
 }
 
 function effectRows(unit) {
-  const effects = [];
+  const effects = interceptionEffectRows(state, unit);
   if (unit.evasiveManeuver) effects.push({ tone: "positive", icon: "◇", name: "Манёвр уклонения", text: "Бонус уклонения усилен", duration: "До конца активации" });
   return effects;
 }
@@ -269,17 +275,20 @@ function renderUnitSummary() {
   }
   const model = unit.kind === "capital" ? unit.hullClassName : unit.squadronModelName;
   const previewSelection = ui.selected ? { ...ui.selected, previewOption: selectedOption() } : null;
-  const routeResources = maneuverResourcePreview(unit, previewSelection, state.stage, signedTurn);
+  const routeOption = previewSelection?.previewOption || previewSelection?.option || null;
+  const routeAvailability = state.activeAction?.type === "maneuver" && routeOption ? actionAvailability(state, { type: "maneuver", option: routeOption }) : null;
+  const routeResources = routeAvailability ? { speedPreview: routeAvailability.forecast.cost.speed, maneuverPreview: routeAvailability.forecast.cost.maneuver } : maneuverResourcePreview(unit, null, signedTurn);
   const fixedPreview = actionResourcePreview(state, unit, ui.hoveredAction);
+  const speedSpendPreview = Math.max(routeResources.speedPreview, fixedPreview.speed || 0);
   const maneuverSpendPreview = Math.max(routeResources.maneuverPreview, fixedPreview.maneuver || 0);
   const routePreview = !(state.activeAction?.type === "weapon-attack" && state.lifecycle === "ActionPlanning") ? selectedRoute() : null;
   const { current: evasion, preview: previewEvasion } = evasionPresentation(unit, routePreview ? { route: routePreview } : null);
   const evasionBonus = previewEvasion - evasion;
   const resources = resourcePresentation(unit);
-  const speedPresentation = segmentedResourcePresentation(resources.speed, { spend: routeResources.speedPreview, capacity: fixedPreview.speedCapacity });
-  const maneuverPresentation = segmentedResourcePresentation(resources.maneuver, { spend: maneuverSpendPreview, capacity: fixedPreview.maneuverCapacity });
-  const speedState = `<div class="resource-state"><span>Скорость <b>${speedPresentation.remaining}/${speedPresentation.capacity}</b></span>${resourceSegments(resources.speed, { spend: routeResources.speedPreview, capacity: fixedPreview.speedCapacity }, "speed")}</div>`;
-  const maneuverState = unit.maneuver !== undefined ? `<div class="resource-state"><span>Манёвренность <b>${maneuverPresentation.remaining}/${maneuverPresentation.capacity}</b></span>${resourceSegments(resources.maneuver, { spend: maneuverSpendPreview, capacity: fixedPreview.maneuverCapacity }, "maneuver")}</div>` : "";
+  const speedPreview = { spend: speedSpendPreview, capacity: fixedPreview.speedCapacity };
+  const maneuverPreview = { spend: maneuverSpendPreview, capacity: fixedPreview.maneuverCapacity };
+  const speedState = `<div class="resource-state"><span>Скорость <b>${resourceMetricsText(resources.speed, speedPreview)}</b></span>${resourceSegments(resources.speed, speedPreview, "speed")}</div>`;
+  const maneuverState = unit.maneuver !== undefined ? `<div class="resource-state"><span>Манёвренность <b>${resourceMetricsText(resources.maneuver, maneuverPreview)}</b></span>${resourceSegments(resources.maneuver, maneuverPreview, "maneuver")}</div>` : "";
   const evasionPreview = evasionBonus > 0 ? `<em>+${evasionBonus}%</em>` : evasionBonus < 0 ? `<i>${evasionBonus}%</i>` : "";
   el.unitSummary.innerHTML = `<div class="unit-identity"><div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-identity-copy"><span class="active-label">${state.winner ? "Последний активный юнит" : "Активный юнит"}</span><strong>${unit.name}</strong><small>${model}</small></div><span class="class-badge" style="color:${unit.color}">${unit.kind === "capital" ? "CAPITAL" : "SQUADRON"}</span></div><section class="inspector-section current-state"><div class="section-title"><span>Текущее состояние</span></div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")}${healthBar("Броня", unit.armor, unit.maxArmor, "armor")}${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}</div>${speedState}${maneuverState}<div class="evasion-state"><span>Уклонение</span><b>${evasion}% ${evasionPreview}</b></div></section><section class="inspector-section status-section"><div class="section-title"><span>Критические повреждения</span><small>${unit.criticals.length}</small></div>${statusList(unit.criticals.map(item => ({ ...item, tone: "negative", icon: "!", name: item.type })), "critical", "Критических повреждений нет")}</section><section class="inspector-section status-section"><div class="section-title"><span>Активные эффекты</span><small>${effectRows(unit).length}</small></div>${statusList(effectRows(unit), "effect", "Активных эффектов нет")}</section>${state.winner ? '<div class="battle-finished">Бой завершён</div>' : ""}`;
 }
@@ -292,14 +301,14 @@ function effectiveShots(unit, weapon) {
 
 function weaponAvailability(unit, weapon) {
   const attacking = state.activeAction?.type === "weapon-attack" && state.lifecycle === "ActionPlanning";
-  const preview = previewWeaponAttack(state, unit.id, weapon.id, "");
-  const reason = preview.reasons.find(candidate => candidate !== "Цель отсутствует");
-  const cooldown = weapon.cooldownRemaining > 0;
-  const insufficientEnergy = reason?.startsWith("Недостаточно энергии") || reason === "Требуется реактор";
-  const unavailable = !["ActionChoice", "ActionPlanning"].includes(state.lifecycle) || Boolean(ui.animation) || Boolean(reason);
+  const availability = actionAvailability(state, { type: "weapon-attack", slotId: weapon.id }, unit);
+  const reason = availability.reasons[0]?.message;
+  const cooldown = availability.readiness?.state === "cooldown";
+  const insufficientEnergy = availability.reasons.some(candidate => candidate.code === "resource.insufficient" && candidate.params.resource === "energy" || candidate.code === "resource.unavailable");
+  const unavailable = Boolean(ui.animation) || !availability.available;
   const selected = state.activeAction?.type === "weapon-attack" && state.activeAction.slotId === weapon.id;
   const status = reason || (selected ? "Выбрано · выберите цель; другая плитка переключит, повторный клик отменит" : attacking ? "Переключить планирование на это оружие" : "Начать планирование атаки");
-  return { unavailable, cooldown, insufficientEnergy, status };
+  return { unavailable, cooldown, insufficientEnergy, status, availability };
 }
 
 function renderWeaponSummary() {
@@ -311,11 +320,12 @@ function renderWeaponSummary() {
   el.attackWeaponActions.innerHTML = unit.weapons.map(weapon => {
     const availability = weaponAvailability(unit, weapon);
     const selection = weaponSelectionPresentation(state, weapon.id);
-    const aa = unit.kind === "capital" && weapon.targetKinds.includes("squadron") ? " · ПВО" : "";
+    const overwatch = overwatchAvailability(unit, weapon);
+    const aa = weapon.targetKinds.includes("squadron") ? ` · ПВО · ${overwatch.readiness.active ? "Наблюдение" : overwatch.readiness.eligible && overwatch.readiness.ready ? "сохранится при завершении" : overwatch.readiness.reason}` : "";
     const icon = availability.cooldown ? weapon.cooldownRemaining : weapon.visual.projectile === "beam" ? "━" : weapon.visual.projectile === "torpedo" ? "◆" : weapon.visual.projectile === "missile" ? "➤" : "•";
     const tile = actionTilePresentation({ selected: selection.selected, confirmation: "field", icon });
     const energyIcon = availability.insufficientEnergy ? '<span class="energy-warning" aria-hidden="true">ϟ</span>' : "";
-    return `<span class="action-slot-shell ${availability.unavailable ? "disabled" : ""}" data-weapon-id="${weapon.id}" tabindex="0"><button type="button" class="action-slot weapon-action ${tile.className} ${availability.cooldown ? "cooldown" : ""}" aria-label="${weapon.name}" aria-pressed="${tile.ariaPressed}" ${availability.unavailable ? "disabled" : ""}><span class="action-icon">${tile.icon}</span>${energyIcon}</button><span class="action-tooltip"><b>${weapon.name}</b><small>${deliveryNames[weapon.delivery]} · ${weapon.weaponClass} · ${weapon.mount}${aa}<br>${weapon.accuracy}% точность · ${effectiveShots(unit, weapon)}×${weapon.damage} урон<br>${weapon.effectiveRange}/${weapon.maxRange} гекс. · крит ${weapon.critChance}%${weapon.energyCost ? `<br>${weapon.energyCost} энергии` : ""}<br>${availability.status}</small></span></span>`;
+    return `<span class="action-slot-shell ${availability.unavailable ? "disabled" : ""}" data-weapon-id="${weapon.id}" tabindex="0"><button type="button" class="action-slot weapon-action ${tile.className} ${availability.cooldown ? "cooldown" : ""} ${overwatch.readiness.active ? "overwatch" : ""}" aria-label="${weapon.name}" aria-pressed="${tile.ariaPressed}" ${availability.unavailable ? "disabled" : ""}><span class="action-icon">${tile.icon}</span>${overwatch.readiness.active ? '<span class="overwatch-indicator">Н</span>' : ""}${energyIcon}</button><span class="action-tooltip"><b>${weapon.name}</b><small>${deliveryNames[weapon.delivery]} · ${weapon.weaponClass} · ${weapon.mount}${aa}<br>${weapon.accuracy}% точность · ${effectiveShots(unit, weapon)}×${weapon.damage} урон<br>${weapon.effectiveRange}/${weapon.maxRange} гекс. · крит ${weapon.critChance}%${weapon.energyCost ? `<br>${weapon.energyCost} энергии` : ""}<br>${availability.status}</small></span></span>`;
   }).join("");
   el.attackWeaponActions.querySelectorAll("[data-weapon-id]").forEach(slot => {
     const showPreview = () => {
@@ -354,11 +364,13 @@ function renderResourceBar() {
   const energy = resourcePresentation(unit).energy;
   const fixedPreview = actionResourcePreview(state, unit, ui.hoveredAction);
   const preview = Math.min(energy.remaining, fixedPreview.energy);
-  el.energyResource.innerHTML = `<span class="energy-label"><b>${unit.name}</b><span>Энергия ${energy.remaining}/${energy.capacity}</span></span>${resourceSegments(energy, { spend: preview }, "energy")}`;
+  const energyPreview = { spend: preview };
+  el.energyResource.innerHTML = `<span class="energy-label"><b>${unit.name}</b><span>Энергия · ${resourceMetricsText(energy, energyPreview)}</span></span>${resourceSegments(energy, energyPreview, "energy")}`;
 }
 
 function renderLog() {
-  el.combatLog.innerHTML = state.log.map(entry => `<li class="${entry.tone}"><time>R${entry.round}</time><span>${entry.message}</span></li>`).join("") || '<li class="empty-log">Журнал пуст</li>';
+  const entries = buildBattleLog(state, ui.logEventCursor || 0);
+  el.combatLog.innerHTML = entries.map(entry => `<li class="${entry.tone}"><time>R${entry.round}</time><span>${entry.message}</span></li>`).join("") || '<li class="empty-log">Журнал пуст</li>';
 }
 
 function imageFor(type, color, stack) {
@@ -438,8 +450,10 @@ function drawHex(position) {
   if (contents.some(content => content.kind !== "object")) { fill = "rgba(244,200,97,.10)"; stroke = "rgba(244,200,97,.45)"; }
   if (contents.some(content => content.kind === "object") || (occupant && shouldHighlightOccupiedHex(state.lifecycle))) { fill = "rgba(255,102,125,.09)"; stroke = "rgba(255,102,125,.42)"; }
   const event = selectedEventAt(position);
+  const previewKinds = routePreviewKindsAt(selectedRoute(), position);
   if (event?.hazards.length) { fill = "rgba(244,200,97,.20)"; stroke = "rgba(244,200,97,.82)"; width = 2; }
-  if (event?.interceptors.length) { fill = event.hazards.length ? fill : "rgba(255,158,94,.20)"; stroke = "#ff9e5e"; width = 2.5; }
+  if (previewKinds.aa) { fill = "rgba(179,76,88,.14)"; stroke = "rgba(196,92,104,.78)"; width = 2; }
+  if (event?.interceptors.length) { fill = previewKinds.aa || event.hazards.length ? fill : "rgba(198,126,75,.15)"; stroke = previewKinds.aa ? "rgba(211,125,84,.92)" : "rgba(211,137,83,.82)"; width = 2.5; }
   if (ui.hovered && key(ui.hovered.q, ui.hovered.r) === key(position.q, position.r)) {
     if (route && selectedRoute()) fill = "rgba(101,244,178,.032)";
     stroke = route ? "#65f4b2" : "#8aa0b6"; width = 2;
@@ -451,7 +465,8 @@ function drawHex(position) {
   if (event?.interceptors.length) ctx.setLineDash([5, 4]);
   ctx.stroke(); ctx.setLineDash([]);
   if (event?.hazards.length) { hexPath(x, y, ui.geometry.size - 8); ctx.strokeStyle = "#f4c861"; ctx.lineWidth = 2; ctx.stroke(); }
-  if (event?.interceptors.length) { hexPath(x, y, ui.geometry.size - 3); ctx.strokeStyle = "#ff9e5e"; ctx.lineWidth = 2.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]); }
+  if (previewKinds.aa) { hexPath(x, y, ui.geometry.size - 6); ctx.strokeStyle = "rgba(196,92,104,.86)"; ctx.lineWidth = 2; ctx.setLineDash([2, 3]); ctx.stroke(); ctx.setLineDash([]); }
+  if (event?.interceptors.length) { hexPath(x, y, ui.geometry.size - 3); ctx.strokeStyle = "rgba(211,137,83,.92)"; ctx.lineWidth = 2.5; ctx.setLineDash([7, 4]); ctx.stroke(); ctx.setLineDash([]); }
   if (route && key(position.q, position.r) !== key(activeUnit(state).position.q, activeUnit(state).position.r)) { ctx.fillStyle = "rgba(101,244,178,.7)"; ctx.beginPath(); ctx.arc(x, y, 2.2, 0, Math.PI * 2); ctx.fill(); }
   const { col, row } = axialToOffset(position.q, position.r);
   ctx.fillStyle = "rgba(116,137,158,.36)"; ctx.font = "7px monospace"; ctx.textAlign = "center"; ctx.fillText(`${col}:${row}`, x, y + ui.geometry.size * .69);
@@ -613,33 +628,33 @@ function startMovement(option = selectedOption()) {
   const unit = activeUnit(state);
   const plan = confirmManeuverAction(state, option);
   if (!plan) { refresh(); return; }
-  ui.animation = { kind: "movement", unitId: unit.id, unitName: unit.name, sideId: unit.sideId, glyph: unit.glyph, color: unit.color, stack: unit.stack, size: VISUALS[unit.glyph].size, plan, nextElement: 0, executedMoves: 0, lastEvasion: unit.movementEvasion };
+  ui.animation = { kind: "movement", unitId: unit.id, unitName: unit.name, sideId: unit.sideId, glyph: unit.glyph, color: unit.color, stack: unit.stack, size: VISUALS[unit.glyph].size, plan, nextElement: 0 };
   document.body.classList.add("animating");
   renderHeader();
   executeNextManeuverElement();
 }
 
+function movementEffects() {
+  return {
+    resolvePostEntry({ state: current, unit, plan, elementIndex, causeEventId }) {
+      const reactionPlan = planPostEntryAA(current, unit, { ...plan.actionContext, planId: plan.id, elementIndex, causeEventId });
+      return reactionPlan ? { pending: true, plan: reactionPlan } : [];
+    }
+  };
+}
+
 function executeNextManeuverElement() {
   const animation = ui.animation;
   if (!animation || animation.kind !== "movement") return;
-  const result = executeManeuverElement(state, animation.plan, animation.nextElement, {
-    resolvePostEntry({ state: current, unit, plan, elementIndex, causeEventId }) {
-      return resolvePostEntryAA(current, unit, { planId: plan.id, elementIndex, causeEventId });
-    }
-  });
-  for (const outcome of result.hazardOutcomes || []) {
-    if (!outcome.hit) addLog(`${animation.unitName} избегает эффекта «${outcome.consequence.sourceName}».`, "safe");
-    else addLog(`${animation.unitName}: ${outcome.consequence.sourceName} наносит ${outcome.damage} урона.`, "danger");
-  }
-  animation.lastEvasion = unitById(state, animation.unitId)?.movementEvasion ?? animation.lastEvasion;
+  const segment = planMovementAnimationSegment(animation.plan, animation.nextElement, elementIndex => executeManeuverElement(state, animation.plan, elementIndex, movementEffects()));
+  const result = segment.result;
   if (result.status === "invalid") { finishMovement(result); return; }
-  if (result.transition) {
-    animation.transition = result.transition;
+  if (segment.transitions.length) {
+    animation.segment = segment;
     animation.started = performance.now();
-    animation.x = axialToPixel(result.transition.before.position).x;
-    animation.y = axialToPixel(result.transition.before.position).y;
-    animation.heading = result.transition.before.heading ?? result.transition.after.heading ?? 0;
-    if (result.transition.type === "move") animation.executedMoves++;
+    animation.x = axialToPixel(segment.transitions[0].before.position).x;
+    animation.y = axialToPixel(segment.transitions[0].before.position).y;
+    animation.heading = segment.transitions[0].before.heading ?? segment.transitions[0].after.heading ?? 0;
     animation.result = result;
     requestAnimationFrame(animate);
     return;
@@ -649,25 +664,69 @@ function executeNextManeuverElement() {
 
 function animate(now) {
   const animation = ui.animation;
-  if (!animation?.transition) return;
-  const transition = animation.transition;
-  const duration = transition.type === "move" ? 320 : 280;
+  if (!animation?.segment) return;
+  if (animation.kind === "movement" && !unitById(state, animation.unitId)) { finishMovement(animation.result); return; }
+  const segment = animation.segment;
+  const turnOnly = segment.transitions.length === 1 && segment.transitions[0].type !== "move";
+  const duration = turnOnly ? 280 : 320 * segment.transitions.length;
   const progress = Math.min(1, Math.max(0, (now - animation.started) / duration));
-  const eased = 1 - Math.pow(1 - progress, 3);
+  const sample = sampleMovementAnimationSegment(segment, turnOnly ? 1 - Math.pow(1 - progress, 3) : progress);
+  const transition = sample.transition;
   const start = axialToPixel(transition.before.position);
   const end = axialToPixel(transition.after.position);
-  animation.x = start.x + (end.x - start.x) * eased;
-  animation.y = start.y + (end.y - start.y) * eased;
+  animation.x = start.x + (end.x - start.x) * sample.progress;
+  animation.y = start.y + (end.y - start.y) * sample.progress;
   const fromHeading = transition.before.heading ?? animation.heading;
   const toHeading = transition.after.heading ?? fromHeading;
-  animation.heading = fromHeading + signedTurn(fromHeading, toHeading) * eased;
+  animation.heading = fromHeading + signedTurn(fromHeading, toHeading) * sample.progress;
   draw();
   if (progress < 1) { requestAnimationFrame(animate); return; }
   const result = animation.result;
-  animation.transition = null;
-  animation.nextElement++;
-  if (result.status === "executed") executeNextManeuverElement();
+  animation.segment = null;
+  const continuation = movementAnimationContinuation(result);
+  if (continuation === "reaction") { startReactionAnimation(result.reactionPlan); return; }
+  animation.nextElement += segment.elementCount;
+  if (continuation === "next") executeNextManeuverElement();
   else finishMovement(result);
+}
+
+function startReactionAnimation(plan) {
+  const movement = ui.animation;
+  if (!movement || movement.kind !== "movement" || !plan) { finishMovement({ status: "invalid" }); return; }
+  movement.reaction = { plan, from: { ...unitById(state, plan.attackerId).position }, stepIndex: 0, started: performance.now() };
+  requestAnimationFrame(animateReaction);
+}
+
+function finishReactionAnimation(movement, reaction) {
+  movement.reaction = null;
+  const effects = unitById(state, movement.unitId) ? movementEffects() : {};
+  const resumed = resumeManeuverPostEntry(state, movement.plan, effects);
+  const continuation = reactionAnimationContinuation(resumed);
+  if (continuation === "reaction") { startReactionAnimation(resumed.reactionPlan); return; }
+  if (continuation === "next") {
+    movement.nextElement = resumed.executedElements;
+    executeNextManeuverElement();
+  } else finishMovement(resumed.status === "invalid" ? reaction.terminalResult : resumed);
+}
+
+function animateReaction(now) {
+  const movement = ui.animation;
+  const reaction = movement?.reaction;
+  if (!movement || movement.kind !== "movement" || !reaction) return;
+  const previous = ui.animation;
+  ui.animation = { kind: "attack", ...reaction };
+  draw();
+  ui.animation = previous;
+  const elapsed = now - reaction.started;
+  while (!reaction.terminalResult && reaction.stepIndex < reaction.plan.steps.length && elapsed >= reaction.plan.steps[reaction.stepIndex].arrivalTime) {
+    const result = applyReactionStep(state, reaction.plan, reaction.stepIndex);
+    reaction.stepIndex++;
+    renderUnitSummary();
+    renderLog();
+    if (result.status !== "applied" || !unitById(state, movement.unitId)) reaction.terminalResult = result;
+  }
+  if (elapsed < reaction.plan.duration + 160 && (reaction.stepIndex < reaction.plan.steps.length || reaction.terminalResult || reaction.stepIndex === reaction.plan.steps.length)) { requestAnimationFrame(animateReaction); return; }
+  finishReactionAnimation(movement, reaction);
 }
 
 function finishMovement(result) {
@@ -675,15 +734,7 @@ function finishMovement(result) {
   if (!animation) return;
   const unit = unitById(state, animation.unitId);
   ui.animation = null; ui.selected = null; document.body.classList.remove("animating");
-  if (result?.status === "destroyed") {
-    addLog(`${animation.unitName} уничтожен. На позиции появляется поле обломков.`, "danger");
-    if (result.destruction?.winner) addLog(`Победа флотилии ${result.destruction.winner}.`, "system");
-    refresh();
-    return;
-  }
-  if (!unit) { refresh(); return; }
-  const suffix = result?.status === "stopped" ? " досрочно" : "";
-  addLog(`${unit.name} завершает манёвр${suffix}: ${animation.executedMoves} шаг., уклонение +${animation.lastEvasion}%.`, unit.sideId);
+  if (result?.status === "destroyed" || !unit) { refresh(); return; }
   refresh();
 }
 
@@ -874,8 +925,15 @@ function chooseSystemAction(systemActionId) {
 }
 
 bindActionPreview(el.evasionButton, { type: "system-action", systemActionId: "evasive-maneuver" });
+bindActionPreview(el.disengageButton, { type: "disengage" });
 bindActionPreview(el.engineBoostButton, { type: "system-action", systemActionId: "reactor-to-engines" });
 el.evasionButton.addEventListener("click", () => chooseSystemAction("evasive-maneuver"));
+el.disengageButton.addEventListener("click", () => {
+  if (ui.animation) return;
+  if (state.activeAction?.type === "disengage") confirmDisengageAction(state);
+  else chooseAction({ type: "disengage", reason: "player-choice" });
+  refresh();
+});
 el.engineBoostButton.addEventListener("click", () => chooseSystemAction("reactor-to-engines"));
 el.waitButton.addEventListener("click", () => {
   const unit = activeUnit(state);
@@ -932,7 +990,7 @@ el.tooltip.addEventListener("click", event => {
     refresh();
   }
 });
-el.clearLogButton.addEventListener("click", () => { state.log = []; renderLog(); });
+el.clearLogButton.addEventListener("click", () => { state.log = []; ui.logEventCursor = state.sequence; renderLog(); });
 document.addEventListener("click", event => {
   if (ui.animation || event.defaultPrevented) return;
   const target = event.target;

@@ -466,14 +466,14 @@ test("known AA preview is descriptive and consumes neither RNG nor readiness", (
 
   const route = planRoutes(state, mover, "risky").get("1,0");
 
-  assert.deepEqual(route.previewConsequences, [{ kind: "aa", sourceId: "aa-owner", sourceName: "AA Owner", slotId: "aa", effect: "AA reaction", probability: 0.55, min: 0, max: 6, expectedHarm: 3.3, negative: true, guaranteed: false }]);
+  assert.deepEqual(route.previewConsequences, [{ kind: "aa", sourceId: "aa-owner", sourceName: "AA Owner", slotId: "aa", effect: "AA reaction", probability: 0.55, min: 0, max: 6, expectedHarm: 3.3, negative: true, guaranteed: false, position: { q: 1, r: 0 } }]);
   assert.deepEqual({ units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState }, before);
   assert.equal(randomCalls, 0);
   assert.equal(owner.weapons[0].overwatch, true);
   assert.equal(owner.weapons[0].firedThisRound, false);
 });
 
-test("hidden hazards and reactions neither exclude routes nor appear in preview descriptors", () => {
+test("hidden hazards, AA, and interception neither exclude routes nor appear in preview descriptors", () => {
   const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
   const hiddenHazard = terrain("minefield", {
     id: "hidden-hazard",
@@ -482,7 +482,8 @@ test("hidden hazards and reactions neither exclude routes nor appear in preview 
     hazard: { probability: 1, min: 9, max: 9, effect: "secret damage" }
   });
   const hiddenAA = aaOwner({ hidden: true });
-  const state = battle(mover, { units: [hiddenAA], contents: [hiddenHazard] });
+  const hiddenInterceptor = unit({ id: "hidden-interceptor", sideId: "crimson", position: { q: 2, r: 0 }, hidden: true });
+  const state = battle(mover, { units: [hiddenAA, hiddenInterceptor], contents: [hiddenHazard] });
 
   const safe = planRoutes(state, mover, "safe").get("1,0");
   const risky = planRoutes(state, mover, "risky").get("1,0");

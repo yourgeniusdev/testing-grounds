@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { beginActionPlanning, confirmManeuverAction, destroyUnit, executeManeuverElement, movementEvasion, planRoutes, resolvePostEntryInterceptions } from "./domain.js";
-import { resolvePostEntryAA } from "./battle.js";
+import { beginActionPlanning, buildBattleLog, buildManeuverLog, cancelActionPlanning, confirmManeuverAction, destroyUnit, executeManeuverElement, movementEvasion, planRoutes, resolvePostEntryInterceptions, resumeManeuverPostEntry } from "./domain.js";
+import { applyReactionStep, planPostEntryAA, resolvePostEntryAA } from "./battle.js";
 import { buildManeuverOptions } from "./ui-rules.js";
 
 function unit(overrides = {}) {
@@ -45,7 +45,6 @@ function battle(mover, { units = [], contents = [] } = {}) {
     activeUnitId: mover.id,
     roundNumber: 1,
     lifecycle: "ActionChoice",
-    stage: "action-choice",
     activeAction: null,
     maneuverApplication: null,
     attackApplication: null,
@@ -146,6 +145,28 @@ test("confirmation revalidates executor, start, adjacency, traversal, and resour
   });
 });
 
+test("route preview becomes stale after position, heading, traversal cost, or resource changes", async t => {
+  const cases = [
+    ["position", ({ mover }) => { mover.position = { q: 0, r: 1 }; }],
+    ["heading", ({ mover }) => { mover.heading = 1; }],
+    ["cost", ({ state }) => { state.scenario.contents.push({ id: "cost", kind: "terrain", type: "asteroidField", position: { q: 1, r: 0 } }); }],
+    ["resource", ({ mover }) => { mover.currentSpeed = 0; }]
+  ];
+
+  for (const [name, mutate] of cases) await t.test(name, () => {
+    const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+    const state = battle(mover);
+    const option = optionAt(state, mover, "1,0", 0);
+    beginActionPlanning(state, { type: "maneuver", reason: "test" });
+
+    mutate({ state, mover });
+
+    assert.equal(confirmManeuverAction(state, option), null);
+    assert.equal(mover.speedSpent, 0);
+    assert.equal(state.maneuverApplication, null);
+  });
+});
+
 test("a completely empty maneuver is rejected", () => {
   const mover = unit({ kind: "capital", heading: 0, maneuver: 2, maneuverRemaining: 2 });
   const state = battle(mover);
@@ -230,7 +251,7 @@ test("executor charges each move and turn, including the final turn, before appl
   assert.equal(first.status, "executed");
   assert.equal(first.transition.maneuverCost, 1);
   assert.equal(mover.heading, 1);
-  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, stage: state.stage }, { speedSpent: 0, maneuverSpent: 1, stage: "action-resolution" });
+  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, lifecycle: state.lifecycle }, { speedSpent: 0, maneuverSpent: 1, lifecycle: "ActionResolution" });
 
   const second = executeManeuverElement(state, plan, 1);
   assert.equal(second.status, "executed");
@@ -241,7 +262,7 @@ test("executor charges each move and turn, including the final turn, before appl
   const third = executeManeuverElement(state, plan, 2);
   assert.equal(third.status, "completed");
   assert.equal(mover.heading, 0);
-  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, stage: state.stage }, { speedSpent: 1, maneuverSpent: 2, stage: "action-choice" });
+  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, lifecycle: state.lifecycle }, { speedSpent: 1, maneuverSpent: 2, lifecycle: "ActionChoice" });
 });
 
 test("illegal next element stops at the last legal state without rolling back completed work", () => {
@@ -262,7 +283,7 @@ test("illegal next element stops at the last legal state without rolling back co
     maneuverSpent: 0,
     evasion: movementEvasion(1)
   });
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 });
 
 test("unaffordable next element stops and only executed elements affect resources and Evasion", () => {
@@ -281,7 +302,7 @@ test("unaffordable next element stops and only executed elements affect resource
   assert.deepEqual(mover.position, { q: 1, r: 0 });
   assert.equal(mover.speedSpent, 1);
   assert.equal(mover.movementEvasion, movementEvasion(1));
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 });
 
 test("actual movement facts count entered hexes rather than terrain Speed surcharge", () => {
@@ -460,7 +481,13 @@ test("lethal hazard stops immediately, retains completed spending, and creates d
   assert.equal(mover.movementEvasion, movementEvasion(1));
   assert.equal(state.units.includes(mover), false);
   assert.deepEqual(result.destruction.debris.position, { q: 1, r: 0 });
+  assert.equal(state.scenario.contents.filter(content => content.id.startsWith(`debris-${mover.id}-`)).length, 1);
+  assert.equal(state.activeAction, null);
+  assert.equal(state.maneuverApplication, null);
+  assert.equal(state.attackApplication, null);
   assert.equal(executeManeuverElement(state, plan, 1).status, "invalid");
+  assert.equal(destroyUnit(state, mover), null);
+  assert.equal(state.scenario.contents.filter(content => content.id.startsWith(`debris-${mover.id}-`)).length, 1);
   assert.equal(randomCalls, 2);
 });
 
@@ -494,19 +521,130 @@ test("maneuver step hazard events carry plan, step, and cause context", () => {
   executeManeuverElement(state, plan, 0);
 
   const actionEvents = state.events.filter(event => event.action !== "activation-action-confirm");
-  assert.deepEqual(actionEvents.map(event => event.action), ["maneuver-exit", "maneuver-move", "hazard-check", "damage", "destroy", "debris-create"]);
-  const [exit, move, check, damage, destruction, debris] = actionEvents;
-  for (const event of actionEvents) {
-    assert.equal(event.planId, plan.id);
-    assert.equal(event.elementIndex, 0);
-  }
+  assert.deepEqual(actionEvents.map(event => event.action), ["maneuver-exit", "maneuver-move", "hazard-check", "damage", "destroy", "maneuver-stop", "debris-create"]);
+  const [exit, move, check, damage, destruction, stop, debris] = actionEvents;
+  for (const event of actionEvents) assert.equal(event.planId, plan.id);
+  for (const event of actionEvents.slice(0, 5)) assert.equal(event.elementIndex, 0);
+  assert.equal(stop.elementIndex, undefined);
+  assert.equal(debris.elementIndex, 0);
   assert.equal(move.causeEventId, exit.eventId);
   assert.equal(check.causeEventId, move.eventId);
   assert.equal(damage.causeEventId, check.eventId);
   assert.equal(destruction.causeEventId, damage.eventId);
-  assert.equal(debris.causeEventId, destruction.eventId);
+  assert.equal(stop.causeEventId, destruction.eventId);
+  assert.equal(debris.causeEventId, stop.eventId);
+  assert.equal(stop.reason, "hazard");
   assert.equal(damage.cause, "hazard:mines");
   assert.deepEqual(check.position, { q: 1, r: 0 });
+});
+
+test("completed maneuver events and user log preserve deterministic order and causal action context", () => {
+  const mover = unit({ name: "Scout", currentSpeed: 2, speedRemaining: 2, maneuver: 1, maneuverRemaining: 1 });
+  const state = battle(mover, { contents: [hazard({ q: 1, r: 0 }, { hazard: { probability: 0, min: 3, max: 3, effect: "integrity damage" } })] });
+  state.rng = () => 1;
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
+
+  assert.equal(executeManeuverElement(state, plan, 0).status, "executed");
+  assert.equal(executeManeuverElement(state, plan, 1).status, "completed");
+
+  const actionEvents = state.events.filter(event => event.actionId === plan.actionId);
+  assert.deepEqual(actionEvents.map(event => event.action), [
+    "activation-action-confirm",
+    "maneuver-exit",
+    "maneuver-move",
+    "hazard-check",
+    "maneuver-exit",
+    "maneuver-move",
+    "maneuver-complete"
+  ]);
+  assert.deepEqual(actionEvents.map(event => event.eventOrder), [...actionEvents.map(event => event.eventOrder)].sort((left, right) => left - right));
+  assert.equal(actionEvents.every(event => event.activationId === undefined && event.lifecycle !== "movement"), true);
+  assert.equal(actionEvents[1].causeEventId, actionEvents[0].eventId);
+  assert.equal(actionEvents[2].causeEventId, actionEvents[1].eventId);
+  assert.equal(actionEvents[3].causeEventId, actionEvents[2].eventId);
+  assert.equal(actionEvents[4].causeEventId, actionEvents[2].eventId);
+  assert.equal(actionEvents[5].causeEventId, actionEvents[4].eventId);
+  assert.equal(actionEvents[6].causeEventId, actionEvents[5].eventId);
+  assert.deepEqual(buildManeuverLog(state).map(entry => entry.eventId), actionEvents.filter(event => event.action !== "maneuver-exit").map(event => event.eventId));
+  assert.match(buildManeuverLog(state).at(-1).message, /завершён штатно/);
+});
+
+test("combined battle log preserves legacy and event chronology without duplicate AA or destruction entries", () => {
+  const mover = unit({ name: "Scout", currentSpeed: 1, speedRemaining: 1 });
+  const owner = unit({ id: "owner", name: "Guardian", kind: "capital", sideId: "crimson", position: { q: 0, r: 0 }, heading: 0, weapons: [aaWeapon({ damage: 20 })] });
+  const state = battle(mover, { units: [owner] });
+  state.log.push({ id: "before", journalOrder: state.journalSequence = 1, round: 1, message: "before", tone: "system" });
+  const plan = chooseManeuver(state, optionAt(state, mover, "1,0"));
+
+  executeManeuverElement(state, plan, 0, {
+    resolvePostEntry({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) {
+      return resolvePostEntryAA(current, entered, { ...currentPlan.actionContext, planId: currentPlan.id, elementIndex, causeEventId }, () => 1, () => 0);
+    }
+  });
+  state.log.unshift({ id: "after", journalOrder: state.journalSequence = (state.journalSequence ?? 0) + 1, round: 1, message: "after", tone: "system" });
+
+  const entries = buildBattleLog(state);
+  assert.equal(entries[0].message, "after");
+  assert.equal(entries.at(-1).message, "before");
+  assert.equal(entries.filter(entry => /реакция ПВО/.test(entry.message)).length, 1);
+  assert.equal(entries.filter(entry => /Scout уничтожен/.test(entry.message)).length, 1);
+  assert.deepEqual(entries.filter(entry => entry.eventId).map(entry => entry.journalOrder), [...entries.filter(entry => entry.eventId).map(entry => entry.journalOrder)].sort((left, right) => right - left));
+});
+
+test("reaction miss is a maneuver-step event and appears once through the event-derived journal", () => {
+  const mover = unit({ name: "Scout", currentSpeed: 1, speedRemaining: 1 });
+  const owner = unit({ id: "owner", name: "Guardian", kind: "capital", sideId: "crimson", position: { q: 0, r: 0 }, heading: 0, weapons: [aaWeapon({ accuracy: 50 })] });
+  const state = battle(mover, { units: [owner] });
+  const plan = chooseManeuver(state, optionAt(state, mover, "1,0"));
+
+  assert.equal(executeManeuverElement(state, plan, 0, {
+    resolvePostEntry({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) {
+      return resolvePostEntryAA(current, entered, { ...currentPlan.actionContext, planId: currentPlan.id, elementIndex, causeEventId }, () => 100, () => 0);
+    }
+  }).status, "completed");
+
+  const move = state.events.find(event => event.action === "maneuver-move");
+  const declaration = state.events.find(event => event.action === "aa-reaction-declare");
+  const miss = state.events.find(event => event.action === "aa-reaction-miss");
+  assert.deepEqual({ actionId: miss.actionId, causeEventId: miss.causeEventId, elementIndex: miss.elementIndex }, {
+    actionId: declaration.eventId,
+    causeEventId: move.eventId,
+    elementIndex: move.elementIndex
+  });
+  assert.ok(move.eventOrder < declaration.eventOrder && declaration.eventOrder < miss.eventOrder);
+  assert.equal(buildBattleLog(state).filter(entry => /промах/.test(entry.message)).length, 1);
+  assert.equal(state.log.some(entry => /промах/.test(entry.message)), false);
+});
+
+test("event cursor clears derived log entries without deleting domain events", () => {
+  const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
+  const state = battle(mover);
+  const first = chooseManeuver(state, optionAt(state, mover, "1,0"));
+  assert.equal(executeManeuverElement(state, first, 0).status, "completed");
+  const cursor = state.sequence;
+  const preservedEvents = [...state.events];
+  state.log = [];
+
+  assert.deepEqual(buildBattleLog(state, cursor), []);
+  beginActionPlanning(state, { type: "maneuver", reason: "test" });
+  const second = confirmManeuverAction(state, buildManeuverOptions(mover, planRoutes(state, mover, "risky").get("2,0:0"))[0]);
+  assert.equal(executeManeuverElement(state, second, 0).status, "completed");
+  assert.equal(state.events.slice(0, preservedEvents.length).every((event, index) => event === preservedEvents[index]), true);
+  assert.equal(buildBattleLog(state, cursor).every(entry => entry.eventOrder > cursor), true);
+  assert.ok(buildBattleLog(state, cursor).length > 0);
+});
+
+test("planning and cancellation do not create maneuver events or user log entries", () => {
+  const mover = unit();
+  const state = battle(mover);
+  const before = structuredClone({ events: state.events, sequence: state.sequence, log: state.log });
+
+  beginActionPlanning(state, { type: "maneuver", reason: "test" });
+  optionAt(state, mover, "1,0");
+  assert.equal(cancelActionPlanning(state), true);
+
+  assert.deepEqual({ events: state.events, sequence: state.sequence, log: state.log }, before);
+  assert.deepEqual(buildManeuverLog(state), []);
 });
 
 test("post-entry interception resolver links every eligible adjacent enemy in stable deduplicated order", () => {
@@ -552,7 +690,15 @@ test("interception occurs only after a surviving actual Squadron move and after 
   assert.deepEqual(enemy.engagedWith, ["mover"]);
   assert.deepEqual(mover.position, { q: 1, r: 0 });
   assert.equal(executeManeuverElement(state, plan, 1).status, "invalid");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
+  const move = state.events.find(event => event.action === "maneuver-move");
+  const interception = state.events.find(event => event.action === "interception-create");
+  const stop = state.events.find(event => event.action === "maneuver-stop");
+  assert.equal(interception.causeEventId, move.eventId);
+  assert.equal(stop.causeEventId, interception.eventId);
+  assert.equal(stop.reason, "interception");
+  assert.equal(stop.actionId, plan.actionId);
+  assert.match(buildManeuverLog(state).at(-1).message, /возник Перехват/);
 });
 
 test("lethal entry hazard prevents interception", () => {
@@ -623,6 +769,32 @@ function aaWeapon(overrides = {}) {
   };
 }
 
+test("deferred reaction applies only after animation boundary and destruction cancels later reactions and route", () => {
+  const mover = unit({ currentSpeed: 2, speedRemaining: 2, integrity: 5, stack: 1 });
+  const later = unit({ id: "later", kind: "capital", sideId: "crimson", position: { q: 0, r: 1 }, heading: 0, weapons: [aaWeapon({ id: "later-aa" })] });
+  const killer = unit({ id: "killer", kind: "capital", sideId: "crimson", position: { q: 0, r: 0 }, heading: 0, weapons: [aaWeapon()] });
+  const state = battle(mover, { units: [killer, later] });
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
+  const deferred = ({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) => {
+    const reactionPlan = planPostEntryAA(current, entered, { ...currentPlan.actionContext, planId: currentPlan.id, elementIndex, causeEventId }, () => 1, () => 0);
+    return reactionPlan ? { pending: true, plan: reactionPlan } : [];
+  };
+
+  const pending = executeManeuverElement(state, plan, 0, { resolvePostEntry: deferred });
+
+  assert.equal(pending.status, "reaction-pending");
+  assert.equal(mover.integrity, 5);
+  assert.equal(killer.weapons[0].firedThisRound, true);
+  assert.equal(later.weapons[0].firedThisRound, false);
+  const applied = applyReactionStep(state, pending.reactionPlan, 0);
+  assert.equal(applied.destroyed, true);
+  const stopped = resumeManeuverPostEntry(state, plan);
+  assert.equal(stopped.status, "invalid");
+  assert.equal(state.units.includes(mover), false);
+  assert.equal(later.weapons[0].firedThisRound, false);
+  assert.equal(executeManeuverElement(state, plan, 1).status, "invalid");
+});
+
 test("post-entry AA revalidates after entry and destroys mover before later reactions, interception, or steps", () => {
   const mover = unit({ currentSpeed: 2, speedRemaining: 2, integrity: 5, stack: 1 });
   const later = unit({ id: "later", kind: "capital", sideId: "crimson", position: { q: 0, r: 1 }, heading: 0, weapons: [aaWeapon({ id: "later-aa" })] });
@@ -641,6 +813,10 @@ test("post-entry AA revalidates after entry and destroys mover before later reac
   assert.equal(result.status, "destroyed");
   assert.equal(result.reason, "reaction");
   assert.deepEqual(result.destruction.debris.position, { q: 1, r: 0 });
+  assert.equal(state.scenario.contents.filter(content => content.id.startsWith(`debris-${mover.id}-`)).length, 1);
+  assert.equal(state.activeAction, null);
+  assert.equal(state.maneuverApplication, null);
+  assert.equal(state.attackApplication, null);
   assert.equal(killer.weapons[0].firedThisRound, true);
   assert.equal(later.weapons[0].firedThisRound, false);
   assert.deepEqual(interceptor.engagedWith, []);
@@ -651,6 +827,15 @@ test("post-entry AA revalidates after entry and destroys mover before later reac
   assert.equal(declaration.planId, plan.id);
   assert.equal(declaration.elementIndex, 0);
   assert.equal(declaration.lifecycle, "ActionResolution");
+  const reactionDamage = state.events.find(event => event.action === "damage" && event.actionId === declaration.actionId);
+  const destruction = state.events.find(event => event.action === "destroy" && event.subjectIds.includes(mover.id));
+  const stop = state.events.find(event => event.action === "maneuver-stop");
+  const debris = state.events.find(event => event.action === "debris-create");
+  assert.equal(reactionDamage.causeEventId, declaration.eventId);
+  assert.equal(destruction.causeEventId, reactionDamage.eventId);
+  assert.equal(stop.causeEventId, destruction.eventId);
+  assert.equal(debris.causeEventId, stop.eventId);
+  assert.deepEqual(buildManeuverLog(state).map(entry => entry.eventId), state.events.filter(event => [plan.actionId, declaration.actionId].includes(event.actionId) || [move.eventId, declaration.eventId, reactionDamage.eventId, destruction.eventId, stop.eventId, debris.eventId].includes(event.causeEventId)).filter(event => event.action !== "maneuver-exit" && event.action !== "damage").map(event => event.eventId));
 });
 
 test("post-entry AA legality is revalidated immediately before each declaration", () => {
@@ -663,13 +848,36 @@ test("post-entry AA legality is revalidated immediately before each declaration"
       owner.position = { q: -4, r: 0 };
     },
     resolvePostEntry({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) {
-      return resolvePostEntryAA(current, entered, { planId: currentPlan.id, elementIndex, causeEventId }, () => 1, () => 0);
+      return resolvePostEntryAA(current, entered, { ...currentPlan.actionContext, planId: currentPlan.id, elementIndex, causeEventId }, () => 1, () => 0);
     }
   });
 
   assert.equal(result.status, "completed");
   assert.equal(owner.weapons[0].firedThisRound, false);
   assert.equal(state.events.some(event => event.action === "aa-reaction-declare"), false);
+});
+
+test("multiple post-entry reactions follow initiative and slot order with revalidation between declarations", () => {
+  const mover = unit({ currentSpeed: 1, speedRemaining: 1, integrity: 40, stack: 4 });
+  const later = unit({ id: "later", kind: "capital", sideId: "crimson", position: { q: 0, r: 1 }, heading: 0, weapons: [aaWeapon({ id: "later-aa", damage: 1 })] });
+  const first = unit({ id: "first", kind: "capital", sideId: "crimson", position: { q: 0, r: 0 }, heading: 0, weapons: [aaWeapon({ id: "slot-b", slotOrder: 1, damage: 1 }), aaWeapon({ id: "slot-a", slotOrder: 0, damage: 1 })] });
+  const state = battle(mover, { units: [later, first] });
+  state.initiativeOrder = [first.id, later.id, mover.id];
+  const plan = chooseManeuver(state, optionAt(state, mover, "1,0"));
+
+  const result = executeManeuverElement(state, plan, 0, {
+    resolvePostEntry({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) {
+      return resolvePostEntryAA(current, entered, { ...currentPlan.actionContext, planId: currentPlan.id, elementIndex, causeEventId }, () => 100, () => 0);
+    }
+  });
+
+  assert.equal(result.status, "completed");
+  assert.deepEqual(state.events.filter(event => event.action === "aa-reaction-declare").map(event => [event.actorId, event.slotId]), [
+    [first.id, "slot-a"],
+    [first.id, "slot-b"],
+    [later.id, "later-aa"]
+  ]);
+  assert.equal([first, later].flatMap(owner => owner.weapons).every(slot => slot.firedThisRound && !slot.overwatch), true);
 });
 
 test("destroying an interception participant removes reciprocal links and preserves survivor links", () => {
@@ -682,4 +890,8 @@ test("destroying an interception participant removes reciprocal links and preser
 
   assert.deepEqual(enemyA.engagedWith, ["enemy-b"]);
   assert.deepEqual(enemyB.engagedWith, ["enemy-a"]);
+  assert.equal(destroyUnit(state, destroyed), null);
+  assert.deepEqual(enemyA.engagedWith, ["enemy-b"]);
+  assert.deepEqual(enemyB.engagedWith, ["enemy-a"]);
+  assert.equal(state.scenario.contents.filter(content => content.id.startsWith("debris-destroyed-")).length, 1);
 });

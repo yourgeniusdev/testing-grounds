@@ -70,12 +70,11 @@ function unit(overrides = {}) {
 
 function battle(units, contents = []) {
   return {
-    scenario: { id: "stage-zero", bounds: { minCol: -5, maxCol: 6, minRow: 0, maxRow: 0 }, contents },
+    scenario: { id: "maneuver-pipeline", bounds: { minCol: -5, maxCol: 6, minRow: 0, maxRow: 0 }, contents },
     units,
     activeUnitId: units[0].id,
     roundNumber: 1,
     lifecycle: "ActionChoice",
-    stage: "action-choice",
     activeAction: null,
     maneuverApplication: null,
     attackApplication: null,
@@ -100,7 +99,7 @@ function snapshot(state) {
   return structuredClone({ ...state, rng: null });
 }
 
-test("Stage 0 battle seam executes movement stepwise through hazards, AA, interception, and the weapon attack block", () => {
+test("maneuver pipeline executes movement stepwise through hazards, AA, interception, and a weapon attack", () => {
   const mover = unit();
   const passThroughCapital = unit({ id: "capital", name: "Capital", sideId: "crimson", kind: "capital", position: { q: 2, r: 0 }, heading: 3, currentSpeed: 2, speedRemaining: 2, maneuver: 1, maneuverRemaining: 1, stack: 1, unitHealth: null, weapons: [weapon({ id: "aa", name: "AA", targetKinds: ["squadron"], overwatch: true })] });
   const interceptor = unit({ id: "interceptor", name: "Interceptor", sideId: "crimson", position: { q: 4, r: 2 }, weapons: [] });
@@ -139,7 +138,7 @@ test("Stage 0 battle seam executes movement stepwise through hazards, AA, interc
   assert.deepEqual(positions, [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }]);
   assert.equal(result.status, "stopped");
   assert.equal(result.reason, "interception");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(mover.speedSpent, 4);
   assert.equal(mover.integrity, 17);
   assert.deepEqual(mover.engagedWith, ["interceptor"]);
@@ -154,7 +153,7 @@ test("Stage 0 battle seam executes movement stepwise through hazards, AA, interc
 
   const maneuverEvents = state.events.filter(event => event.planId === plan.id);
   assert.ok(maneuverEvents.length > 0);
-  assert.equal(maneuverEvents.every(event => Number.isInteger(event.elementIndex)), true);
+  assert.equal(maneuverEvents.filter(event => !["activation-action-confirm", "maneuver-complete", "maneuver-stop"].includes(event.action)).every(event => Number.isInteger(event.elementIndex)), true);
   const aaDeclaration = maneuverEvents.find(event => event.action === "aa-reaction-declare");
   const firstMove = maneuverEvents.find(event => event.action === "maneuver-move" && event.elementIndex === 0);
   assert.equal(aaDeclaration.causeEventId, firstMove.eventId);
@@ -186,9 +185,16 @@ test("hazard destruction completes the active action and advances valid initiati
   assert.equal(domain.activeUnit(state), ally);
   assert.deepEqual(state.initiativeOrder, [ally.id, enemy.id]);
   assert.equal(state.lifecycle, "ActionChoice");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(ally.activationStartedThisRound, true);
   assert.deepEqual(result.destruction.debris.position, { q: 1, r: 0 });
+  assert.equal(state.activeAction, null);
+  assert.equal(state.maneuverApplication, null);
+  assert.equal(state.attackApplication, null);
+  const [damage, destruction, stop, debris] = state.events.filter(event => ["damage", "destroy", "maneuver-stop", "debris-create"].includes(event.action));
+  assert.equal(destruction.causeEventId, damage.eventId);
+  assert.equal(stop.causeEventId, destruction.eventId);
+  assert.equal(debris.causeEventId, stop.eventId);
 });
 
 test("AA destruction completes the action with a valid victory state and causal chain", () => {
@@ -210,10 +216,19 @@ test("AA destruction completes the action with a valid victory state and causal 
   assert.equal(state.winner, "crimson");
   assert.equal(state.lifecycle, "Finished");
   assert.equal(state.activeUnitId, null);
+  assert.equal(state.activeAction, null);
+  assert.equal(state.maneuverApplication, null);
+  assert.equal(state.attackApplication, null);
   assert.deepEqual(state.initiativeOrder, [owner.id]);
   const declaration = state.events.find(event => event.action === "aa-reaction-declare");
   const damage = state.events.find(event => event.action === "damage");
   const destruction = state.events.find(event => event.action === "destroy");
+  const stop = state.events.find(event => event.action === "maneuver-stop");
+  const debris = state.events.find(event => event.action === "debris-create");
+  const victory = state.events.find(event => event.action === "victory");
   assert.equal(damage.causeEventId, declaration.eventId);
   assert.equal(destruction.causeEventId, damage.eventId);
+  assert.equal(stop.causeEventId, destruction.eventId);
+  assert.equal(debris.causeEventId, stop.eventId);
+  assert.equal(victory.causeEventId, debris.eventId);
 });

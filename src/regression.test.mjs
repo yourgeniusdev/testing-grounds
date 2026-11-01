@@ -12,9 +12,9 @@ assert.equal(shouldHighlightOccupiedHex("WaitDecision"), true, "корабли �
 assert.equal(shouldOutlineUnit("atlas", "atlas", undefined, "DeploymentLeft"), false, "активный корабль не должен обводиться до окончания расстановки");
 assert.equal(shouldOutlineUnit("atlas", "atlas", "atlas", "DeploymentLeft"), true, "выбранный игроком корабль должен обводиться при расстановке");
 assert.equal(shouldOutlineUnit("atlas", "atlas", undefined, "WaitDecision"), true, "активный корабль должен обводиться после начала игрового цикла");
-assert.deepEqual(maneuverResourcePreview({ kind: "capital", heading: 0, speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, null, "system", () => 0), { speedSpent: 0, speedPreview: 0, maneuverSpent: 0, maneuverPreview: 0 }, "пустой выбор не должен ломать инспектор активного юнита");
-assert.deepEqual(maneuverResourcePreview({ kind: "capital", heading: 0, speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, { heading: 2, route: { heading: 0, movementCost: 0, turnsSpent: 0, steps: [] } }, "system", (from, to) => to - from), { speedSpent: 0, speedPreview: 0, maneuverSpent: 0, maneuverPreview: 2 }, "стационарный доворот должен показывать расход всех очков манёвренности");
-assert.deepEqual(maneuverResourcePreview({ kind: "squadron", speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, { route: { movementCost: 3, turnsSpent: 0, steps: [{}, {}, {}] } }, "system", () => 0), { speedSpent: 0, speedPreview: 3, maneuverSpent: 0, maneuverPreview: 0 }, "эскадрилья должна получать предпросмотр расхода скорости без манёвренности");
+assert.deepEqual(maneuverResourcePreview({ kind: "capital", heading: 0, speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, null, () => 0), { speedSpent: 0, speedPreview: 0, maneuverSpent: 0, maneuverPreview: 0 }, "пустой выбор не должен ломать инспектор активного юнита");
+assert.deepEqual(maneuverResourcePreview({ kind: "capital", heading: 0, speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, { heading: 2, route: { heading: 0, movementCost: 0, turnsSpent: 0, steps: [] } }, (from, to) => to - from), { speedSpent: 0, speedPreview: 0, maneuverSpent: 0, maneuverPreview: 2 }, "стационарный доворот должен показывать расход всех очков манёвренности");
+assert.deepEqual(maneuverResourcePreview({ kind: "squadron", speedSpent: 0, maneuverSpent: 0, evasiveManeuver: false }, { route: { movementCost: 3, turnsSpent: 0, steps: [{}, {}, {}] } }, () => 0), { speedSpent: 0, speedPreview: 3, maneuverSpent: 0, maneuverPreview: 0 }, "эскадрилья должна получать предпросмотр расхода скорости без манёвренности");
 const state = createBattleState();
 const swift = state.units.find(candidate => candidate.id === "swift");
 const wasps = state.units.find(candidate => candidate.id === "wasps");
@@ -27,11 +27,10 @@ for (const candidate of state.units) {
 }
 const unit = activeUnit(state);
 state.lifecycle = "ActionChoice";
-state.stage = "action-choice";
 assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }), "манёвр уклонения должен переходить в предпросмотр");
 assert.equal(unit.evasiveManeuver, false, "предпросмотр не должен применять эффект");
-assert.equal(state.stage, "action-planning", "выбор действия должен открыть планирование");
+assert.equal(state.lifecycle, "ActionPlanning", "выбор действия должен открыть планирование");
 assert.ok(confirmSystemAction(state, { systemActionId: "evasive-maneuver" }), "манёвр уклонения должен подтверждаться");
 assert.equal(unit.evasiveManeuver, true, "подтверждение должно применить эффект");
-assert.equal(state.stage, "action-choice", "разрешение должно вернуть общий выбор");
+assert.equal(state.lifecycle, "ActionChoice", "разрешение должно вернуть общий выбор");
 console.log("regression checks passed");

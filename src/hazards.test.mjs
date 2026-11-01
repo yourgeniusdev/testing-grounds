@@ -16,6 +16,25 @@ test("nonlethal hazard damage recalculates squadron stack", () => {
   assert.equal(state.events[0].cause, "hazard:mines-a");
 });
 
+test("hazard destruction of the last enemy unit declares victory", () => {
+  const state = createBattleState();
+  const squadron = unitById(state, "wasps");
+  const survivor = unitById(state, "mantis");
+  state.units = [squadron, survivor];
+  state.initiativeOrder = [squadron.id, survivor.id];
+  squadron.integrity = 8;
+  squadron.stack = 2;
+
+  const [outcome] = resolveHazardConsequences(state, squadron, [mine], () => 0);
+
+  assert.equal(outcome.destroyed, true);
+  assert.equal(outcome.winner, survivor.sideId);
+  assert.equal(state.winner, survivor.sideId);
+  assert.equal(state.lifecycle, "Finished");
+  assert.equal(state.activeUnitId, null);
+  assert.equal(state.events.at(-1).action, "victory");
+});
+
 test("lethal hazard damage destroys squadron after setting stack to zero", () => {
   const state = createBattleState();
   const squadron = unitById(state, "wasps");
@@ -29,6 +48,6 @@ test("lethal hazard damage destroys squadron after setting stack to zero", () =>
   assert.equal(state.units.includes(squadron), false);
   assert.equal(state.initiativeOrder.includes(squadron.id), false);
   assert.equal(state.scenario.contents.some(content => content.id.startsWith("debris-wasps-")), true);
-  assert.deepEqual(state.events.map(event => event.action), ["damage", "destroy"]);
+  assert.deepEqual(state.events.map(event => event.action), ["damage", "destroy", "debris-create"]);
   assert.equal(outcomes[0].destroyed, true);
 });

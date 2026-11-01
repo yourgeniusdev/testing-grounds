@@ -37,3 +37,9 @@ export function shouldCancelCanvasAction({ actionType, maneuverRoute = false, ma
 export function shouldCancelDocumentAction({ planning, insideActionControl = false, insideCanvas = false, insideWeaponTooltip = false }) {
   return Boolean(planning && !insideActionControl && !insideCanvas && !insideWeaponTooltip);
 }
+
+export function recalculateActionUi(state, ui, unit, planRoutes, policy = "risky") {
+  clearActionTransients(ui);
+  ui.routes = state?.lifecycle === "ActionPlanning" && state.activeAction?.type === "maneuver" ? planRoutes(state, unit, policy) : new Map();
+  return ui.routes;
+}

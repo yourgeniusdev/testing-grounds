@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createBattleState, unitById } from "./domain.js";
-import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
 
 const signedTurn = (from, to) => {
   let delta = (to - from + 6) % 6;
@@ -108,6 +108,15 @@ test("segmented resource preview clamps spending and distinguishes bonus capacit
   });
 });
 
+test("resource UI consistently exposes current maximum, cumulative spend, and remaining including over-budget spend", () => {
+  const reduced = { spent: 4, remaining: 0, capacity: 2 };
+  assert.deepEqual(segmentedResourcePresentation(reduced), {
+    spent: 4, spendPreview: 0, capacity: 2, capacityPreview: 0, remaining: 0, segments: ["spent", "spent"]
+  });
+  assert.equal(resourceMetricsText(reduced), "макс. 2 · расход 4 · остаток 0");
+  assert.equal(resourceMetricsText({ spent: 1, remaining: 2, capacity: 3 }, { spend: 1, capacity: 1 }), "макс. 4 · расход 2 · остаток 2");
+});
+
 test("weapon selection presentation follows activeAction rather than UI shadow state", () => {
   assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack", slotId: "left" } }, "left"), { selected: true, ariaPressed: "true" });
   assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack", slotId: "left" } }, "right"), { selected: false, ariaPressed: "false" });
@@ -204,7 +213,7 @@ test("maneuver action availability requires an actual nonempty legal route witho
     canSelect: false,
     canConfirm: false,
     canCancel: false,
-    reasons: ["Нет допустимого маршрута"]
+    reasons: ["Обычный манёвр запрещён: эскадрилья связана Перехватом, требуется Отрыв"]
   });
 
   swift.engagedWith = [];
@@ -214,6 +223,44 @@ test("maneuver action availability requires an actual nonempty legal route witho
     { id: "blocked-forward", kind: "object", type: "station", position: { q: 1, r: 0 } }
   ];
   assert.equal(maneuverActionPresentation(state, swift).canSelect, false);
+});
+
+test("disengage action is visible only for a linked squadron and exposes cost, chance, and confirmation", () => {
+  const state = createBattleState();
+  const squadron = unitById(state, "wasps");
+  const enemy = unitById(state, "mantis");
+  state.units = [squadron, enemy];
+  state.activeUnitId = squadron.id;
+  state.initiativeOrder = [squadron.id, enemy.id];
+  state.lifecycle = "ActionChoice";
+  squadron.position = { q: 0, r: 0 };
+  enemy.position = { q: 1, r: 0 };
+  squadron.engagedWith = [enemy.id];
+  enemy.engagedWith = [squadron.id];
+
+  const available = disengageActionPresentation(state, squadron);
+  assert.equal(available.visible, true);
+  assert.equal(available.canSelect, true);
+  assert.deepEqual({ speedCost: available.preview.speedCost, chance: available.preview.chance }, { speedCost: 1, chance: 40 });
+
+  state.lifecycle = "ActionPlanning";
+  state.activeAction = { type: "disengage", actorId: squadron.id };
+  assert.equal(disengageActionPresentation(state, squadron).canConfirm, true);
+  squadron.engagedWith = [];
+  enemy.engagedWith = [];
+  assert.equal(disengageActionPresentation(state, squadron).visible, false);
+});
+
+test("interception effects enumerate every current reciprocal link", () => {
+  const unit = { id: "actor", sideId: "azure", engagedWith: ["enemy-z", "stale", "enemy-a"] };
+  const state = { units: [
+    unit,
+    { id: "enemy-z", name: "Enemy Z", kind: "squadron", sideId: "crimson", engagedWith: [unit.id] },
+    { id: "enemy-a", name: "Enemy A", kind: "squadron", sideId: "crimson", engagedWith: [unit.id] },
+    { id: "stale", name: "Stale", kind: "squadron", sideId: "crimson", engagedWith: [] }
+  ] };
+
+  assert.deepEqual(interceptionEffectRows(state, unit).map(effect => effect.name), ["Перехват · Enemy A", "Перехват · Enemy Z"]);
 });
 
 test("maneuver routes exist only while a chosen maneuver is being planned", () => {
@@ -301,6 +348,18 @@ test("options expose the full interception preview without a singular adapter", 
   assert.equal("interception" in option, false);
 });
 
+test("route preview kinds distinguish AA, interception, hazard, and overlaps per known hex", () => {
+  const routePreview = route({ previewConsequences: [
+    { kind: "aa", position: { q: 1, r: 0 } },
+    { kind: "interception", position: { q: 1, r: 0 } },
+    { kind: "hazard", position: { q: 2, r: 0 } }
+  ] });
+
+  assert.deepEqual(routePreviewKindsAt(routePreview, { q: 1, r: 0 }), { aa: true, interception: true, hazard: false });
+  assert.deepEqual(routePreviewKindsAt(routePreview, { q: 2, r: 0 }), { aa: false, interception: false, hazard: true });
+  assert.deepEqual(routePreviewKindsAt(routePreview, { q: 3, r: 0 }), { aa: false, interception: false, hazard: false });
+});
+
 test("route consequence rows visibly describe hazards, AA, guaranteed effects, and every interception", () => {
   const routePreview = route({
     previewConsequences: [
@@ -314,10 +373,10 @@ test("route consequence rows visibly describe hazards, AA, guaranteed effects, a
 
   assert.deepEqual(routeConsequenceRows(routePreview), [
     { kind: "hazard", title: "Minefield", detail: "50% · 2–6 · integrity damage · expected harm 2" },
-    { kind: "aa", title: "AA · Escort", detail: "40% · 0–4 · AA reaction · expected harm 1.6" },
+    { kind: "aa", title: "ПВО · Escort", detail: "40% · 0–4 · AA reaction · expected harm 1.6" },
     { kind: "effect", title: "Gravity Well", detail: "Guaranteed · speed lock" },
-    { kind: "interception", title: "Interception · Enemy A", detail: "Guaranteed · Interception" },
-    { kind: "interception", title: "Interception · Enemy Z", detail: "Guaranteed · Interception" }
+    { kind: "interception", title: "Перехват · Enemy A", detail: "Guaranteed · Interception" },
+    { kind: "interception", title: "Перехват · Enemy Z", detail: "Guaranteed · Interception" }
   ]);
 });
 
@@ -336,19 +395,19 @@ test("maneuverResourcePreview uses the hovered preview option before the selecte
     }
   };
 
-  assert.deepEqual(maneuverResourcePreview(unit, { option, previewOption }, "movement", signedTurn), {
+  assert.deepEqual(maneuverResourcePreview(unit, { option, previewOption }, signedTurn), {
     speedSpent: 1,
     speedPreview: 3,
     maneuverSpent: 1,
     maneuverPreview: 2
   });
-  assert.deepEqual(maneuverResourcePreview(unit, { option }, "movement", signedTurn), {
+  assert.deepEqual(maneuverResourcePreview(unit, { option }, signedTurn), {
     speedSpent: 1,
     speedPreview: 2,
     maneuverSpent: 1,
     maneuverPreview: 1
   });
-  assert.deepEqual(maneuverResourcePreview(unit, { previewOption: { resources: { speed: 4, maneuver: 3 } } }, "movement", signedTurn), {
+  assert.deepEqual(maneuverResourcePreview(unit, { previewOption: { resources: { speed: 4, maneuver: 3 } } }, signedTurn), {
     speedSpent: 1,
     speedPreview: 3,
     maneuverSpent: 1,
@@ -367,13 +426,13 @@ test("maneuverResourcePreview keeps route selections independent of action label
   const unit = { heading: 0, speedSpent: 1, maneuverSpent: 1, evasiveManeuver: true };
   const selected = { heading: 2, route: route({ heading: 1, movementCost: 4, turnsSpent: 1 }) };
 
-  assert.deepEqual(maneuverResourcePreview(unit, selected, "movement", signedTurn), {
+  assert.deepEqual(maneuverResourcePreview(unit, selected, signedTurn), {
     speedSpent: 1,
     speedPreview: 3,
     maneuverSpent: 1,
     maneuverPreview: 2
   });
-  assert.deepEqual(maneuverResourcePreview(unit, null, "action-choice", signedTurn), {
+  assert.deepEqual(maneuverResourcePreview(unit, null, signedTurn), {
     speedSpent: 1,
     speedPreview: 0,
     maneuverSpent: 1,

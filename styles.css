@@ -109,6 +109,8 @@ body::before { content:""; position:fixed; inset:0; pointer-events:none; backgro
 .weapon-action .action-tooltip { width:190px; }
 .weapon-action .action-icon { color:#ff9baa; text-shadow:0 0 12px rgba(255,102,125,.5); }
 .weapon-action.cooldown .action-icon { color:var(--muted); font-size:20px; text-shadow:none; }
+.weapon-action.overwatch { border-color:rgba(244,200,97,.7); box-shadow:inset 0 0 12px rgba(244,200,97,.1); }
+.overwatch-indicator { position:absolute; right:3px; bottom:3px; display:grid; place-items:center; width:16px; height:16px; border:1px solid var(--yellow); border-radius:50%; color:var(--yellow); background:#151207; font:800 8px ui-monospace,monospace; }
 .action-slot:disabled { opacity:.38; cursor:not-allowed; }
 .action-icon { color:var(--cyan); font:700 25px ui-monospace,monospace; text-shadow:0 0 12px rgba(102,228,255,.45); }
  .action-tooltip { position:absolute; left:0; bottom:calc(100% + 12px); display:none; width:220px; max-width:220px; padding:10px 12px; transform:none; border:1px solid #3a4c64; background:rgba(7,12,19,.98); box-shadow:0 12px 30px rgba(0,0,0,.45); text-align:left; pointer-events:none; }

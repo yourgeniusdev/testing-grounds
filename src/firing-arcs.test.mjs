@@ -65,7 +65,6 @@ test("real Atlas forward hardpoint carries orientation into runtime geometry", (
   const target = unitById(state, "raptor");
   const forward = attacker.weapons.find(weapon => weapon.mount === "forward");
   state.activeUnitId = attacker.id;
-  state.stage = "attack";
   attacker.position = { q: 0, r: 0 };
   attacker.heading = 0;
   target.position = { q: 2, r: 0 };
@@ -82,7 +81,6 @@ for (const squadronId of ["wasps", "mantis"]) {
     const capitalTarget = state.units.find(unit => unit.sideId !== attacker.sideId && unit.kind === "capital");
     const squadronTarget = state.units.find(unit => unit.sideId !== attacker.sideId && unit.kind === "squadron");
     state.activeUnitId = attacker.id;
-    state.stage = "attack";
     attacker.position = { q: 0, r: 0 };
     for (const weapon of attacker.weapons) {
       const target = weapon.targetKinds.length === 1 ? capitalTarget : squadronTarget;
@@ -106,7 +104,6 @@ test("selected squadron slot UI arc uses the same forward geometry as target val
   const target = unitById(state, "atlas");
   const weapon = attacker.weapons.find(candidate => candidate.id === "mantis-torpedo");
   state.activeUnitId = attacker.id;
-  state.stage = "attack";
   attacker.position = { q: 0, r: 0 };
   attacker.heading = 2;
   target.position = { q: 0, r: -2 };
@@ -123,7 +120,6 @@ test("squadron slot shots scale with surviving stack independently of forward ge
   const attacker = unitById(state, "mantis");
   const target = unitById(state, "atlas");
   state.activeUnitId = attacker.id;
-  state.stage = "attack";
   attacker.position = { q: 0, r: 0 };
   attacker.heading = 0;
   target.position = { q: 1, r: 0 };
@@ -143,7 +139,6 @@ test("Mantis torpedo retains its target restriction and combat characteristics",
   const squadronTarget = unitById(state, "wasps");
   const weapon = attacker.weapons.find(candidate => candidate.id === "mantis-torpedo");
   state.activeUnitId = attacker.id;
-  state.stage = "attack";
   attacker.position = { q: 0, r: 0 };
   attacker.heading = 0;
   capitalTarget.position = { q: 1, r: 0 };

@@ -54,7 +54,6 @@ function activationState() {
   const atlas = state.units.find(unit => unit.id === "atlas");
   const swift = state.units.find(unit => unit.id === "swift");
   state.lifecycle = "WaitDecision";
-  state.stage = "system";
   state.units = [atlas, swift];
   state.initiativeOrder = [atlas.id, swift.id];
   state.activeUnitId = atlas.id;
@@ -143,7 +142,7 @@ function activationState() {
   assert.equal(atlas.heading, targetHeading);
   assert.equal(atlas.speedSpent, 0);
   assert.equal(atlas.maneuverSpent, 2);
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 }
 
 {
@@ -155,7 +154,7 @@ function activationState() {
   const [emptyOption] = buildManeuverOptions(atlas, route);
   beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
   assert.equal(confirmManeuverAction(state, emptyOption), null);
-  assert.equal(state.stage, "action-planning");
+  assert.equal(state.lifecycle, "ActionPlanning");
 }
 
 {

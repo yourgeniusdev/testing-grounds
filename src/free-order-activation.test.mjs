@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyAttackStep, confirmWeaponAttackAction } from "./battle.js";
+import { applyAttackStep, availableWeaponAttackTargets, confirmWeaponAttackAction } from "./battle.js";
 import {
   activationResources,
+  actionAvailability,
   activeUnit,
   beginActionPlanning,
   beginActivation,
@@ -33,7 +34,6 @@ function activationBattle() {
   state.initiativeOrder = [atlas.id, swift.id, bastion.id];
   state.activeUnitId = atlas.id;
   state.lifecycle = "WaitDecision";
-  state.stage = "wait-decision";
   atlas.position = { q: 0, r: 0 };
   atlas.heading = 0;
   swift.position = { q: -3, r: 0 };
@@ -65,7 +65,7 @@ test("final deployment automatically starts the first activation exactly once", 
 
   assert.equal(activeUnit(state), first);
   assert.equal(state.lifecycle, "ActionChoice");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(first.activationStartedThisRound, true);
   assert.equal(state.events.filter(event => event.action === "activation-start" && event.actorId === first.id).length, 1);
 });
@@ -103,7 +103,7 @@ test("activation start occurs once and enters the unified action choice", () => 
 
   assert.equal(beginActivation(state), true);
   assert.equal(state.lifecycle, "ActionChoice");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(atlas.activationStartedThisRound, true);
   assert.equal(atlas.reactor.currentEnergy, 3);
 
@@ -147,7 +147,7 @@ test("planning and cancellation are pure and only one action may be planned or r
 
   assert.equal(executeManeuverElement(state, plan, 0).status, "completed");
   assert.equal(state.lifecycle, "ActionChoice");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 });
 
 test("switching an unconfirmed plan is atomic and mutation-free across action types and weapons", () => {
@@ -210,6 +210,7 @@ test("maneuver and weapon actions return to choice with stable action context", 
   const route = planRoutes(state, atlas, "safe").get("0,0:1");
   const maneuver = confirmManeuverAction(state, buildManeuverOptions(atlas, route)[0]);
   const maneuverContext = maneuver.actionContext;
+  assert.equal(maneuverContext.activationId, atlas.activationId);
   assert.equal(executeManeuverElement(state, maneuver, 0).status, "completed");
   assert.equal(state.lifecycle, "ActionChoice");
 
@@ -222,6 +223,7 @@ test("maneuver and weapon actions return to choice with stable action context", 
   assert.equal(waitActiveUnit(state), false);
   assert.notEqual(attack.actionContext.actionId, maneuverContext.actionId);
   assert.deepEqual(attack.actionContext, {
+    activationId: atlas.activationId,
     actionId: attack.actionContext.actionId,
     actionType: "weapon-attack",
     actorId: atlas.id,
@@ -283,7 +285,7 @@ test("confirmed system actions pay once, remove wait, and return to common choic
   assert.equal(atlas.canWait, false);
   assert.equal(waitActiveUnit(state), false);
   assert.equal(state.lifecycle, "ActionChoice");
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(confirmSystemAction(state, resolved), null);
   assert.equal(atlas.maneuverSpent, 1);
   assert.equal(state.events.filter(event => event.action === "system-action-resolve").length, 1);
@@ -470,11 +472,13 @@ test("attacks and system actions share an activation energy budget across maximu
 
   atlas.reactor.capacity = 1;
   assert.deepEqual(activationResources(atlas).energy, { spent: 1, remaining: 0, capacity: 1 });
-  beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" });
-  assert.equal(confirmSystemAction(state), null);
+  assert.equal(actionAvailability(state, { type: "system-action", systemActionId: "reactor-to-engines" }).available, false);
+  assert.equal(beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" }), null);
 
   atlas.reactor.capacity = 4;
   assert.deepEqual(activationResources(atlas).energy, { spent: 1, remaining: 2, capacity: 3 });
+  assert.equal(actionAvailability(state, { type: "system-action", systemActionId: "reactor-to-engines" }).available, true);
+  assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" }));
   assert.ok(confirmSystemAction(state));
   assert.equal(atlas.energySpent, 2);
   assert.equal(atlas.reactor.currentEnergy, 1);
@@ -490,6 +494,40 @@ test("increasing reactor capacity cannot restore energy missing at activation st
 
   atlas.reactor.capacity += 3;
   assert.deepEqual(activationResources(atlas).energy, { spent: 0, remaining: 2, capacity: 2 });
+});
+
+test("external energy loss changes the current maximum without rewriting cumulative spend", () => {
+  const { state, atlas } = activationBattle();
+  beginActivation(state);
+  atlas.energySpent = 1;
+  atlas.reactor.currentEnergy = 2;
+
+  atlas.reactor.currentEnergy = 0;
+  assert.deepEqual(activationResources(atlas).energy, { spent: 1, remaining: 0, capacity: 1 });
+
+  atlas.reactor.currentEnergy = 2;
+  assert.deepEqual(activationResources(atlas).energy, { spent: 1, remaining: 2, capacity: 3 });
+});
+
+test("confirmed stat changes immediately recalculate routes, actions, and weapon targets", () => {
+  const { state, atlas, bastion } = activationBattle();
+  beginActivation(state);
+  atlas.speedSpent = atlas.currentSpeed;
+  atlas.maneuverSpent = atlas.maneuver;
+  const slot = atlas.weapons.find(weapon => weapon.id === "atlas-battery-left");
+  slot.energyCost = 3;
+  slot.mount = "turret";
+  bastion.position = { q: 2, r: 0 };
+
+  assert.equal(planRoutes(state, atlas, "safe").size, 0);
+  assert.deepEqual(availableWeaponAttackTargets(state, atlas.id, slot.id), [bastion]);
+
+  beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" });
+  assert.ok(confirmSystemAction(state));
+
+  assert.ok(planRoutes(state, atlas, "safe").get("1,0:0"));
+  assert.deepEqual(availableWeaponAttackTargets(state, atlas.id, slot.id), []);
+  assert.equal(atlas.energySpent, 1);
 });
 
 test("confirmation revalidates every mutable maximum after planning", async t => {
@@ -578,7 +616,7 @@ test("every surviving maneuver stop outcome returns to action choice", async t =
     }
     assert.equal(result.status, expectedStatus);
     assert.equal(state.lifecycle, "ActionChoice");
-    assert.equal(state.stage, "action-choice");
+    assert.equal(state.lifecycle, "ActionChoice");
   });
 });
 
@@ -624,7 +662,10 @@ test("turn-only and survived early-stop maneuvers apply stay effects at the actu
 
     assert.equal(executeManeuverElement(state, maneuver, 0).status, "completed");
     assert.equal(atlas.integrity, atlas.maxIntegrity - 1);
-    assert.deepEqual(state.events.find(event => event.action === "location-stay-effect").position, { q: 0, r: 0 });
+    const turn = state.events.find(event => event.action === "maneuver-turn");
+    const stay = state.events.find(event => event.action === "location-stay-effect");
+    assert.deepEqual(stay.position, { q: 0, r: 0 });
+    assert.equal(stay.causeEventId, turn.eventId);
   });
 
   await t.test("early stop", () => {
@@ -642,7 +683,10 @@ test("turn-only and survived early-stop maneuvers apply stay effects at the actu
     const result = executeManeuverElement(state, maneuver, 0, { canContinue: () => false });
     assert.equal(result.status, "stopped");
     assert.equal(atlas.integrity, atlas.maxIntegrity - 1);
-    assert.deepEqual(state.events.find(event => event.action === "location-stay-effect").position, { q: 1, r: 0 });
+    const move = state.events.find(event => event.action === "maneuver-move");
+    const stay = state.events.find(event => event.action === "location-stay-effect");
+    assert.deepEqual(stay.position, { q: 1, r: 0 });
+    assert.equal(stay.causeEventId, move.eventId);
   });
 });
 

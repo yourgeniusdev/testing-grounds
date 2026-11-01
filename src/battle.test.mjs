@@ -4,6 +4,8 @@ import {
   applyAttackStep,
   availableWeaponAttackTargets,
   confirmWeaponAttackAction,
+  planPostEntryAA,
+  applyReactionStep,
   previewWeaponAttack,
   resolvePostEntryAA,
   supercoverLine,
@@ -13,10 +15,12 @@ import {
   advanceWeaponRound,
   beginActionPlanning,
   beginWeaponCooldown,
+  cancelActionPlanning,
   createBattleState,
   endActivation,
   initializeWeaponState,
   resetUnitWeaponsForNewRound,
+  waitActiveUnit,
   weaponReadiness
 } from "./domain.js";
 
@@ -79,7 +83,6 @@ function battle(weapons, targetOverrides = {}) {
     units: [attacker, target],
     activeUnitId: attacker.id,
     initiativeOrder: [attacker.id, target.id],
-    stage: "action-choice",
     lifecycle: "ActionChoice",
     activeAction: null,
     maneuverApplication: null,
@@ -114,6 +117,24 @@ test("weapon readiness is derived and shared by manual fire and overwatch", () =
   assert.deepEqual(weaponReadiness(slot), { ready: true, reason: null });
   resetUnitWeaponsForNewRound({ weapons: [slot] });
   assert.equal("ready" in slot, false);
+});
+
+test("an unused squadron weapon that can attack squadrons enters overwatch at activation end", () => {
+  const aa = weapon({ targetKinds: ["capital", "squadron"] });
+  const squadron = unit({ kind: "squadron", weapons: [aa] });
+  const enemy = unit({ id: "enemy", sideId: "crimson", weapons: [] });
+  const state = battle([]).state;
+  state.units = [squadron, enemy];
+  state.activeUnitId = squadron.id;
+  state.initiativeOrder = [squadron.id, enemy.id];
+
+  assert.deepEqual(endActivation(state), { newRound: false });
+  assert.equal(aa.overwatch, true);
+
+  state.activeUnitId = squadron.id;
+  state.lifecycle = "ActionChoice";
+  assert.ok(beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: aa.id }));
+  assert.equal(aa.overwatch, true);
 });
 
 test("planning one slot and target is pure until confirmation", () => {
@@ -174,7 +195,7 @@ test("confirming one slot spends it and energy exactly once before resolution", 
   assert.equal(endActivation(state), null);
   applyPlan(state, plan);
   assert.equal(attacker.reactor.currentEnergy, 3);
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
 });
 
 test("confirmation revalidates changed range, arc, energy, and readiness without spending", async t => {
@@ -197,6 +218,31 @@ test("confirmation revalidates changed range, arc, energy, and readiness without
     assert.equal(attacker.reactor.currentEnergy, energy);
     assert.equal(state.attackApplication, null);
     assert.equal(state.events.length, 0);
+  });
+});
+
+test("selected target preview becomes stale after position, heading, cost, or resource changes", async t => {
+  const cases = [
+    ["position", ({ target }) => { target.position = { q: 7, r: 0 }; }],
+    ["heading", ({ attacker }) => { attacker.heading = 3; }],
+    ["cost", ({ slot }) => { slot.energyCost = 4; }],
+    ["resource", ({ attacker }) => { attacker.reactor.currentEnergy = 0; }]
+  ];
+
+  for (const [name, change] of cases) await t.test(name, () => {
+    const slot = weapon({ mount: "forward", maxRange: 3, energyCost: 1 });
+    const { state, attacker, target } = battle([slot]);
+    attacker.reactor = { capacity: 3, currentEnergy: 3, rechargeRate: 1 };
+    attacker.activationEnergyBudget = 3;
+    beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: slot.id });
+    const preview = previewWeaponAttack(state, attacker.id, slot.id, target.id);
+    assert.equal(preview.canConfirm, true);
+
+    change({ attacker, target, slot });
+
+    assert.equal(confirmWeaponAttackAction(state, preview.attackerId, preview.slotId, preview.targetId, () => 1, () => 0), null);
+    assert.equal(state.attackApplication, null);
+    assert.equal(attacker.energySpent || 0, 0);
   });
 });
 
@@ -269,7 +315,7 @@ test("sequential attacks have distinct action contexts and may choose different 
   const secondPlan = planAttack(state, attacker, second, other, () => 100, () => 0);
   applyPlan(state, secondPlan);
   assert.notEqual(firstPlan.id, secondPlan.id);
-  assert.equal(state.stage, "action-choice");
+  assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(state.activeUnitId, attacker.id);
 });
 
@@ -298,10 +344,57 @@ test("single-slot arc and targets use the same domain validation", () => {
 });
 
 test("manual AA fire consumes the readiness needed for a later reaction", () => {
-  const aa = weapon({ targetKinds: ["capital", "squadron"] });
+  const aa = weapon({ targetKinds: ["capital", "squadron"], overwatch: true });
   const { state, attacker, target } = battle([aa], { kind: "squadron", stack: 2, unitHealth: 5 });
   applyPlan(state, planAttack(state, attacker, aa, target, () => 100, () => 0));
+  assert.equal(aa.firedThisRound, true);
+  assert.equal(aa.overwatch, false);
   assert.equal(resolvePostEntryAA(state, target, {}, () => 100, () => 0).length, 0);
+});
+
+test("last activation overwatch survives the round boundary until the owner's first action", () => {
+  const aa = weapon({ targetKinds: ["squadron"] });
+  const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, stack: 2, unitHealth: 5, weapons: [] });
+  const state = battle([]).state;
+  state.units = [target, owner];
+  state.activeUnitId = owner.id;
+  state.initiativeOrder = [target.id, owner.id];
+  state.lifecycle = "ActionChoice";
+  target.hasActivated = true;
+  target.activationStartedThisRound = true;
+  owner.activationStartedThisRound = true;
+
+  assert.deepEqual(endActivation(state), { newRound: true });
+  assert.equal(aa.overwatch, true);
+  assert.equal(state.activeUnitId, target.id);
+  assert.equal(state.roundNumber, 2);
+  assert.equal(resolvePostEntryAA(state, target, { planId: "opening-move", elementIndex: 0, causeEventId: "move" }, () => 100, () => 0).length, 1);
+  assert.equal(aa.overwatch, false);
+});
+
+test("overwatch survives preview, cancel, and Wait until the owner's first confirmed action", () => {
+  const aa = weapon({ targetKinds: ["squadron"], overwatch: true });
+  const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa], canWait: true, hasWaited: false });
+  const target = unit({ id: "target", kind: "squadron", sideId: "azure", position: { q: 2, r: 0 }, canWait: true, hasWaited: false });
+  const state = battle([]).state;
+  state.units = [owner, target];
+  state.activeUnitId = owner.id;
+  state.initiativeOrder = [owner.id, target.id];
+  state.lifecycle = "ActionChoice";
+
+  assert.ok(beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: aa.id }));
+  assert.equal(aa.overwatch, true);
+  assert.equal(cancelActionPlanning(state), true);
+  assert.equal(aa.overwatch, true);
+  assert.equal(waitActiveUnit(state), true);
+  assert.equal(aa.overwatch, true);
+
+  state.activeUnitId = owner.id;
+  state.lifecycle = "ActionChoice";
+  assert.ok(beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: aa.id }));
+  assert.ok(confirmWeaponAttackAction(state, owner.id, aa.id, target.id, () => 100, () => 0));
+  assert.equal(aa.overwatch, false);
 });
 
 test("an unused AA slot enters overwatch at explicit activation end and reaction consumes persistent stored energy", () => {
@@ -314,11 +407,9 @@ test("an unused AA slot enters overwatch at explicit activation end and reaction
   state.activeUnitId = owner.id;
   state.initiativeOrder = [owner.id, ally.id, target.id];
   state.lifecycle = "ActionChoice";
-  state.stage = "action-choice";
   endActivation(state);
   assert.equal(aa.overwatch, true);
   state.activeUnitId = target.id;
-  state.stage = "system";
   const outcomes = resolvePostEntryAA(state, target, { planId: "maneuver-plan", elementIndex: 2, causeEventId: "move" }, () => 1, () => 0);
   assert.equal(outcomes.length, 1);
   assert.equal(state.attackApplication, null);
@@ -328,6 +419,100 @@ test("an unused AA slot enters overwatch at explicit activation end and reaction
   assert.equal(owner.energySpent, 0);
   const damage = state.events.find(event => event.action === "damage");
   assert.deepEqual({ planId: damage.planId, elementIndex: damage.elementIndex }, { planId: "maneuver-plan", elementIndex: 2 });
+});
+
+test("a missed reaction spends shared readiness when declared and keeps maneuver action context", () => {
+  const aa = weapon({ targetKinds: ["squadron"], overwatch: true });
+  const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, stack: 2, unitHealth: 5 });
+  const state = battle([]).state;
+  state.units = [owner, target];
+  state.activeUnitId = target.id;
+  state.initiativeOrder = [owner.id, target.id];
+  const context = { activationId: "activation-7", actionId: "maneuver-8", actionType: "maneuver", actionReason: "player-choice", planId: "route-9", elementIndex: 1, causeEventId: "move-10" };
+  let readinessDuringRoll = null;
+
+  const outcomes = resolvePostEntryAA(state, target, context, () => {
+    readinessDuringRoll = weaponReadiness(aa);
+    return 100;
+  }, () => 0);
+
+  assert.equal(outcomes.length, 1);
+  assert.deepEqual(readinessDuringRoll, { ready: false, reason: "Уже стреляло в этом раунде" });
+  assert.equal(aa.overwatch, false);
+  assert.equal(target.integrity, 20);
+  const declaration = state.events.find(event => event.action === "aa-reaction-declare");
+  const miss = state.events.find(event => event.action === "aa-reaction-miss");
+  assert.deepEqual({ activationId: declaration.activationId, actionId: declaration.actionId, maneuverActionId: declaration.maneuverActionId, causeEventId: declaration.causeEventId }, {
+    activationId: context.activationId,
+    actionId: declaration.eventId,
+    maneuverActionId: context.actionId,
+    causeEventId: context.causeEventId
+  });
+  assert.deepEqual({ actionId: miss.actionId, causeEventId: miss.causeEventId, eventOrder: miss.eventOrder, elementIndex: miss.elementIndex }, {
+    actionId: declaration.eventId,
+    causeEventId: context.causeEventId,
+    eventOrder: declaration.eventOrder + 1,
+    elementIndex: context.elementIndex
+  });
+  assert.equal(state.log.some(entry => /промах/.test(entry.message)), false);
+});
+
+test("reaction hit and miss plans expose weapon visuals before explicit result application", async t => {
+  for (const [name, roll, outcome, integrity] of [["hit", 1, "hit", 16], ["miss", 100, "miss", 20]]) await t.test(name, () => {
+    const aa = weapon({ targetKinds: ["squadron"], overwatch: true, accuracy: 80, damage: 4 });
+    const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa] });
+    const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, stack: 4, unitHealth: 5 });
+    const state = battle([]).state;
+    state.units = [owner, target];
+    state.activeUnitId = target.id;
+    state.initiativeOrder = [owner.id, target.id];
+
+    const plan = planPostEntryAA(state, target, { planId: "route", elementIndex: 0, causeEventId: "move" }, () => roll, () => 0);
+
+    assert.ok(plan);
+    assert.equal(plan.steps[0].visual, aa.visual);
+    assert.equal(plan.steps[0].outcome, outcome);
+    assert.equal(target.integrity, 20);
+    assert.equal(aa.firedThisRound, true);
+    assert.equal(aa.overwatch, false);
+    assert.equal(state.events.some(event => event.action === "damage"), false);
+    assert.equal(applyReactionStep(state, plan, 0).status, "applied");
+    assert.equal(target.integrity, integrity);
+    assert.equal(state.reactionApplication, null);
+  });
+});
+
+test("reaction continues after an intermediate blocker is destroyed while the moving target survives", () => {
+  const aa = weapon({ targetKinds: ["squadron"], shots: 2, damage: 20, accuracy: 100, overwatch: true });
+  const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa] });
+  const blocker = unit({ id: "blocker", sideId: "azure", position: { q: 1, r: 0 }, mass: 200, shield: 0, armor: 0, integrity: 10, maxIntegrity: 10 });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 2, r: 0 }, stack: 4, unitHealth: 10, integrity: 40, maxIntegrity: 40 });
+  const state = battle([]).state;
+  state.units = [owner, blocker, target];
+  state.activeUnitId = target.id;
+  state.initiativeOrder = [owner.id, target.id, blocker.id];
+
+  const outcomes = resolvePostEntryAA(state, target, { planId: "maneuver", elementIndex: 0, causeEventId: "move" }, () => 1, () => 0);
+
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].steps.length, 2);
+  assert.equal(state.units.includes(blocker), false);
+  assert.equal(target.integrity, 20);
+  assert.equal(state.attackApplication, null);
+});
+
+test("ordinary weapon attack resolution never opens an AA reaction window", () => {
+  const aa = weapon({ targetKinds: ["squadron"], overwatch: true });
+  const owner = unit({ id: "owner", sideId: "crimson", weapons: [aa] });
+  const target = unit({ id: "fighter", kind: "squadron", sideId: "azure", position: { q: 1, r: 0 }, stack: 2, unitHealth: 5 });
+  const state = battle([]).state;
+  state.units = [owner, target];
+  state.attackApplication = { planId: "ordinary-attack" };
+  const before = structuredClone({ aa, events: state.events, sequence: state.sequence, target });
+
+  assert.deepEqual(resolvePostEntryAA(state, target, { causeEventId: "attack-step" }, () => 1, () => 0), []);
+  assert.deepEqual({ aa, events: state.events, sequence: state.sequence, target }, before);
 });
 
 test("winner prevents activation end from mutating queue or round", () => {
