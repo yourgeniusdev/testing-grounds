@@ -33,6 +33,7 @@ const runtimeWeapon = (hardpoint, installation) => {
   return deepFreeze({
     id: installation.id,
     catalogWeaponId: catalogWeapon.id,
+    hardpointId: hardpoint.id,
     name: installation.name || catalogWeapon.name,
     mount: hardpoint.mount,
     hardpointType: hardpoint.type,
@@ -65,6 +66,7 @@ export function buildCapitalProfile(loadoutId) {
   return {
     kind: "capital",
     hullId: hull.id,
+    crewRequirement: hull.crewRequirement,
     hullType: hull.hullType,
     hullClassName: hull.displayName,
     engineId: loadout.systems.engine,
@@ -96,6 +98,8 @@ export function buildSquadronProfile(loadoutId) {
   return {
     kind: "squadron",
     squadronModelId: model.id,
+    crewRequirement: model.crewRequirement,
+    overwatchHardpointIds: [...model.overwatchHardpointIds],
     squadronModelName: model.displayName,
     craftType: model.craftType,
     currentSpeed: model.baseSpeed,

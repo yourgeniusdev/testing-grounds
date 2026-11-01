@@ -450,11 +450,11 @@ test("AA preview expected harm uses battle geometry, endpoint cover, evasion, an
   const state = battle(mover, { units: [owner, blocker], contents: [cover] });
   const [aa] = aaPreviewDescriptors(state, mover, { q: 2, r: 0 });
 
-  assert.deepEqual({ probability: aa.probability, max: aa.max, expectedHarm: aa.expectedHarm }, { probability: 0.3, max: 12, expectedHarm: 3.6 });
+  assert.deepEqual({ probability: aa.probability, max: aa.max, expectedHarm: aa.expectedHarm }, { probability: 0.3, max: 9, expectedHarm: 2.7 });
 });
 
 test("known AA preview is descriptive and consumes neither RNG nor readiness", () => {
-  const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
+  const mover = unit({ currentSpeed: 1, speedRemaining: 1, shield: 0, armor: 0, integrity: 20 });
   const owner = aaOwner();
   const state = battle(mover, { units: [owner] });
   let randomCalls = 0;

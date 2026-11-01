@@ -74,7 +74,7 @@ test("real Atlas forward hardpoint carries orientation into runtime geometry", (
   assert.equal(previewWeaponAttack(state, attacker.id, forward.id, target.id).canConfirm, false);
 });
 
-for (const squadronId of ["wasps", "mantis"]) {
+for (const squadronId of ["wasps", "mantis", "hornet-azure", "mantis-crimson-2"]) {
   test(`${squadronId} slots accept forward and reject aft targets for all headings`, () => {
     const state = createBattleState();
     const attacker = unitById(state, squadronId);
@@ -97,6 +97,28 @@ for (const squadronId of ["wasps", "mantis"]) {
     }
   });
 }
+
+test("capital forward AA obeys fore and aft geometry at every heading", () => {
+  const state = createBattleState();
+  const owner = unitById(state, "raptor");
+  const target = unitById(state, "wasps");
+  const slot = owner.weapons.find(weapon => weapon.id === "raptor-aft-aa");
+  state.activeUnitId = owner.id;
+  owner.position = { q: 0, r: 0 };
+  for (const orientation of ["fore", "aft"]) {
+    slot.orientation = orientation;
+    for (let heading = 0; heading < 6; heading++) {
+      owner.heading = heading;
+      const [dq, dr] = DIRECTIONS[heading];
+      const sign = orientation === "fore" ? 1 : -1;
+      target.position = { q: sign * dq, r: sign * dr };
+      assert.equal(previewWeaponAttack(state, owner.id, slot.id, target.id).canConfirm, true);
+      assert.equal(weaponAttackArc(state, owner.id, slot.id).has(key(target.position.q, target.position.r)), true);
+      target.position = { q: -sign * dq, r: -sign * dr };
+      assert.equal(previewWeaponAttack(state, owner.id, slot.id, target.id).canConfirm, false);
+    }
+  }
+});
 
 test("Kiro assault craft beam turret targets every direction and both unit kinds", () => {
   const state = createBattleState();

@@ -12,6 +12,13 @@ export const SQUADRON_LOADOUTS = deepFreeze({
       torpedo: { id: "mantis-torpedo", weaponId: "hammerTorpedo" }
     }
   },
+  hornet: {
+    id: "hornet", modelId: "hornet",
+    weapons: {
+      "left-autocannon": { id: "hornet-left", weaponId: "twinNeedleAutocannon" },
+      "right-autocannon": { id: "hornet-right", weaponId: "twinNeedleAutocannon" }
+    }
+  },
   kiro: {
     id: "kiro", modelId: "kiro",
     weapons: { "beam-turret": { id: "kiro-beam", weaponId: "lanceBeam" } }

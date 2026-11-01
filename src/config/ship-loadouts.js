@@ -19,7 +19,7 @@ export const SHIP_LOADOUTS = deepFreeze({
     id: "swift", hullId: "swiftFrigate",
     systems: { engine: "swiftEngine", reactor: "swiftReactor" },
     weapons: {
-      "autocannon-turret": { id: "swift-autocannon", weaponId: "sentinelAutocannon" },
+      "forward-emitter": { id: "swift-forward", weaponId: "focusEmitter" },
       "laser-turret": { id: "swift-laser", weaponId: "rayAALaser" }
     }
   },
@@ -30,14 +30,15 @@ export const SHIP_LOADOUTS = deepFreeze({
       line: { id: "bastion-line", weaponId: "titanRailgun" },
       "battery-left": { id: "bastion-battery-left", weaponId: "hailMissileBattery" },
       "battery-right": { id: "bastion-battery-right", weaponId: "hailMissileBattery" },
-      "plasma-turret": { id: "bastion-plasma", weaponId: "torchPlasmaCannon" }
+      "plasma-turret": { id: "bastion-aa", weaponId: "sentinelAutocannon" }
     }
   },
   raptor: {
     id: "raptor", hullId: "raptorDestroyer",
     systems: { engine: "raptorEngine", reactor: "raptorReactor" },
     weapons: {
-      "battery-right": { id: "raptor-battery-right", weaponId: "hailMissileBattery" },
+      "forward-emitter": { id: "raptor-forward", weaponId: "focusEmitter" },
+      "aft-aa": { id: "raptor-aft-aa", weaponId: "wardAutocannon" },
       "impulse-turret": { id: "raptor-impulse", weaponId: "impulseTurret" }
     }
   }

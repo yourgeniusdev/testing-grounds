@@ -3,6 +3,16 @@ import test from "node:test";
 import { VISUALS } from "./config/index.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
 
+test("hornet has its own two-cannon silhouette and dynamic two-to-one formation", () => {
+  for (const stack of [1, 2]) {
+    const markup = iconMarkup("interceptor", "#fff", "Шершень", stack);
+    assert.equal((markup.match(/data-squadron-kind="interceptor"/g) || []).length, stack);
+    assert.equal((markup.match(/class="barrel"/g) || []).length, stack);
+    assert.match(markup, /M41 56V42m18 14V42/);
+  }
+  assert.notEqual(VISUALS.interceptor.svg, VISUALS.squadron.svg);
+});
+
 const craftCount = markup => (markup.match(/data-squadron-craft=""/g) || []).length;
 
 for (const [stack, expected] of [[undefined, 3], [1, 1], [2, 2], [3, 3]]) {

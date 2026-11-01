@@ -14,6 +14,8 @@ export const SQUADRON_MODELS = deepFreeze({
     shield: 0,
     armor: 0,
     baseEvasion: 10,
+    crewRequirement: 20,
+    overwatchHardpointIds: [],
     visualId: "squadron",
     hardpoints: [
       { id: "autocannon", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" }
@@ -24,18 +26,41 @@ export const SQUADRON_MODELS = deepFreeze({
     displayName: "Мантис",
     kind: "squadron",
     craftType: "bomber",
-    baseSpeed: 4,
+    baseSpeed: 3,
     maneuver: 4,
     initiative: 3,
     stack: 3,
-    unitHealth: 5,
+    unitHealth: 8,
     shield: 0,
     armor: 0,
-    baseEvasion: 4,
+    baseEvasion: 2,
+    crewRequirement: 25,
+    overwatchHardpointIds: [],
     visualId: "bomber",
     hardpoints: [
       { id: "autocannon", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" },
       { id: "torpedo", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" }
+    ]
+  },
+  hornet: {
+    id: "hornet",
+    displayName: "Шершень",
+    kind: "squadron",
+    craftType: "interceptor",
+    baseSpeed: 7,
+    maneuver: 6,
+    initiative: 6,
+    stack: 2,
+    unitHealth: 4,
+    shield: 0,
+    armor: 0,
+    baseEvasion: 16,
+    crewRequirement: 30,
+    overwatchHardpointIds: ["left-autocannon", "right-autocannon"],
+    visualId: "interceptor",
+    hardpoints: [
+      { id: "left-autocannon", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" },
+      { id: "right-autocannon", mount: "squadronWeapon", type: "squadronWeapon", firingArc: "forward" }
     ]
   },
   kiro: {
@@ -50,7 +75,9 @@ export const SQUADRON_MODELS = deepFreeze({
     unitHealth: 18,
     shield: 10,
     armor: 0,
-    baseEvasion: 2,
+    baseEvasion: 10,
+    crewRequirement: 30,
+    overwatchHardpointIds: [],
     visualId: "assaultCraft",
     hardpoints: [
       { id: "beam-turret", mount: "turret", type: "turret" }

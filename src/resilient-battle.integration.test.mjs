@@ -76,6 +76,7 @@ function runBattle() {
   const state = createBattleState();
   const wasps = unitById(state, "wasps");
   const swift = unitById(state, "swift");
+  swift.weapons[0] = { ...structuredClone(unitById(state, "dart").weapons[0]), id: "swift-autocannon" };
   const mantis = unitById(state, "mantis");
   const guard = structuredClone(swift);
   const sentinel = structuredClone(swift);

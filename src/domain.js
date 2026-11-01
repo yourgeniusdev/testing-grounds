@@ -97,6 +97,7 @@ export function spendActivationResource(unit, resource, amount) {
 
 export function createScenario() {
   const unitInstances = [
+    { id: "hornet-azure", loadoutId: "hornet", name: "Перехватчик «Шершень»", callsign: "Шершень", sideId: "azure", color: "#66e4ff", col: -5, row: -4 },
     { id: "atlas", loadoutId: "atlas", name: "Крейсер «Атлас»", sideId: "azure", color: "#66e4ff", col: -5, row: -2, initialEnergy: 4 },
     { id: "swift", loadoutId: "swift", name: "Фрегат «Стриж»", sideId: "azure", color: "#66e4ff", col: -5, row: 2, initialEnergy: 4 },
     { id: "dart", loadoutId: "dart", name: "Корвет «Дротик»", sideId: "azure", color: "#66e4ff", col: -5, row: 4, initialEnergy: 3 },
@@ -104,7 +105,9 @@ export function createScenario() {
     { id: "bastion", loadoutId: "bastion", name: "Линкор «Бастион»", sideId: "crimson", color: "#ff667d", col: 5, row: -2, initialEnergy: 6 },
     { id: "raptor", loadoutId: "raptor", name: "Эсминец «Раптор»", sideId: "crimson", color: "#ff667d", col: 5, row: 2, initialEnergy: 4 },
     { id: "mantis", loadoutId: "mantis", name: "Эскадрилья «Мантисы»", callsign: "Мантисы", sideId: "crimson", color: "#ff7d9f", col: 5, row: 0 },
-    { id: "kiro", loadoutId: "kiro", name: "Штурмовик «Киро»", callsign: "Киро", sideId: "crimson", color: "#ff7d9f", col: 5, row: 4 }
+    { id: "kiro", loadoutId: "kiro", name: "Штурмовик «Киро»", callsign: "Киро", sideId: "crimson", color: "#ff7d9f", col: 5, row: 4 },
+    { id: "swift-azure-2", loadoutId: "swift", name: "Фрегат «Стриж-2»", callsign: "Стриж-2", sideId: "azure", color: "#66e4ff", col: -5, row: 3, initialEnergy: 4 },
+    { id: "mantis-crimson-2", loadoutId: "mantis", name: "Эскадрилья «Мантисы-2»", callsign: "Мантисы-2", sideId: "crimson", color: "#ff7d9f", col: 5, row: -4 }
   ];
   const units = unitInstances.map(instance => {
     const { col, row, initialEnergy, ...data } = instance;
@@ -148,11 +151,11 @@ export function overwatchAvailability(unit, weapon) {
   const storedEnergy = unit?.reactor?.currentEnergy || 0;
   const resources = { ...baseResources, energy: { spent: 0, remaining: storedEnergy, capacity: unit?.reactor?.capacity || 0 } };
   const reasons = [];
-  const eligible = Boolean(weapon?.targetKinds?.includes("squadron"));
+  const eligible = Boolean(weapon?.targetKinds?.includes("squadron") && (unit?.kind === "capital" || unit?.overwatchHardpointIds?.includes(weapon.hardpointId)));
   const weaponState = weapon ? weaponReadiness(weapon) : { ready: false, reason: "Оружейный слот отсутствует" };
   if (!weapon) reasons.push(availabilityReason("action.invalid", "Оружейный слот отсутствует"));
   else {
-    if (!eligible) reasons.push(availabilityReason("overwatch.ineligible", "Слот не может атаковать эскадрильи"));
+    if (!eligible) reasons.push(availabilityReason("overwatch.ineligible", "Наблюдение недоступно этому хардпоинту или виду цели"));
     if (!weaponState.ready) reasons.push(availabilityReason("action.not-ready", weaponState.reason, { firedThisRound: Boolean(weapon.firedThisRound), cooldownRemaining: weapon.cooldownRemaining || 0 }));
     if (weapon.energyCost > 0 && !unit?.reactor) reasons.push(availabilityReason("resource.unavailable", "Требуется реактор", { resource: "energy" }));
     reasons.push(...insufficientResourceReasons(resources, { energy: weapon.energyCost || 0 }));

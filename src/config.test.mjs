@@ -26,7 +26,7 @@ const runtimeFields = ["catalogWeaponId", "delivery", "targetKinds", "cooldownRo
 
 test("independent weapon catalog has neutral IDs, complete combat data and no ship-specific models", () => {
   assert.deepEqual(Object.keys(WEAPONS), [
-    "needleAutocannon", "twinNeedleAutocannon", "sentinelAutocannon", "rayAALaser", "lanceBeam", "torchPlasmaCannon", "stormKineticBattery",
+    "wardAutocannon", "needleAutocannon", "twinNeedleAutocannon", "sentinelAutocannon", "rayAALaser", "lanceBeam", "torchPlasmaCannon", "stormKineticBattery",
     "hailMissileBattery", "titanRailgun", "focusEmitter", "spearMissile", "impulseTurret", "hammerTorpedo"
   ]);
   for (const entry of Object.values(WEAPONS)) {
@@ -88,7 +88,7 @@ test("catalog validation enforces classes, delivery, targets, ranges, cooldowns,
     [config => { config.weapons.focusEmitter.cooldownRounds = -1; }, /nonnegative integer/],
     [config => { config.weapons.focusEmitter.visual.trail = "long"; }, /unknown trail/],
     [config => { config.weapons.focusEmitter.visual.size = 2; }, /at most 1 hex/],
-    [config => { config.weapons.focusEmitter.targetKinds.push("squadron"); }, /AA targeting is only valid/]
+    [config => { config.weapons.titanRailgun.targetKinds.push("squadron"); }, /AA targeting is only valid/]
   ];
   for (const [mutate, expected] of cases) {
     const config = cloneConfig();
@@ -135,13 +135,13 @@ test("real capital loadouts use reusable weapons in stable hardpoint order and A
   assert.deepEqual(atlas.weapons.map(entry => entry.catalogWeaponId), ["stormKineticBattery", "stormKineticBattery", "focusEmitter"]);
   assert.deepEqual(atlas.weapons.map(entry => entry.id), ["atlas-battery-left", "atlas-battery-right", "atlas-forward"]);
   assert.deepEqual({ mount: atlas.weapons[2].mount, orientation: atlas.weapons[2].orientation }, { mount: "forward", orientation: "fore" });
-  assert.deepEqual(buildCapitalProfile("swift").weapons.map(entry => entry.catalogWeaponId), ["sentinelAutocannon", "rayAALaser"]);
+  assert.deepEqual(buildCapitalProfile("swift").weapons.map(entry => entry.catalogWeaponId), ["focusEmitter", "rayAALaser"]);
   const corvette = buildCapitalProfile("dart");
   assert.deepEqual(corvette.weapons.map(entry => entry.catalogWeaponId), ["sentinelAutocannon"]);
-  assert.deepEqual({ hullType: corvette.hullType, speed: corvette.baseSpeed, maneuver: corvette.maneuver, integrity: corvette.integrity }, { hullType: "corvette", speed: 6, maneuver: 4, integrity: 48 });
+  assert.deepEqual({ hullType: corvette.hullType, speed: corvette.baseSpeed, maneuver: corvette.maneuver, integrity: corvette.integrity }, { hullType: "corvette", speed: 6, maneuver: 4, integrity: 30 });
   assert.ok(corvette.integrity < buildCapitalProfile("swift").integrity);
-  assert.deepEqual(buildCapitalProfile("bastion").weapons.map(entry => entry.catalogWeaponId), ["titanRailgun", "hailMissileBattery", "hailMissileBattery", "torchPlasmaCannon"]);
-  assert.deepEqual(buildCapitalProfile("raptor").weapons.map(entry => entry.catalogWeaponId), ["hailMissileBattery", "impulseTurret"]);
+  assert.deepEqual(buildCapitalProfile("bastion").weapons.map(entry => entry.catalogWeaponId), ["titanRailgun", "hailMissileBattery", "hailMissileBattery", "sentinelAutocannon"]);
+  assert.deepEqual(buildCapitalProfile("raptor").weapons.map(entry => entry.catalogWeaponId), ["focusEmitter", "wardAutocannon", "impulseTurret"]);
   for (const profile of [atlas, buildCapitalProfile("dart"), buildCapitalProfile("swift"), buildCapitalProfile("bastion"), buildCapitalProfile("raptor")]) {
     for (const entry of profile.weapons) {
       assert.equal("role" in entry, false);
@@ -157,7 +157,7 @@ test("squadron models and loadouts have agreed stats and stack-scalable base wea
   assert.ok(wasps.maneuver > buildCapitalProfile("swift").maneuver);
   assert.deepEqual(wasps.weapons.map(entry => [entry.catalogWeaponId, entry.shots * wasps.stack]), [["twinNeedleAutocannon", 6]]);
   const mantis = buildSquadronProfile("mantis");
-  assert.deepEqual({ speed: mantis.baseSpeed, maneuver: mantis.maneuver, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 4, maneuver: 4, initiative: 3, evasion: 4, stack: 3, unitHealth: 5 });
+  assert.deepEqual({ speed: mantis.baseSpeed, maneuver: mantis.maneuver, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 3, maneuver: 4, initiative: 3, evasion: 2, stack: 3, unitHealth: 8 });
   assert.ok(mantis.maneuver > buildCapitalProfile("raptor").maneuver);
   assert.deepEqual(mantis.weapons.map(entry => [entry.catalogWeaponId, entry.shots * mantis.stack]), [["needleAutocannon", 3], ["hammerTorpedo", 3]]);
   assert.deepEqual(mantis.weapons.map(entry => entry.targetKinds), [["capital", "squadron"], ["capital"]]);
@@ -273,13 +273,44 @@ test("equipped mass remains near combat mass", () => {
   for (const system of Object.values(PRIMARY_SYSTEMS)) assert.ok(Number.isFinite(system.future.massUnits));
 });
 
+test("approved profiles, crew metadata and overwatch references are exact", () => {
+  for (const [id, shield, armor, integrity, crew, initiative] of [["dart", 11, 8, 30, 50, 5], ["swift", 18, 14, 45, 70, 5], ["raptor", 23, 23, 60, 100, 4], ["atlas", 32, 32, 65, 140, 2], ["bastion", 46, 55, 100, 200, 1]]) {
+    const profile = buildCapitalProfile(id);
+    assert.deepEqual([profile.shield, profile.armor, profile.integrity, profile.crewRequirement, profile.initiative], [shield, armor, integrity, crew, initiative]);
+    assert.equal(profile.mass, profile.equippedMassUnits);
+  }
+  assert.deepEqual(Object.fromEntries(Object.entries(WEAPONS).map(([id, entry]) => [id, entry.accuracy])), {
+    wardAutocannon: 90, needleAutocannon: 80, twinNeedleAutocannon: 80, sentinelAutocannon: 92, rayAALaser: 95, lanceBeam: 90, torchPlasmaCannon: 88, stormKineticBattery: 82, hailMissileBattery: 85, titanRailgun: 80, focusEmitter: 91, spearMissile: 76, impulseTurret: 91, hammerTorpedo: 70
+  });
+  const hornet = buildSquadronProfile("hornet");
+  assert.deepEqual([hornet.stack, hornet.unitHealth, hornet.shield, hornet.armor, hornet.baseSpeed, hornet.maneuver, hornet.initiative, hornet.baseEvasion, hornet.crewRequirement], [2, 4, 0, 0, 7, 6, 6, 16, 30]);
+  assert.deepEqual(hornet.weapons.map(slot => slot.catalogWeaponId), ["twinNeedleAutocannon", "twinNeedleAutocannon"]);
+  for (const [id, crew] of [["wasps", 20], ["mantis", 25], ["kiro", 30]]) {
+    const profile = buildSquadronProfile(id);
+    assert.equal(profile.crewRequirement, crew);
+    assert.deepEqual(profile.overwatchHardpointIds, []);
+  }
+  assert.equal(buildSquadronProfile("kiro").baseEvasion, 10);
+  for (const ids of [["missing"], ["autocannon", "autocannon"]]) {
+    const config = cloneConfig();
+    config.squadronModels.wasp.overwatchHardpointIds = ids;
+    assert.throws(() => validateConfig(config), /hardpoint ID/);
+  }
+  const forward = cloneConfig();
+  forward.weapons.focusEmitter.targetKinds.push("squadron");
+  assert.equal(validateConfig(forward), true);
+  const battery = cloneConfig();
+  battery.weapons.stormKineticBattery.targetKinds.push("squadron");
+  assert.throws(() => validateConfig(battery), /AA targeting/);
+});
+
 test("configuration graph is deeply frozen", () => {
   assertDeepFrozen(CONFIG);
   assert.throws(() => { CONFIG.capitalHulls.atlasCruiser.hardpoints[0].mount = "changed"; }, TypeError);
 });
 
 test("visuals preserve every entity SVG, class scale and squadron formations", () => {
-  assert.deepEqual(Object.keys(VISUALS), ["cruiser", "corvette", "frigate", "destroyer", "battleship", "squadron", "bomber", "assaultCraft", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
+  assert.deepEqual(Object.keys(VISUALS), ["cruiser", "corvette", "frigate", "destroyer", "battleship", "squadron", "interceptor", "bomber", "assaultCraft", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
   for (const visual of Object.values(VISUALS)) {
     assert.match(visual.svg, /<(?:path|circle)/);
     assert.ok(Number.isFinite(visual.size) && visual.size > 0);

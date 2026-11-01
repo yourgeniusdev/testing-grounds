@@ -61,6 +61,7 @@ const requiredReference = (dictionary, id, path, targetName) => {
 };
 
 const validateHardpoints = (owner, path) => {
+  if (!Number.isInteger(owner.crewRequirement) || owner.crewRequirement < 0) fail(`${path}.crewRequirement`, "expected a nonnegative integer");
   const hardpoints = validateArray(owner.hardpoints, `${path}.hardpoints`);
   const ids = new Set();
   for (const [index, hardpoint] of hardpoints.entries()) {
@@ -168,7 +169,7 @@ const validateCatalogWeapon = (entry, path, weapons) => {
   targetKinds.forEach((kind, index) => {
     if (!TARGET_KINDS.includes(kind)) fail(`${path}.targetKinds[${index}]`, `unknown target kind "${kind}"`);
   });
-  if (targetKinds.includes("squadron") && compatibleTypes.some(type => !["turret", "squadronWeapon"].includes(type))) fail(`${path}.targetKinds`, "AA targeting is only valid on turret and squadronWeapon hardpoints");
+  if (targetKinds.includes("squadron") && compatibleTypes.some(type => !["turret", "forward", "squadronWeapon"].includes(type))) fail(`${path}.targetKinds`, "AA targeting is only valid on turret, forward and squadronWeapon hardpoints");
   validateNumbers(entry, path, ["accuracy", "effectiveRange", "maxRange", "shots", "damage", "critChance", "energyCost", "cooldownRounds"]);
   if (entry.accuracy < 0 || entry.accuracy > 100) fail(`${path}.accuracy`, "expected a value from 0 to 100");
   if (entry.critChance < 0 || entry.critChance > 100) fail(`${path}.critChance`, "expected a value from 0 to 100");
@@ -202,10 +203,10 @@ const validateVisuals = visuals => {
     validateString(visual.svg, `${path}.svg`);
     validateNumber(visual.size, `${path}.size`);
   }
-  for (const visualId of ["squadron", "bomber"]) {
+  for (const visualId of ["squadron", "bomber", "interceptor"]) {
     const path = `visuals.${visualId}.formationOffsets`;
     const offsetsByCount = validateObject(visuals[visualId]?.formationOffsets, path);
-    for (const count of [1, 2, 3]) {
+    for (const count of visualId === "interceptor" ? [1, 2] : [1, 2, 3]) {
       const offsets = validateArray(offsetsByCount[count], `${path}.${count}`);
       if (offsets.length !== count) fail(`${path}.${count}`, `expected ${count} offsets, received ${offsets.length}`);
       for (const [index, offset] of offsets.entries()) {
@@ -241,6 +242,9 @@ export function validateConfig(config) {
     if (model.maneuver < 0) fail(`${path}.maneuver`, "expected a nonnegative number");
     if (!Number.isInteger(model.stack) || model.stack < 1 || model.stack > 3) fail(`${path}.stack`, "expected an integer from 1 to 3");
     validateHardpoints(model, path);
+    const overwatchIds = validateArray(model.overwatchHardpointIds, `${path}.overwatchHardpointIds`);
+    if (new Set(overwatchIds).size !== overwatchIds.length) fail(`${path}.overwatchHardpointIds`, "duplicate hardpoint ID");
+    for (const id of overwatchIds) if (!model.hardpoints.some(hardpoint => hardpoint.id === id)) fail(`${path}.overwatchHardpointIds`, `unknown hardpoint ID "${id}"`);
     requiredReference(visuals, model.visualId, `${path}.visualId`, "visual");
   }
 

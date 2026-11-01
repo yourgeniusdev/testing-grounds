@@ -175,7 +175,14 @@ export function previewWeaponAttack(state, attackerId, slotId, targetId) {
   const effective = attacker && weapon ? effectiveWeapon(attacker, weapon) : null;
   const geometry = attacker && target ? attackGeometry(state, targetId, new Set(), attacker) : { blocker: null, cover: 0, endpointCover: 0 };
   const layer = target ? activeLayer(target) : null;
-  const chance = effective && target ? hitChance(effective, target, geometry.cover + geometry.endpointCover) : 0;
+  const chance = effective && target ? Math.max(0, hitChance(effective, target, geometry.endpointCover) - geometry.cover) : 0;
+  const simulated = target ? cloneCombatant(target) : null;
+  const potentialDamageByLayer = { shield: 0, armor: 0, integrity: 0 };
+  for (let shot = 0; simulated && effective && shot < effective.shots && simulated.integrity > 0; shot++) {
+    const layers = weaponHitDamage(simulated, effective);
+    for (const entry of layers) potentialDamageByLayer[entry.layer] += entry.damage;
+    simulatedDamage(simulated, layers);
+  }
   return deepFreeze({
     availability,
     attackerId,
@@ -191,7 +198,9 @@ export function previewWeaponAttack(state, attackerId, slotId, targetId) {
     energyRequired: availability.forecast.cost.energy,
     energyAvailable: availability.resources.energy?.remaining || 0,
     layer,
-    potentialDamage: effective && layer ? effective.shots * weaponDamage(effective, layer) : 0,
+    potentialDamage: Object.values(potentialDamageByLayer).reduce((total, damage) => total + damage, 0),
+    potentialDamageByLayer,
+    blockerChance: effective && target ? Math.min(geometry.cover, hitChance(effective, target, geometry.endpointCover)) : 0,
     hitChance: chance,
     blocker: geometry.blocker ? { id: geometry.blocker.id, name: geometry.blocker.name, position: { ...geometry.blocker.position } } : null,
     cover: geometry.cover,
@@ -228,8 +237,23 @@ function snapshot(unit) {
   return Object.freeze({ shield: unit.shield, armor: unit.armor, integrity: unit.integrity, stack: unit.stack });
 }
 
-function simulatedDamage(unit, damage, layer) {
-  unit[layer] = Math.max(0, unit[layer] - damage);
+export function weaponHitDamage(unit, weapon) {
+  let remaining = weapon.damage;
+  const layers = [];
+  for (const layer of ["shield", "armor", "integrity"]) {
+    if (remaining <= 0 || !(unit[layer] > 0)) continue;
+    const multiplier = effectiveness(weapon, layer);
+    const scaled = remaining * multiplier;
+    const damage = Math.min(unit[layer], Math.max(remaining >= 1 ? 1 : 0, Math.floor(scaled + 1e-10)));
+    if (damage > 0) layers.push({ layer, damage, multiplier });
+    if (scaled < unit[layer]) break;
+    remaining = Math.max(0, remaining - unit[layer] / multiplier);
+  }
+  return layers;
+}
+
+function simulatedDamage(unit, layers) {
+  for (const { layer, damage } of layers) unit[layer] = Math.max(0, unit[layer] - damage);
   if (unit.kind === "squadron" && unit.unitHealth) unit.stack = unit.integrity ? Math.ceil(unit.integrity / unit.unitHealth) : 0;
 }
 
@@ -262,41 +286,46 @@ function planWeaponAttack(state, attacker, installedWeapon, target, rollD100, ra
   let weaponEndTime = 0;
   for (let shot = 1; shot <= weapon.shots && simulatedTarget.integrity > 0; shot++) {
       const geometry = attackGeometry(state, target.id, destroyedBlockerIds, attacker);
-      const chance = hitChance(weapon, target, geometry.cover + geometry.endpointCover);
+      const chance = Math.max(0, hitChance(weapon, target, geometry.endpointCover) - geometry.cover);
       const roll = rollD100();
       const targetBefore = snapshot(simulatedTarget);
       let outcome = "miss";
       let hitUnitId = null;
       let hitLayer = null;
       let damage = 0;
+      let damageLayers = [];
       let multiplier = null;
       let critical = null;
       let criticalRoll = null;
       let destroyed = false;
       let layerDestroyed = false;
       let targetAfter = targetBefore;
-      if (geometry.blocker && roll <= geometry.cover) {
+      const finalAccuracy = hitChance(weapon, target, geometry.endpointCover);
+      const blockerChance = Math.min(geometry.cover, finalAccuracy);
+      if (geometry.blocker && roll <= blockerChance) {
         outcome = "blocked";
         hitUnitId = geometry.blocker.id;
         const simulatedBlocker = simulatedBlockers.get(hitUnitId) || cloneCombatant(geometry.blocker);
         simulatedBlockers.set(hitUnitId, simulatedBlocker);
         hitLayer = activeLayer(simulatedBlocker);
         multiplier = effectiveness(weapon, hitLayer);
-        damage = weaponDamage(weapon, hitLayer);
-        simulatedDamage(simulatedBlocker, damage, hitLayer);
+        damageLayers = weaponHitDamage(simulatedBlocker, weapon);
+        damage = damageLayers.reduce((total, entry) => total + entry.damage, 0);
+        simulatedDamage(simulatedBlocker, damageLayers);
         destroyed = simulatedBlocker.integrity === 0;
         if (destroyed) destroyedBlockerIds.add(hitUnitId);
-      } else if (roll <= geometry.cover + chance) {
+      } else if (roll <= finalAccuracy) {
         outcome = "hit";
         hitUnitId = target.id;
         hitLayer = activeLayer(simulatedTarget);
         multiplier = effectiveness(weapon, hitLayer);
-        damage = weaponDamage(weapon, hitLayer);
+        damageLayers = weaponHitDamage(simulatedTarget, weapon);
+        damage = damageLayers.reduce((total, entry) => total + entry.damage, 0);
         const beforeLayer = simulatedTarget[hitLayer];
-        simulatedDamage(simulatedTarget, damage, hitLayer);
+        simulatedDamage(simulatedTarget, damageLayers);
         layerDestroyed = beforeLayer > 0 && simulatedTarget[hitLayer] === 0 && hitLayer !== "integrity";
         destroyed = simulatedTarget.integrity === 0;
-        if (hitLayer === "integrity" && damage > 0) {
+        if (damageLayers.some(entry => entry.layer === "integrity" && entry.damage > 0)) {
           const planned = plannedCritical(attacker, weapon, rollD100, random, shot);
           criticalRoll = planned.roll;
           critical = planned.critical;
@@ -309,7 +338,7 @@ function planWeaponAttack(state, attacker, installedWeapon, target, rollD100, ra
       const duration = Math.max(120, Math.round(distance / speed * 1000));
       const launchTime = (shot - 1) * (weapon.visual?.launchIntervalMs || 0);
       const arrivalTime = launchTime + duration;
-      steps.push({ index: steps.length, slotId: weapon.id, weaponId: weapon.weaponId, weaponName: weapon.name, weaponClass: weapon.weaponClass, delivery: weapon.delivery, visual: weapon.visual, shot, roll, chance, cover: geometry.cover, endpointCover: geometry.endpointCover, outcome, hitUnitId, layer: hitLayer, multiplier, damage, criticalRoll, critical: critical ? { ...critical, round: state.roundNumber } : null, layerDestroyed, destroyed, targetBefore, targetAfter, endpoint, launchTime, arrivalTime, duration });
+      steps.push({ index: steps.length, slotId: weapon.id, weaponId: weapon.weaponId, weaponName: weapon.name, weaponClass: weapon.weaponClass, delivery: weapon.delivery, visual: weapon.visual, shot, roll, chance, cover: geometry.cover, endpointCover: geometry.endpointCover, outcome, hitUnitId, layer: hitLayer, multiplier, damage, damageLayers, blockerChance, finalAccuracy, criticalRoll, critical: critical ? { ...critical, round: state.roundNumber } : null, layerDestroyed, destroyed, targetBefore, targetAfter, endpoint, launchTime, arrivalTime, duration });
       weaponEndTime = Math.max(weaponEndTime, arrivalTime);
   }
   return deepFreeze({
@@ -393,8 +422,8 @@ export function applyAttackStep(state, plan, stepIndex) {
     if (!plan.reaction) log(state, `${step.weaponName}, выстрел ${step.shot}: ${step.roll}/${step.chance}, промах.`);
     else if (!missEvent) return { status: "invalid" };
   } else {
-    applyDamage(state, hitUnit, step.damage, `weapon:${step.slotId}`, step.layer, context);
-    log(state, `${step.weaponName} [${step.weaponClass}], выстрел ${step.shot}: ${step.roll}/${step.chance}, попадание; ${step.damage} урона по ${step.layer}.`, attacker.sideId);
+    for (const entry of step.damageLayers) applyDamage(state, hitUnit, entry.damage, `weapon:${step.slotId}`, entry.layer, { ...context, shot: step.shot, slotId: step.slotId, layer: entry.layer });
+    log(state, `${step.weaponName} [${step.weaponClass}], выстрел ${step.shot}: ${step.roll}/${step.chance}, попадание; ${step.damage} урона (${step.damageLayers.map(entry => `${entry.layer}: ${entry.damage}`).join(", ")}).`, attacker.sideId);
     if (step.critical) {
       hitUnit.criticals.push({ ...step.critical });
       log(state, `Крит ${step.criticalRoll}: ${step.critical.type}.`, "danger");

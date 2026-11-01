@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { aaPreviewDescriptors } from "./route-preview.js";
+import { overwatchAvailability } from "./domain.js";
 import test from "node:test";
 import {
   applyAttackStep,
@@ -9,7 +11,8 @@ import {
   previewWeaponAttack,
   resolvePostEntryAA,
   supercoverLine,
-  weaponAttackArc
+  weaponAttackArc,
+  weaponHitDamage
 } from "./battle.js";
 import {
   advanceWeaponRound,
@@ -105,6 +108,59 @@ function applyPlan(state, plan) {
   for (let index = 0; index < plan.steps.length; index++) assert.equal(applyAttackStep(state, plan, index).status, "applied");
 }
 
+test("weapon hits carry fractional base damage across layers without free minimum damage", () => {
+  for (const [weaponClass, damage, shield, armor, expected] of [
+    ["kinetic", 8, 3, 3, [3, 3, 2]],
+    ["energy", 8, 1, 2, [1, 2, 4]],
+    ["explosive", 8, 2, 3, [2, 3, 5]],
+    ["kinetic", 2, 2, 0, [2]],
+    ["kinetic", 3, 1, 1, [1, 1, 1]]
+  ]) {
+    const slot = weapon({ weaponClass, damage });
+    const { state, attacker, target } = battle([slot], { shield, armor, integrity: 20, kind: "squadron", unitHealth: 4, stack: 5 });
+    slot.targetKinds = ["squadron"];
+    assert.deepEqual(weaponHitDamage(target, slot).map(entry => entry.damage), expected);
+    const preview = previewWeaponAttack(state, attacker.id, slot.id, target.id);
+    const plan = planAttack(state, attacker, slot, target, () => 1);
+    assert.equal(plan.steps[0].damage, expected.reduce((sum, value) => sum + value, 0));
+    assert.equal(preview.potentialDamage, plan.steps[0].damage);
+    applyPlan(state, plan);
+    assert.deepEqual({ shield: target.shield, armor: target.armor, integrity: target.integrity, stack: target.stack }, plan.targetAfter);
+    const events = state.events.filter(event => event.action === "damage");
+    assert.equal(events.reduce((sum, event) => sum + event.before[event.layer] - event.after[event.layer], 0), preview.potentialDamage);
+    assert.equal(target.stack, Math.ceil(target.integrity / 4));
+  }
+  assert.deepEqual(weaponHitDamage({ shield: 0, armor: 2, integrity: 4 }, weapon({ damage: 1 })).map(entry => entry.damage), [1]);
+});
+
+test("one penetrating hit destroys a stack once and stops later shots", () => {
+  const slot = weapon({ damage: 20, shots: 3, targetKinds: ["squadron"] });
+  const { state, attacker, target } = battle([slot], { kind: "squadron", shield: 3, armor: 3, integrity: 8, unitHealth: 4, stack: 2 });
+  const plan = planAttack(state, attacker, slot, target, () => 1);
+  assert.equal(plan.steps.length, 1);
+  assert.equal(plan.steps[0].damage, 14);
+  applyPlan(state, plan);
+  assert.equal(target.stack, 0);
+  assert.equal(state.events.filter(event => event.action === "destroy").length, 1);
+});
+
+test("blocker and target outcomes never exceed final accuracy", () => {
+  for (const accuracy of [0, 20, 80, 100]) {
+    let hits = 0;
+    for (let roll = 1; roll <= 100; roll++) {
+      const slot = weapon({ accuracy });
+      const { state, attacker, target } = battle([slot], { baseEvasion: 5, movementEvasion: 5 });
+      state.scenario.contents = [{ type: "debrisField", position: { ...target.position } }];
+      state.units.push(unit({ id: "blocker", position: { q: 1, r: 0 }, mass: 200 }));
+      const plan = planAttack(state, attacker, slot, target, () => roll);
+      const step = plan.steps[0];
+      assert.equal(step.blockerChance, Math.max(0, accuracy - 20));
+      if (step.outcome !== "miss") hits++;
+    }
+    assert.equal(hits, Math.max(0, accuracy - 20));
+  }
+});
+
 test("weapon readiness is derived and shared by manual fire and overwatch", () => {
   const slot = initializeWeaponState(weapon({ cooldownRounds: 1 }), 3);
   assert.deepEqual(weaponReadiness(slot), { ready: true, reason: null });
@@ -119,9 +175,9 @@ test("weapon readiness is derived and shared by manual fire and overwatch", () =
   assert.equal("ready" in slot, false);
 });
 
-test("an unused squadron weapon that can attack squadrons enters overwatch at activation end", () => {
-  const aa = weapon({ targetKinds: ["capital", "squadron"] });
-  const squadron = unit({ kind: "squadron", weapons: [aa] });
+test("an explicitly enabled squadron hardpoint enters overwatch at activation end", () => {
+  const aa = weapon({ hardpointId: "aa", targetKinds: ["capital", "squadron"] });
+  const squadron = unit({ kind: "squadron", overwatchHardpointIds: ["aa"], weapons: [aa] });
   const enemy = unit({ id: "enemy", sideId: "crimson", weapons: [] });
   const state = battle([]).state;
   state.units = [squadron, enemy];
@@ -135,6 +191,41 @@ test("an unused squadron weapon that can attack squadrons enters overwatch at ac
   state.lifecycle = "ActionChoice";
   assert.ok(beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: aa.id }));
   assert.equal(aa.overwatch, true);
+});
+
+test("existing squadrons cannot react while both hornet slots independently react on one step", () => {
+  const state = createBattleState();
+  for (const id of ["wasps", "mantis", "kiro"]) {
+    const owner = state.units.find(unit => unit.id === id);
+    for (const slot of owner.weapons) {
+      slot.overwatch = true;
+      assert.equal(overwatchAvailability(owner, slot).readiness.eligible, false);
+    }
+  }
+  const owner = state.units.find(unit => unit.id === "hornet-azure");
+  const target = state.units.find(unit => unit.id === "mantis");
+  state.units = [owner, target];
+  state.scenario.contents = [];
+  owner.position = { q: 0, r: 0 };
+  owner.heading = 0;
+  target.position = { q: 1, r: 0 };
+  target.baseEvasion = 0;
+  owner.weapons.forEach(slot => { slot.overwatch = true; });
+  const preview = aaPreviewDescriptors(state, target, target.position);
+  assert.deepEqual(preview.map(entry => entry.max), [4, 4]);
+  const outcomes = resolvePostEntryAA(state, target, {}, () => 1, () => 0);
+  assert.equal(outcomes.length, 2);
+  assert.equal(owner.weapons.every(slot => slot.firedThisRound && !slot.overwatch), true);
+  assert.equal(target.integrity, 16);
+  owner.weapons.forEach(slot => { slot.firedThisRound = false; slot.overwatch = true; });
+  state.activeUnitId = owner.id;
+  state.lifecycle = "ActionChoice";
+  applyPlan(state, planAttack(state, owner, owner.weapons[0], target, () => 100));
+  endActivation(state);
+  assert.equal(owner.weapons[0].overwatch, false);
+  assert.equal(owner.weapons[1].overwatch, true);
+  owner.weapons[1].targetKinds = ["capital"];
+  assert.equal(overwatchAvailability(owner, owner.weapons[1]).readiness.eligible, false);
 });
 
 test("planning one slot and target is pure until confirmation", () => {

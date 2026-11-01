@@ -11,6 +11,7 @@ import {
   confirmManeuverAction,
   createBattleState,
   deployUnit,
+  deploymentZone,
   endActivation,
   executeManeuverElement,
   key,
@@ -35,6 +36,36 @@ function executeManeuver(state, route) {
   return plan;
 }
 
+test("default scenario has balanced crew, stable instances, and unoccupied deployment cells", () => {
+  const state = createBattleState();
+  const expectedLoadouts = {
+    azure: ["atlas", "dart", "hornet", "swift", "swift", "wasps"],
+    crimson: ["bastion", "kiro", "mantis", "mantis", "raptor"]
+  };
+  for (const sideId of ["azure", "crimson"]) {
+    const units = state.units.filter(unit => unit.sideId === sideId);
+    assert.equal(units.length, sideId === "azure" ? 6 : 5);
+    assert.equal(units.reduce((total, unit) => total + unit.crewRequirement, 0), 380);
+    assert.deepEqual(units.map(unit => unit.loadoutId).sort(), expectedLoadouts[sideId]);
+    const zone = new Set(deploymentZone(state, sideId).map(cell => key(cell.q, cell.r)));
+    for (const unit of units) assert.ok(zone.has(key(unit.position.q, unit.position.r)), unit.id);
+  }
+  assert.equal(new Set(state.units.map(unit => unit.id)).size, state.units.length);
+  assert.equal(new Set(state.units.map(unit => key(unit.position.q, unit.position.r))).size, state.units.length);
+  assert.deepEqual(createBattleState().units, state.units);
+  assert.equal(unitById(state, "hornet-azure").loadoutId, "hornet");
+  assert.ok(!unitById(state, "hornet-crimson"));
+  const swift = unitById(state, "swift-azure-2");
+  assert.equal(swift.kind, "capital");
+  assert.equal(swift.loadoutId, "swift");
+  assert.equal(swift.crewRequirement, 70);
+  assert.equal(swift.reactor.currentEnergy, 4);
+  const mantis = unitById(state, "mantis-crimson-2");
+  assert.equal(mantis.kind, "squadron");
+  assert.equal(mantis.loadoutId, "mantis");
+  assert.equal(mantis.crewRequirement, 25);
+});
+
 test("default right-side confirmation exposes first-unit routes without blocking the UI", () => {
   const state = createBattleState();
   assert.equal(confirmDeployment(state, "azure"), true);
@@ -45,13 +76,16 @@ test("default right-side confirmation exposes first-unit routes without blocking
   const routes = planRoutes(state, activeUnit(state), "risky");
   const elapsed = performance.now() - started;
 
-  assert.equal(activeUnit(state).id, "wasps");
-  assert.equal(routes.size, 382);
+  assert.deepEqual(state.units.filter(unit => unit.squadronModelId === "hornet").map(unit => unit.sideId), ["azure"]);
+  assert.deepEqual(state.initiativeOrder.slice(0, 2), ["hornet-azure", "dart"]);
+  assert.equal(activeUnit(state).id, "hornet-azure");
+  assert.equal(routes.size, 358);
   assert.ok(elapsed < 5000, `default route planning took ${Math.round(elapsed)}ms`);
 });
 
 test("deployment flow completes maneuver, weapon attacks, activation, and next-unit transition", () => {
   const state = createBattleState();
+  state.units = state.units.filter(unit => ["atlas", "swift", "dart", "wasps", "bastion", "raptor", "mantis", "kiro"].includes(unit.id));
   state.scenario.bounds = { minCol: -2, maxCol: 2, minRow: -3, maxRow: 3 };
   state.scenario.contents = [];
 

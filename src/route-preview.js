@@ -1,4 +1,4 @@
-import { activeLayer, attackGeometry, hitChance, isPositionInFiringArc, weaponDamage } from "./battle.js";
+import { attackGeometry, hitChance, isPositionInFiringArc, weaponHitDamage } from "./battle.js";
 import { hexDistance, overwatchAvailability } from "./domain.js";
 
 export function isKnownTo(entity, sideId) {
@@ -57,9 +57,16 @@ export function aaPreviewDescriptors(state, target, position) {
       if (!isKnownTo(weapon, target.sideId) || !overwatchAvailability(owner, weapon).available) continue;
       if (hexDistance(owner.position, position) > weapon.maxRange || !isPositionInFiringArc(owner.position, owner.heading || 0, position, weapon.firingArc ?? weapon.mount, weapon.orientation)) continue;
       const geometry = attackGeometry({ ...state, units: state.units.map(unit => unit.id === target.id ? previewTarget : unit) }, target.id, new Set(), owner);
-      const probability = hitChance(weapon, previewTarget, geometry.cover + geometry.endpointCover) / 100;
+      const probability = Math.max(0, hitChance(weapon, previewTarget, geometry.endpointCover) - geometry.cover) / 100;
       const shots = weapon.shots * (owner.kind === "squadron" ? owner.stack || 1 : 1);
-      const max = shots * weaponDamage(weapon, activeLayer(previewTarget));
+      const simulated = { ...previewTarget };
+      let max = 0;
+      for (let shot = 0; shot < shots && simulated.integrity > 0; shot++) {
+        for (const { layer, damage } of weaponHitDamage(simulated, weapon)) {
+          max += damage;
+          simulated[layer] -= damage;
+        }
+      }
       descriptors.push({
         kind: "aa",
         sourceId: owner.id,

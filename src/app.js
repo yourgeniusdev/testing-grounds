@@ -226,7 +226,7 @@ function renderInitiative() {
   el.initiativeList.innerHTML = state.initiativeOrder.map(id => {
     const unit = unitById(state, id);
     if (!unit) return "";
-    const model = unit.kind === "capital" ? unit.hullClassName : unit.squadronModelName;
+    const model = unit.kind === "capital" ? unit.hullClassName : unit.craftType === "interceptor" ? `Перехватчик · ${unit.squadronModelName}` : unit.squadronModelName;
     const waitMark = unit.hasWaited && !unit.hasActivated ? '<span class="queue-state" aria-label="Ожидает">◷</span>' : "";
     return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${model} · INI ${unit.initiative}</small></span>${waitMark}</article>`;
   }).join("");
@@ -247,7 +247,7 @@ function effectRows(unit) {
 }
 
 function unitModel(unit) {
-  return unit.kind === "capital" ? unit.hullClassName : unit.squadronModelName;
+  return unit.kind === "capital" ? unit.hullClassName : unit.craftType === "interceptor" ? `Перехватчик · ${unit.squadronModelName}` : unit.squadronModelName;
 }
 
 function tooltipStatuses(unit) {
@@ -274,7 +274,7 @@ function renderUnitSummary() {
     el.unitSummary.innerHTML = '<div class="inspector-empty"><span>◇</span><b>Ожидание начала боя</b><small>Параметры появятся после определения активного юнита.</small></div>';
     return;
   }
-  const model = unit.kind === "capital" ? unit.hullClassName : unit.squadronModelName;
+  const model = unit.kind === "capital" ? unit.hullClassName : unit.craftType === "interceptor" ? `Перехватчик · ${unit.squadronModelName}` : unit.squadronModelName;
   const previewSelection = ui.selected ? { ...ui.selected, previewOption: selectedOption() } : null;
   const routeOption = previewSelection?.previewOption || previewSelection?.option || null;
   const routeAvailability = state.activeAction?.type === "maneuver" && routeOption ? actionAvailability(state, { type: "maneuver", option: routeOption }) : null;
@@ -291,7 +291,7 @@ function renderUnitSummary() {
   const speedState = `<div class="resource-state"><span>Скорость <b>${resourceMetricsText(resources.speed, speedPreview)}</b></span>${resourceSegments(resources.speed, speedPreview, "speed")}</div>`;
   const maneuverState = unit.maneuver !== undefined ? `<div class="resource-state"><span>Манёвренность <b>${resourceMetricsText(resources.maneuver, maneuverPreview)}</b></span>${resourceSegments(resources.maneuver, maneuverPreview, "maneuver")}</div>` : "";
   const evasionPreview = evasionBonus > 0 ? `<em>+${evasionBonus}%</em>` : evasionBonus < 0 ? `<i>${evasionBonus}%</i>` : "";
-  el.unitSummary.innerHTML = `<div class="unit-identity"><div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-identity-copy"><span class="active-label">${state.winner ? "Последний активный юнит" : "Активный юнит"}</span><strong>${unit.name}</strong><small>${model}</small></div><span class="class-badge" style="color:${unit.color}">${unit.kind === "capital" ? "CAPITAL" : "SQUADRON"}</span></div><section class="inspector-section current-state"><div class="section-title"><span>Текущее состояние</span></div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")}${healthBar("Броня", unit.armor, unit.maxArmor, "armor")}${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}</div>${speedState}${maneuverState}<div class="evasion-state"><span>Уклонение</span><b>${evasion}% ${evasionPreview}</b></div></section><section class="inspector-section status-section"><div class="section-title"><span>Критические повреждения</span><small>${unit.criticals.length}</small></div>${statusList(unit.criticals.map(item => ({ ...item, tone: "negative", icon: "!", name: item.type })), "critical", "Критических повреждений нет")}</section><section class="inspector-section status-section"><div class="section-title"><span>Активные эффекты</span><small>${effectRows(unit).length}</small></div>${statusList(effectRows(unit), "effect", "Активных эффектов нет")}</section>${state.winner ? '<div class="battle-finished">Бой завершён</div>' : ""}`;
+  el.unitSummary.innerHTML = `<div class="unit-identity"><div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-identity-copy"><span class="active-label">${state.winner ? "Последний активный юнит" : "Активный юнит"}</span><strong>${unit.name}</strong><small>${model}</small>${unit.kind === "capital" ? `<small>Требуется экипажа ${unit.crewRequirement}</small>` : ""}</div><span class="class-badge" style="color:${unit.color}">${unit.kind === "capital" ? "CAPITAL" : "SQUADRON"}</span></div><section class="inspector-section current-state"><div class="section-title"><span>Текущее состояние</span></div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")}${healthBar("Броня", unit.armor, unit.maxArmor, "armor")}${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}</div>${speedState}${maneuverState}<div class="evasion-state"><span>Уклонение</span><b>${evasion}% ${evasionPreview}</b></div></section><section class="inspector-section status-section"><div class="section-title"><span>Критические повреждения</span><small>${unit.criticals.length}</small></div>${statusList(unit.criticals.map(item => ({ ...item, tone: "negative", icon: "!", name: item.type })), "critical", "Критических повреждений нет")}</section><section class="inspector-section status-section"><div class="section-title"><span>Активные эффекты</span><small>${effectRows(unit).length}</small></div>${statusList(effectRows(unit), "effect", "Активных эффектов нет")}</section>${state.winner ? '<div class="battle-finished">Бой завершён</div>' : ""}`;
 }
 
 const deliveryNames = { beam: "луч", projectile: "снаряд", missile: "ракета", torpedo: "торпеда" };
@@ -830,7 +830,7 @@ function eventTooltip(position) {
 
 function unitTooltip(occupant, preview = null) {
   const { current: evasion } = evasionPresentation(occupant);
-  const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview?.layer === "shield" ? preview.potentialDamage : 0)}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor", preview?.layer === "armor" ? preview.potentialDamage : 0)}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview?.layer === "integrity" ? preview.potentialDamage : 0)}</div>`;
+  const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview?.potentialDamageByLayer.shield || 0)}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor", preview?.potentialDamageByLayer.armor || 0)}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview?.potentialDamageByLayer.integrity || 0)}</div>`;
   return { title: occupant.name, content: `<span class="tooltip-model">${unitModel(occupant)}</span>${vitals}Уклонение ${evasion}%${tooltipStatuses(occupant)}` };
 }
 

@@ -25,6 +25,7 @@ for (const candidate of state.units) {
   const { col } = axialToOffset(candidate.position.q, candidate.position.r);
   assert.equal(col, candidate.sideId === "azure" ? -5 : 5, "корабли должны начинать на втором от края ряду гексов");
 }
+state.activeUnitId = "atlas";
 const unit = activeUnit(state);
 state.lifecycle = "ActionChoice";
 assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }), "манёвр уклонения должен переходить в предпросмотр");

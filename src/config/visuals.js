@@ -15,6 +15,14 @@ export const VISUALS = deepFreeze({
       3: [{ x: 0, y: -19 }, { x: -21, y: 17 }, { x: 21, y: 17 }]
     }
   },
+  interceptor: {
+    id: "interceptor", size: 27,
+    svg: '<path class="hull" data-squadron-craft="" data-squadron-kind="interceptor" d="M50 28 54 48 68 63 55 59 53 72H47L45 59 32 63 46 48Z"/><path class="panel-line" d="M50 36v28"/><path class="barrel" d="M41 56V42m18 14V42"/>',
+    formationOffsets: {
+      1: [{ x: 0, y: 0 }],
+      2: [{ x: -19, y: 0 }, { x: 19, y: 0 }]
+    }
+  },
   bomber: {
     id: "bomber", size: 25,
     svg: '<path class="hull" d="M50 9 62 30 73 39 68 59 57 55 50 82 43 55 32 59 27 39 38 30Z"/><path class="panel" d="m50 18 7 17 6 8-7 8-6 20-6-20-7-8 6-8Z"/><path class="panel-line" d="M38 42h24M45 53h10"/><circle class="turret-core" cx="50" cy="42" r="3"/>',
