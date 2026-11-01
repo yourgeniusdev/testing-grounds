@@ -36,7 +36,7 @@ test("canvas image uses the same dynamic squadron renderer", () => {
 });
 
 test("non-formation icons preserve configured markup", () => {
-  for (const type of ["cruiser", "gunship"]) {
+  for (const type of ["cruiser", "assaultCraft"]) {
     const markup = iconMarkup(type, "#fff", type, 1);
     assert.equal(craftCount(markup), 0);
     assert.ok(markup.includes(VISUALS[type].svg));

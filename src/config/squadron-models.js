@@ -42,16 +42,16 @@ export const SQUADRON_MODELS = deepFreeze({
     id: "kiro",
     displayName: "Киро",
     kind: "squadron",
-    craftType: "gunship",
-    baseSpeed: 3,
-    maneuver: 2,
-    initiative: 2,
+    craftType: "assaultCraft",
+    baseSpeed: 5,
+    maneuver: 4,
+    initiative: 4,
     stack: 1,
     unitHealth: 18,
     shield: 10,
-    armor: 2,
+    armor: 0,
     baseEvasion: 2,
-    visualId: "gunship",
+    visualId: "assaultCraft",
     hardpoints: [
       { id: "beam-turret", mount: "turret", type: "turret" }
     ]

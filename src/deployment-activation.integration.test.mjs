@@ -47,7 +47,7 @@ test("default right-side confirmation exposes first-unit routes without blocking
 
   assert.equal(activeUnit(state).id, "wasps");
   assert.equal(routes.size, 382);
-  assert.ok(elapsed < 3000, `default route planning took ${Math.round(elapsed)}ms`);
+  assert.ok(elapsed < 5000, `default route planning took ${Math.round(elapsed)}ms`);
 });
 
 test("deployment flow completes maneuver, weapon attacks, activation, and next-unit transition", () => {

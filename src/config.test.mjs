@@ -163,10 +163,14 @@ test("squadron models and loadouts have agreed stats and stack-scalable base wea
   assert.deepEqual(mantis.weapons.map(entry => entry.targetKinds), [["capital", "squadron"], ["capital"]]);
   const kiro = buildSquadronProfile("kiro");
   assert.deepEqual(
-    { craftType: kiro.craftType, stack: kiro.stack, unitHealth: kiro.unitHealth, shield: kiro.shield, integrity: kiro.integrity },
-    { craftType: "gunship", stack: 1, unitHealth: 18, shield: 10, integrity: 18 }
+    { craftType: kiro.craftType, speed: kiro.baseSpeed, maneuver: kiro.maneuver, initiative: kiro.initiative, stack: kiro.stack, unitHealth: kiro.unitHealth, shield: kiro.shield, armor: kiro.armor, integrity: kiro.integrity },
+    { craftType: "assaultCraft", speed: 5, maneuver: 4, initiative: 4, stack: 1, unitHealth: 18, shield: 10, armor: 0, integrity: 18 }
   );
   assert.ok(kiro.unitHealth > wasps.unitHealth);
+  assert.deepEqual(
+    [wasps.baseSpeed - kiro.baseSpeed, wasps.maneuver - kiro.maneuver, wasps.initiative - kiro.initiative],
+    [1, 1, 1]
+  );
   assert.deepEqual(kiro.weapons.map(entry => [entry.catalogWeaponId, entry.mount, entry.targetKinds, entry.damage]), [["lanceBeam", "turret", ["capital", "squadron"], 10]]);
 });
 
@@ -275,13 +279,13 @@ test("configuration graph is deeply frozen", () => {
 });
 
 test("visuals preserve every entity SVG, class scale and squadron formations", () => {
-  assert.deepEqual(Object.keys(VISUALS), ["cruiser", "corvette", "frigate", "destroyer", "battleship", "squadron", "bomber", "gunship", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
+  assert.deepEqual(Object.keys(VISUALS), ["cruiser", "corvette", "frigate", "destroyer", "battleship", "squadron", "bomber", "assaultCraft", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
   for (const visual of Object.values(VISUALS)) {
     assert.match(visual.svg, /<(?:path|circle)/);
     assert.ok(Number.isFinite(visual.size) && visual.size > 0);
   }
   assert.deepEqual(
-    Object.fromEntries(["corvette", "squadron", "frigate", "destroyer", "cruiser", "battleship"].map(id => [id, VISUALS[id].size])),
-    { corvette: 29, squadron: 31, frigate: 34, destroyer: 38, cruiser: 56, battleship: 68 }
+    Object.fromEntries(["squadron", "bomber", "assaultCraft", "corvette", "frigate", "destroyer", "cruiser", "battleship"].map(id => [id, VISUALS[id].size])),
+    { squadron: 25, bomber: 25, assaultCraft: 27, corvette: 29, frigate: 34, destroyer: 38, cruiser: 56, battleship: 68 }
   );
 });

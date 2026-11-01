@@ -7,7 +7,7 @@ export const VISUALS = deepFreeze({
   destroyer: { id: "destroyer", size: 38, svg: '<path class="hull" d="M46 96 39 91 38 82 33 76 35 67 30 59 34 51 33 42 38 34 39 24 43 14 50 3l7 11 4 10 1 10 5 8-1 9 4 8-5 8 2 9-5 6-1 9-7 5Z"/><path class="panel" d="m50 9 5 12 2 13-3 9 5 10-4 10 3 11-4 12-4 4-4-4-4-12 3-11-4-10 5-10-3-9 2-13Z"/><path class="armor-line" d="M40 24h20M36 39l14 5 14-5M34 55l16 6 16-6M36 71l14 6 14-6M40 85h20"/><path class="panel-line" d="M43 32h14M42 49h16M42 66h16"/><circle class="turret" cx="50" cy="33" r="6"/><circle class="turret" cx="50" cy="52" r="7"/><circle class="turret" cx="50" cy="72" r="6"/><path class="barrel" d="M47 29V17m6 12V17M47 47V35m6 12V35M47 68V56m6 12V56"/><circle class="turret-core" cx="50" cy="33" r="2"/><circle class="turret-core" cx="50" cy="52" r="2"/><circle class="turret-core" cx="50" cy="72" r="2"/>' },
   battleship: { id: "battleship", size: 68, svg: '<path class="hull" d="M45 98 36 94 35 87 29 83 31 75 25 70 29 61 24 53 28 44 27 35 33 29 35 19 42 10 50 2l8 8 7 9 2 10 6 6-1 9 4 9-5 8 4 9-6 5 2 8-6 4-1 7-9 4Z"/><path class="panel" d="m50 7 6 10 3 12 5 8-3 9 6 8-6 9 5 8-5 8-3 12-8 4-8-4-3-12-5-8 5-8-6-9 6-8-3-9 5-8 3-12Z"/><path class="armor-line" d="M39 18h22M34 31l16 6 16-6M29 46l21 7 21-7M28 62l22 8 22-8M33 78l17 7 17-7M39 91h22"/><path class="panel-line" d="M41 25h18M38 41h24M37 58h26M39 75h22M43 88h14"/><circle class="turret" cx="50" cy="27" r="6"/><circle class="turret" cx="50" cy="44" r="7"/><circle class="turret" cx="50" cy="62" r="7"/><circle class="turret" cx="50" cy="79" r="6"/><path class="barrel" d="M47 23V11m6 12V11M47 39V27m6 12V27M47 57V45m6 12V45M47 75V63m6 12V63"/><circle class="turret-core" cx="50" cy="27" r="2"/><circle class="turret-core" cx="50" cy="44" r="2"/><circle class="turret-core" cx="50" cy="62" r="2"/><circle class="turret-core" cx="50" cy="79" r="2"/>' },
   squadron: {
-    id: "squadron", size: 31,
+    id: "squadron", size: 25,
     svg: '<path class="hull" d="m50 7 15 28-15-7-15 7Z"/><path class="hull" d="m19 50 15 28-15-7-15 7Z"/><path class="hull" d="m81 50 15 28-15-7-15 7Z"/><circle class="turret-core" cx="50" cy="52" r="7"/>',
     formationOffsets: {
       1: [{ x: 0, y: 0 }],
@@ -16,7 +16,7 @@ export const VISUALS = deepFreeze({
     }
   },
   bomber: {
-    id: "bomber", size: 31,
+    id: "bomber", size: 25,
     svg: '<path class="hull" d="M50 9 62 30 73 39 68 59 57 55 50 82 43 55 32 59 27 39 38 30Z"/><path class="panel" d="m50 18 7 17 6 8-7 8-6 20-6-20-7-8 6-8Z"/><path class="panel-line" d="M38 42h24M45 53h10"/><circle class="turret-core" cx="50" cy="42" r="3"/>',
     formationOffsets: {
       1: [{ x: 0, y: 0 }],
@@ -24,7 +24,7 @@ export const VISUALS = deepFreeze({
       3: [{ x: 0, y: -19 }, { x: -21, y: 17 }, { x: 21, y: 17 }]
     }
   },
-  gunship: { id: "gunship", size: 38, svg: '<circle class="hull" cx="50" cy="50" r="39"/><path class="panel" d="M19 50c5-17 16-27 31-27s26 10 31 27c-5 17-16 27-31 27S24 67 19 50Z"/><path class="armor-line" d="M14 50h72M25 35h50M25 65h50"/><path class="panel-line" d="M22 50h14m28 0h14M42 27h16M42 73h16"/><circle class="turret" cx="50" cy="50" r="13"/><circle class="turret-core" cx="50" cy="50" r="5"/><path class="barrel" d="M50 37V14"/>' },
+  assaultCraft: { id: "assaultCraft", size: 27, svg: '<circle class="hull" cx="50" cy="50" r="39"/><path class="panel" d="M19 50c5-17 16-27 31-27s26 10 31 27c-5 17-16 27-31 27S24 67 19 50Z"/><path class="armor-line" d="M14 50h72M25 35h50M25 65h50"/><path class="panel-line" d="M22 50h14m28 0h14M42 27h16M42 73h16"/><circle class="turret" cx="50" cy="50" r="13"/><circle class="turret-core" cx="50" cy="50" r="5"/><path class="barrel" d="M50 37V14"/>' },
   asteroidField: { id: "asteroidField", size: 35, svg: '<path d="m20 30 12-15 22 4 10 17-8 19-25 4-17-11Z"/><path d="m60 57 12-13 18 8 3 19-15 15-20-8Z"/><circle class="detail-fill" cx="39" cy="37" r="5"/>' },
   debrisField: { id: "debrisField", size: 35, svg: '<path d="m12 27 18-8 8 11-17 11Zm39-11 14 7-6 13-15-7Zm19 34 18-5 4 15-17 7ZM25 62l18-8 7 16-20 10Z"/>' },
   nebula: { id: "nebula", size: 35, svg: '<path d="M16 55c-9-18 8-32 25-28C49 7 79 12 78 34c23 5 22 35 2 40-8 19-39 16-45 0-14 3-24-7-19-19Z"/>' },

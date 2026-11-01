@@ -98,7 +98,7 @@ for (const squadronId of ["wasps", "mantis"]) {
   });
 }
 
-test("Kiro gunship beam turret targets every direction and both unit kinds", () => {
+test("Kiro assault craft beam turret targets every direction and both unit kinds", () => {
   const state = createBattleState();
   const attacker = unitById(state, "kiro");
   const capitalTarget = unitById(state, "atlas");
