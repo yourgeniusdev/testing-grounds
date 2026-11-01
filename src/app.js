@@ -1,7 +1,7 @@
 import { cooldownLabel, systemActionVisible, DIRECTIONS, actionAvailability, activeUnit, axialToOffset, buildBattleLog, confirmDeployment, confirmDisengageAction, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, overwatchAvailability, planRoutes, resumeManeuverPostEntry, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
 import { DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
-import { cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
+import { bindRulesDialog, cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
 import { applyAttackStep, applyReactionStep, availableWeaponAttackTargets, confirmWeaponAttackAction, planPostEntryAA, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 import { movementAnimationContinuation, planMovementAnimationSegment, reactionAnimationContinuation, sampleMovementAnimationSegment } from "./movement-animation.js";
@@ -910,9 +910,7 @@ el.routePolicyButton.addEventListener("click", () => {
 });
 el.startBattleButton.addEventListener("click", () => { el.menuScreen.hidden = true; el.battleScreen.hidden = false; resetBattle(); requestAnimationFrame(resizeCanvas); });
 el.menuButton.addEventListener("click", () => { if (ui.animation) return; el.battleScreen.hidden = true; el.menuScreen.hidden = false; });
-el.rulesButton.addEventListener("click", () => el.rulesDialog.showModal());
-el.closeRules.addEventListener("click", () => el.rulesDialog.close());
-el.dialogOkay.addEventListener("click", () => el.rulesDialog.close());
+bindRulesDialog(el.rulesDialog, el.rulesButton, [el.closeRules, el.dialogOkay]);
 el.resetButton.addEventListener("click", () => { if (!ui.animation) resetBattle(); });
 el.confirmDeploymentButton.addEventListener("click", () => {
   const side = state.lifecycle === "DeploymentLeft" ? "azure" : "crimson";
@@ -1006,8 +1004,9 @@ el.tooltip.addEventListener("click", event => {
 });
 el.clearLogButton.addEventListener("click", () => { state.log = []; ui.logEventCursor = state.sequence; renderLog(); });
 document.addEventListener("click", event => {
-  if (ui.animation || event.defaultPrevented) return;
+  if (ui.animation || event.defaultPrevented || el.rulesDialog.open) return;
   const target = event.target;
+  if (target.closest?.("#rulesDialog,#rulesButton")) return;
   const planning = state.lifecycle === "ActionPlanning" && state.activeAction?.status === "planning";
   const insideActionControl = Boolean(target.closest?.(".action-slot,.action-slot-shell"));
   const insideCanvas = target === canvas;

@@ -1,7 +1,71 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { beginActivation, createBattleState, unitById } from "./domain.js";
-import { cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
+import { bindRulesDialog, cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
+
+function rulesFixture() {
+  let focused;
+  function element(id) {
+    const listeners = new Map();
+    return {
+      id, attributes: {}, hidden: false, tabIndex: 0,
+      setAttribute(name, value) { this.attributes[name] = value; },
+      getAttribute(name) { return this.attributes[name]; },
+      focus() { focused = this; },
+      addEventListener(name, listener) { listeners.set(name, listener); },
+      dispatch(name, event = {}) { listeners.get(name)?.(event); }
+    };
+  }
+  const panels = Array.from({ length: 4 }, (_, index) => element(`panel-${index}`));
+  const tabs = panels.map((panel, index) => {
+    const tab = element(`tab-${index}`);
+    tab.setAttribute("aria-controls", panel.id);
+    return tab;
+  });
+  const dialog = element("dialog");
+  dialog.querySelectorAll = selector => selector === '[role="tab"]' ? tabs : panels;
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatch("close"); };
+  const opener = element("opener");
+  const closeButtons = [element("close"), element("okay")];
+  bindRulesDialog(dialog, opener, closeButtons);
+  return { dialog, tabs, panels, opener, closeButtons, focused: () => focused };
+}
+
+test("rules dialog resets to activation on every opening and restores focus on closing", () => {
+  const ui = rulesFixture();
+  for (const button of ui.closeButtons) {
+    ui.opener.dispatch("click");
+    assert.equal(ui.dialog.open, true);
+    assert.equal(ui.focused(), ui.tabs[0]);
+    assert.deepEqual(ui.panels.map(panel => panel.hidden), [false, true, true, true]);
+    ui.tabs[2].dispatch("click");
+    assert.deepEqual(ui.tabs.map(tab => tab.attributes["aria-selected"]), ["false", "false", "true", "false"]);
+    assert.deepEqual(ui.panels.map(panel => panel.hidden), [true, true, false, true]);
+    button.dispatch("click");
+    assert.equal(ui.dialog.open, false);
+    assert.equal(ui.focused(), ui.opener);
+  }
+  ui.opener.dispatch("click");
+  ui.dialog.close();
+  assert.equal(ui.focused(), ui.opener);
+});
+
+test("rules tabs automatically activate with wrapping arrows and Home/End, leaving Tab and Escape native", () => {
+  const ui = rulesFixture();
+  ui.opener.dispatch("click");
+  for (const [from, key, to] of [[0, "ArrowLeft", 3], [3, "ArrowRight", 0], [0, "End", 3], [3, "Home", 0], [0, "ArrowRight", 1], [1, "ArrowLeft", 0]]) {
+    let prevented = false;
+    ui.tabs[from].dispatch("keydown", { key, preventDefault() { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(ui.focused(), ui.tabs[to]);
+    assert.deepEqual(ui.tabs.map(tab => tab.tabIndex), ui.tabs.map((_, index) => index === to ? 0 : -1));
+    assert.deepEqual(ui.panels.map(panel => panel.hidden), ui.panels.map((_, index) => index !== to));
+  }
+  for (const key of ["Tab", "Escape", "ArrowDown"]) {
+    ui.tabs[0].dispatch("keydown", { key, preventDefault() { assert.fail(`${key} must remain native`); } });
+  }
+});
 
 function setup() {
   const state = createBattleState();

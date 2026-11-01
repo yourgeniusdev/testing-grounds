@@ -1,8 +1,37 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { confirmSystemAction, createBattleState, unitById } from "./domain.js";
 import { cancelPendingAction, selectPendingAction } from "./ui-controller.js";
 import { DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+
+test("rules markup links four accessible tabs and panels with only activation initially visible", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const dialog = html.match(/<dialog id="rulesDialog"[\s\S]*?<\/dialog>/)[0];
+  assert.match(dialog, /aria-labelledby="rulesTitle"/);
+  assert.match(dialog, /id="rulesTitle">Правила стенда/);
+  assert.match(dialog, /role="tablist" aria-label="Разделы правил"/);
+  const tabs = [...dialog.matchAll(/<button type="button" id="([^"]+)" role="tab" aria-controls="([^"]+)" aria-selected="([^"]+)" tabindex="([^"]+)">([^<]+)<\/button>/g)];
+  assert.deepEqual(tabs.map(tab => tab[5]), ["Активация", "Движение", "Бой", "Местность и риски"]);
+  tabs.forEach((tab, index) => {
+    assert.equal(tab[3], String(index === 0));
+    assert.equal(tab[4], index === 0 ? "0" : "-1");
+    assert.ok(dialog.includes(`id="${tab[2]}" role="tabpanel" aria-labelledby="${tab[1]}" tabindex="0"${index ? " hidden" : ""}>`));
+  });
+  assert.doesNotMatch(dialog, /MOVEMENT PLAYTEST 1|0–3|до 25 п\.п\.|капиталь/i);
+  for (const fact of [/60° — 1 Манёвренность/, /Последовательные повороты разрешены/, /5\/9\/12\/14\/15/, /22,5 п\.п\./, /\+15 п\.п\. от Рассеивания сохраняются/, /не гарантирует защиту от скрытых угроз/, /не проходит через другую эскадрилью/, /У Шершня Форсаж бесплатный/, /у Киро башня/]) assert.match(dialog, fact);
+});
+
+test("rules dialog integration protects battle planning and supplies narrow-screen styling", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  assert.match(app, /bindRulesDialog\(el.rulesDialog, el.rulesButton, \[el.closeRules, el.dialogOkay\]\)/);
+  assert.match(app, /event.defaultPrevented \|\| el.rulesDialog.open/);
+  assert.match(app, /target.closest\?\.\("#rulesDialog,#rulesButton"\)/);
+  assert.match(css, /\.rules-panel\[hidden\] \{ display:none; \}/);
+  assert.match(css, /#rulesDialog \{ max-height:calc\(100dvh - 32px\); overflow-y:auto;/);
+  assert.match(css, /@media \(max-width:520px\)/);
+});
 
 test("terrain tooltip describes nebula and station without fabricated unit data", () => {
   assert.deepEqual(terrainTooltipRows([{ type: "nebula", label: "Туманность" }, { type: "station", label: "Станция" }]), [
