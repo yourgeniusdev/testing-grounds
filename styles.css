@@ -61,6 +61,13 @@ body::before { content:""; position:fixed; inset:0; pointer-events:none; backgro
 .entity-icon .detail { fill:none; stroke:#071019; stroke-width:4; }
 .entity-icon .detail-fill { fill:#071019; stroke:none; }
 .entity-icon .cut { fill:#071019; stroke:var(--icon-color); stroke-width:3; }
+.entity-icon .hull { fill:#77808b; stroke:#d5dbe0; stroke-width:2; }
+.entity-icon .panel { fill:#303843; stroke:#9aa3ad; stroke-width:1.5; }
+.entity-icon .armor-line { fill:none; stroke:#4b535d; stroke-width:2; }
+.entity-icon .panel-line { fill:none; stroke:var(--icon-color); stroke-width:2.5; }
+.entity-icon .turret { fill:#68717c; stroke:#d5dbe0; stroke-width:1.5; }
+.entity-icon .barrel { fill:none; stroke:#c4cbd1; stroke-width:2; }
+.entity-icon .turret-core { fill:#242b34; stroke:var(--icon-color); stroke-width:1.5; }
 .action-row { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-top:12px; }
 .mission-card { display:flex; gap:10px; margin-top:15px; padding:12px; border:1px solid #29364a; background:#0b121d; border-radius:5px; }
 .mission-icon { color:var(--cyan); }

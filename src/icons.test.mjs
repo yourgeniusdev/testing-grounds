@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { VISUALS } from "./config/index.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
 
 const craftCount = markup => (markup.match(/data-squadron-craft=""/g) || []).length;
@@ -19,7 +20,7 @@ test("squadron icon uses configured symmetric two-craft formation", () => {
 
 test("squadron craft render above the center marker", () => {
   const markup = iconMarkup("squadron", "#fff", "Squadron", 3);
-  assert.ok(markup.indexOf("detail-fill") < markup.indexOf("data-squadron-craft"));
+  assert.ok(markup.indexOf("turret-core") < markup.indexOf("data-squadron-craft"));
 });
 
 test("canvas image uses the same dynamic squadron renderer", () => {
@@ -37,5 +38,5 @@ test("canvas image uses the same dynamic squadron renderer", () => {
 test("non-squadron icons preserve configured markup", () => {
   const markup = iconMarkup("cruiser", "#fff", "Cruiser", 1);
   assert.equal(craftCount(markup), 0);
-  assert.match(markup, /M48 5 69 26/);
+  assert.ok(markup.includes(VISUALS.cruiser.svg));
 });

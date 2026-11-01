@@ -258,10 +258,14 @@ test("configuration graph is deeply frozen", () => {
   assert.throws(() => { CONFIG.capitalHulls.atlasCruiser.hardpoints[0].mount = "changed"; }, TypeError);
 });
 
-test("visuals preserve every entity SVG, size and squadron formations", () => {
+test("visuals preserve every entity SVG, class scale and squadron formations", () => {
   assert.deepEqual(Object.keys(VISUALS), ["cruiser", "frigate", "destroyer", "battleship", "squadron", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
   for (const visual of Object.values(VISUALS)) {
     assert.match(visual.svg, /<(?:path|circle)/);
-    assert.ok([35, 39, 42].includes(visual.size));
+    assert.ok(Number.isFinite(visual.size) && visual.size > 0);
   }
+  assert.deepEqual(
+    Object.fromEntries(["squadron", "frigate", "destroyer", "cruiser", "battleship"].map(id => [id, VISUALS[id].size])),
+    { squadron: 31, frigate: 34, destroyer: 38, cruiser: 42, battleship: 68 }
+  );
 });

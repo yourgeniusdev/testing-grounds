@@ -1,10 +1,11 @@
 import { DIRECTIONS, actionAvailability, activeUnit, axialToOffset, buildBattleLog, confirmDeployment, confirmDisengageAction, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, overwatchAvailability, planRoutes, resumeManeuverPostEntry, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
 import { cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
 import { applyAttackStep, applyReactionStep, availableWeaponAttackTargets, confirmWeaponAttackAction, planPostEntryAA, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 import { movementAnimationContinuation, planMovementAnimationSegment, reactionAnimationContinuation, sampleMovementAnimationSegment } from "./movement-animation.js";
+import { maneuverZoneRenderCommands } from "./canvas-rendering.js";
 
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
@@ -450,10 +451,13 @@ function drawHex(position) {
   if (contents.some(content => content.kind !== "object")) { fill = "rgba(244,200,97,.10)"; stroke = "rgba(244,200,97,.45)"; }
   if (contents.some(content => content.kind === "object") || (occupant && shouldHighlightOccupiedHex(state.lifecycle))) { fill = "rgba(255,102,125,.09)"; stroke = "rgba(255,102,125,.42)"; }
   const event = selectedEventAt(position);
-  const previewKinds = routePreviewKindsAt(selectedRoute(), position);
+  const zoneCommands = maneuverZoneRenderCommands({ plannedRoutes: ui.routes, selectedRoute: selectedRoute(), position, event });
   if (event?.hazards.length) { fill = "rgba(244,200,97,.20)"; stroke = "rgba(244,200,97,.82)"; width = 2; }
-  if (previewKinds.aa) { fill = "rgba(179,76,88,.14)"; stroke = "rgba(196,92,104,.78)"; width = 2; }
-  if (event?.interceptors.length) { fill = previewKinds.aa || event.hazards.length ? fill : "rgba(198,126,75,.15)"; stroke = previewKinds.aa ? "rgba(211,125,84,.92)" : "rgba(211,137,83,.82)"; width = 2.5; }
+  if (zoneCommands.base) {
+    fill = zoneCommands.base.fillStyle ?? fill;
+    stroke = zoneCommands.base.strokeStyle;
+    width = zoneCommands.base.lineWidth;
+  }
   if (ui.hovered && key(ui.hovered.q, ui.hovered.r) === key(position.q, position.r)) {
     if (route && selectedRoute()) fill = "rgba(101,244,178,.032)";
     stroke = route ? "#65f4b2" : "#8aa0b6"; width = 2;
@@ -462,11 +466,17 @@ function drawHex(position) {
   if (ui.selected?.position && key(ui.selected.position.q, ui.selected.position.r) === key(position.q, position.r)) { fill = "rgba(102,228,255,.14)"; stroke = "#66e4ff"; width = 2.5; }
 
   ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = width;
-  if (event?.interceptors.length) ctx.setLineDash([5, 4]);
+  ctx.setLineDash(zoneCommands.base?.lineDash || []);
   ctx.stroke(); ctx.setLineDash([]);
   if (event?.hazards.length) { hexPath(x, y, ui.geometry.size - 8); ctx.strokeStyle = "#f4c861"; ctx.lineWidth = 2; ctx.stroke(); }
-  if (previewKinds.aa) { hexPath(x, y, ui.geometry.size - 6); ctx.strokeStyle = "rgba(196,92,104,.86)"; ctx.lineWidth = 2; ctx.setLineDash([2, 3]); ctx.stroke(); ctx.setLineDash([]); }
-  if (event?.interceptors.length) { hexPath(x, y, ui.geometry.size - 3); ctx.strokeStyle = "rgba(211,137,83,.92)"; ctx.lineWidth = 2.5; ctx.setLineDash([7, 4]); ctx.stroke(); ctx.setLineDash([]); }
+  for (const outline of zoneCommands.outlines) {
+    hexPath(x, y, ui.geometry.size - outline.inset);
+    ctx.strokeStyle = outline.strokeStyle;
+    ctx.lineWidth = outline.lineWidth;
+    ctx.setLineDash(outline.lineDash);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   if (route && key(position.q, position.r) !== key(activeUnit(state).position.q, activeUnit(state).position.r)) { ctx.fillStyle = "rgba(101,244,178,.7)"; ctx.beginPath(); ctx.arc(x, y, 2.2, 0, Math.PI * 2); ctx.fill(); }
   const { col, row } = axialToOffset(position.q, position.r);
   ctx.fillStyle = "rgba(116,137,158,.36)"; ctx.font = "7px monospace"; ctx.textAlign = "center"; ctx.fillText(`${col}:${row}`, x, y + ui.geometry.size * .69);
