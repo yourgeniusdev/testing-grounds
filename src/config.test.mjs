@@ -26,7 +26,7 @@ const runtimeFields = ["catalogWeaponId", "delivery", "targetKinds", "cooldownRo
 
 test("independent weapon catalog has neutral IDs, complete combat data and no ship-specific models", () => {
   assert.deepEqual(Object.keys(WEAPONS), [
-    "needleAutocannon", "twinNeedleAutocannon", "sentinelAutocannon", "rayAALaser", "torchPlasmaCannon", "stormKineticBattery",
+    "needleAutocannon", "twinNeedleAutocannon", "sentinelAutocannon", "rayAALaser", "lanceBeam", "torchPlasmaCannon", "stormKineticBattery",
     "hailMissileBattery", "titanRailgun", "focusEmitter", "spearMissile", "impulseTurret", "hammerTorpedo"
   ]);
   for (const entry of Object.values(WEAPONS)) {
@@ -136,9 +136,13 @@ test("real capital loadouts use reusable weapons in stable hardpoint order and A
   assert.deepEqual(atlas.weapons.map(entry => entry.id), ["atlas-battery-left", "atlas-battery-right", "atlas-forward"]);
   assert.deepEqual({ mount: atlas.weapons[2].mount, orientation: atlas.weapons[2].orientation }, { mount: "forward", orientation: "fore" });
   assert.deepEqual(buildCapitalProfile("swift").weapons.map(entry => entry.catalogWeaponId), ["sentinelAutocannon", "rayAALaser"]);
+  const corvette = buildCapitalProfile("dart");
+  assert.deepEqual(corvette.weapons.map(entry => entry.catalogWeaponId), ["sentinelAutocannon"]);
+  assert.deepEqual({ hullType: corvette.hullType, speed: corvette.baseSpeed, maneuver: corvette.maneuver, integrity: corvette.integrity }, { hullType: "corvette", speed: 6, maneuver: 4, integrity: 48 });
+  assert.ok(corvette.integrity < buildCapitalProfile("swift").integrity);
   assert.deepEqual(buildCapitalProfile("bastion").weapons.map(entry => entry.catalogWeaponId), ["titanRailgun", "hailMissileBattery", "hailMissileBattery", "torchPlasmaCannon"]);
   assert.deepEqual(buildCapitalProfile("raptor").weapons.map(entry => entry.catalogWeaponId), ["hailMissileBattery", "impulseTurret"]);
-  for (const profile of [atlas, buildCapitalProfile("swift"), buildCapitalProfile("bastion"), buildCapitalProfile("raptor")]) {
+  for (const profile of [atlas, buildCapitalProfile("dart"), buildCapitalProfile("swift"), buildCapitalProfile("bastion"), buildCapitalProfile("raptor")]) {
     for (const entry of profile.weapons) {
       assert.equal("role" in entry, false);
       for (const field of runtimeFields) assert.ok(field in entry, `${entry.id}.${field}`);
@@ -157,6 +161,13 @@ test("squadron models and loadouts have agreed stats and stack-scalable base wea
   assert.ok(mantis.maneuver > buildCapitalProfile("raptor").maneuver);
   assert.deepEqual(mantis.weapons.map(entry => [entry.catalogWeaponId, entry.shots * mantis.stack]), [["needleAutocannon", 3], ["hammerTorpedo", 3]]);
   assert.deepEqual(mantis.weapons.map(entry => entry.targetKinds), [["capital", "squadron"], ["capital"]]);
+  const kiro = buildSquadronProfile("kiro");
+  assert.deepEqual(
+    { craftType: kiro.craftType, stack: kiro.stack, unitHealth: kiro.unitHealth, shield: kiro.shield, integrity: kiro.integrity },
+    { craftType: "gunship", stack: 1, unitHealth: 18, shield: 10, integrity: 18 }
+  );
+  assert.ok(kiro.unitHealth > wasps.unitHealth);
+  assert.deepEqual(kiro.weapons.map(entry => [entry.catalogWeaponId, entry.mount, entry.targetKinds, entry.damage]), [["lanceBeam", "turret", ["capital", "squadron"], 10]]);
 });
 
 test("all current squadron slots use forward firing geometry without changing compatibility", () => {
@@ -184,13 +195,18 @@ test("squadron firing geometry is validated separately from hardpoint compatibil
   assert.throws(() => validateConfig(capital), /only valid on squadronWeapon hardpoints/);
 });
 
-test("squadron maneuver is a validated nonnegative profile value", () => {
+test("squadron maneuver and renderable stack are validated", () => {
   const missing = cloneConfig();
   delete missing.squadronModels.wasp.maneuver;
   assert.throws(() => validateConfig(missing), /maneuver.*finite number/);
   const negative = cloneConfig();
   negative.squadronModels.mantis.maneuver = -1;
   assert.throws(() => validateConfig(negative), /maneuver.*nonnegative/);
+  for (const stack of [0, 4, 1.5]) {
+    const invalid = cloneConfig();
+    invalid.squadronModels.kiro.stack = stack;
+    assert.throws(() => validateConfig(invalid), /stack.*integer from 1 to 3/);
+  }
 });
 
 test("roles are rejected in hardpoints and installations", () => {
@@ -246,7 +262,7 @@ test("balance invariants distinguish spinal, batteries, AA, torpedo and missiles
 });
 
 test("equipped mass remains near combat mass", () => {
-  for (const id of ["atlas", "swift", "bastion", "raptor"]) {
+  for (const id of ["atlas", "dart", "swift", "bastion", "raptor"]) {
     const profile = buildCapitalProfile(id);
     assert.ok(Math.abs(profile.equippedMassUnits - profile.mass) <= 1, id);
   }
@@ -259,13 +275,13 @@ test("configuration graph is deeply frozen", () => {
 });
 
 test("visuals preserve every entity SVG, class scale and squadron formations", () => {
-  assert.deepEqual(Object.keys(VISUALS), ["cruiser", "frigate", "destroyer", "battleship", "squadron", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
+  assert.deepEqual(Object.keys(VISUALS), ["cruiser", "corvette", "frigate", "destroyer", "battleship", "squadron", "bomber", "gunship", "asteroidField", "debrisField", "nebula", "minefield", "largeAsteroid", "station"]);
   for (const visual of Object.values(VISUALS)) {
     assert.match(visual.svg, /<(?:path|circle)/);
     assert.ok(Number.isFinite(visual.size) && visual.size > 0);
   }
   assert.deepEqual(
-    Object.fromEntries(["squadron", "frigate", "destroyer", "cruiser", "battleship"].map(id => [id, VISUALS[id].size])),
-    { squadron: 31, frigate: 34, destroyer: 38, cruiser: 42, battleship: 68 }
+    Object.fromEntries(["corvette", "squadron", "frigate", "destroyer", "cruiser", "battleship"].map(id => [id, VISUALS[id].size])),
+    { corvette: 29, squadron: 31, frigate: 34, destroyer: 38, cruiser: 56, battleship: 68 }
   );
 });

@@ -26,6 +26,29 @@ export const CAPITAL_HULLS = deepFreeze({
     ],
     future: { massUnits: 64 }
   },
+  dartCorvette: {
+    id: "dartCorvette",
+    kind: "capital",
+    hullType: "corvette",
+    displayName: "Дротик",
+    baseSpeed: 6,
+    maneuver: 4,
+    initiative: 5,
+    combatMassUnits: 37,
+    shield: 12,
+    armor: 8,
+    integrity: 48,
+    baseEvasion: 14,
+    visualId: "corvette",
+    systemSlots: [
+      { id: "engine", type: "engine", required: true },
+      { id: "reactor", type: "reactor", required: true }
+    ],
+    hardpoints: [
+      { id: "aa-turret", mount: "turret", type: "turret" }
+    ],
+    future: { massUnits: 24 }
+  },
   swiftFrigate: {
     id: "swiftFrigate",
     kind: "capital",

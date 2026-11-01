@@ -35,8 +35,16 @@ test("canvas image uses the same dynamic squadron renderer", () => {
   }
 });
 
-test("non-squadron icons preserve configured markup", () => {
-  const markup = iconMarkup("cruiser", "#fff", "Cruiser", 1);
-  assert.equal(craftCount(markup), 0);
-  assert.ok(markup.includes(VISUALS.cruiser.svg));
+test("non-formation icons preserve configured markup", () => {
+  for (const type of ["cruiser", "gunship"]) {
+    const markup = iconMarkup(type, "#fff", type, 1);
+    assert.equal(craftCount(markup), 0);
+    assert.ok(markup.includes(VISUALS[type].svg));
+  }
+});
+
+test("Mantis bombers use their own formation craft design", () => {
+  const markup = iconMarkup("bomber", "#fff", "Mantis", 3);
+  assert.equal(craftCount(markup), 3);
+  assert.match(markup, /data-squadron-kind="bomber"/);
 });

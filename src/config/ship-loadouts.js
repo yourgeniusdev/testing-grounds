@@ -10,6 +10,11 @@ export const SHIP_LOADOUTS = deepFreeze({
       "forward-emitter": { id: "atlas-forward", weaponId: "focusEmitter" }
     }
   },
+  dart: {
+    id: "dart", hullId: "dartCorvette",
+    systems: { engine: "swiftEngine", reactor: "swiftReactor" },
+    weapons: { "aa-turret": { id: "dart-aa", weaponId: "sentinelAutocannon" } }
+  },
   swift: {
     id: "swift", hullId: "swiftFrigate",
     systems: { engine: "swiftEngine", reactor: "swiftReactor" },

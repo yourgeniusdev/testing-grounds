@@ -92,6 +92,25 @@ const rayAALaser = weapon({
   visual: visual("beam", "#77eaff", 0.05, 30, 0, "none", "spark", 0.08)
 });
 
+const lanceBeam = weapon({
+  id: "lanceBeam",
+  name: "Лучевая турель «Ланцет»",
+  compatibleHardpointTypes: ["turret"],
+  weaponClass: "energy",
+  delivery: "beam",
+  targetKinds: ["capital", "squadron"],
+  accuracy: 84,
+  effectiveRange: 3,
+  maxRange: 4,
+  shots: 1,
+  damage: 10,
+  critChance: 8,
+  energyCost: 0,
+  cooldownRounds: 1,
+  future: { massUnits: 5 },
+  visual: visual("beam", "#ff668f", 0.08, 30, 0, "none", "spark", 0.12)
+});
+
 const torchPlasmaCannon = weapon({
   id: "torchPlasmaCannon",
   name: "Плазменное орудие «Факел»",
@@ -248,6 +267,7 @@ export const WEAPONS = deepFreeze(Object.fromEntries([
   twinNeedleAutocannon,
   sentinelAutocannon,
   rayAALaser,
+  lanceBeam,
   torchPlasmaCannon,
   stormKineticBattery,
   hailMissileBattery,

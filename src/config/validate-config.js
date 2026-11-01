@@ -202,16 +202,18 @@ const validateVisuals = visuals => {
     validateString(visual.svg, `${path}.svg`);
     validateNumber(visual.size, `${path}.size`);
   }
-  const path = "visuals.squadron.formationOffsets";
-  const offsetsByCount = validateObject(visuals.squadron?.formationOffsets, path);
-  for (const count of [1, 2, 3]) {
-    const offsets = validateArray(offsetsByCount[count], `${path}.${count}`);
-    if (offsets.length !== count) fail(`${path}.${count}`, `expected ${count} offsets, received ${offsets.length}`);
-    for (const [index, offset] of offsets.entries()) {
-      const offsetPath = `${path}.${count}[${index}]`;
-      validateObject(offset, offsetPath);
-      validateNumber(offset.x, `${offsetPath}.x`);
-      validateNumber(offset.y, `${offsetPath}.y`);
+  for (const visualId of ["squadron", "bomber"]) {
+    const path = `visuals.${visualId}.formationOffsets`;
+    const offsetsByCount = validateObject(visuals[visualId]?.formationOffsets, path);
+    for (const count of [1, 2, 3]) {
+      const offsets = validateArray(offsetsByCount[count], `${path}.${count}`);
+      if (offsets.length !== count) fail(`${path}.${count}`, `expected ${count} offsets, received ${offsets.length}`);
+      for (const [index, offset] of offsets.entries()) {
+        const offsetPath = `${path}.${count}[${index}]`;
+        validateObject(offset, offsetPath);
+        validateNumber(offset.x, `${offsetPath}.x`);
+        validateNumber(offset.y, `${offsetPath}.y`);
+      }
     }
   }
 };
@@ -237,6 +239,7 @@ export function validateConfig(config) {
     validateString(model.craftType, `${path}.craftType`);
     validateNumbers(model, path, ["baseSpeed", "maneuver", "initiative", "stack", "unitHealth", "shield", "armor", "baseEvasion"]);
     if (model.maneuver < 0) fail(`${path}.maneuver`, "expected a nonnegative number");
+    if (!Number.isInteger(model.stack) || model.stack < 1 || model.stack > 3) fail(`${path}.stack`, "expected an integer from 1 to 3");
     validateHardpoints(model, path);
     requiredReference(visuals, model.visualId, `${path}.visualId`, "visual");
   }

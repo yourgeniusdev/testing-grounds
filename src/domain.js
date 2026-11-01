@@ -99,10 +99,12 @@ export function createScenario() {
   const unitInstances = [
     { id: "atlas", loadoutId: "atlas", name: "Крейсер «Атлас»", sideId: "azure", color: "#66e4ff", col: -5, row: -2, initialEnergy: 4 },
     { id: "swift", loadoutId: "swift", name: "Фрегат «Стриж»", sideId: "azure", color: "#66e4ff", col: -5, row: 2, initialEnergy: 4 },
+    { id: "dart", loadoutId: "dart", name: "Корвет «Дротик»", sideId: "azure", color: "#66e4ff", col: -5, row: 4, initialEnergy: 3 },
     { id: "wasps", loadoutId: "wasps", name: "Эскадрилья «Осы»", callsign: "Осы", sideId: "azure", color: "#66e4ff", col: -5, row: 0 },
     { id: "bastion", loadoutId: "bastion", name: "Линкор «Бастион»", sideId: "crimson", color: "#ff667d", col: 5, row: -2, initialEnergy: 6 },
     { id: "raptor", loadoutId: "raptor", name: "Эсминец «Раптор»", sideId: "crimson", color: "#ff667d", col: 5, row: 2, initialEnergy: 4 },
-    { id: "mantis", loadoutId: "mantis", name: "Эскадрилья «Мантисы»", callsign: "Мантисы", sideId: "crimson", color: "#ff7d9f", col: 5, row: 0 }
+    { id: "mantis", loadoutId: "mantis", name: "Эскадрилья «Мантисы»", callsign: "Мантисы", sideId: "crimson", color: "#ff7d9f", col: 5, row: 0 },
+    { id: "kiro", loadoutId: "kiro", name: "Ганшип «Киро»", callsign: "Киро", sideId: "crimson", color: "#ff7d9f", col: 5, row: 4 }
   ];
   const units = unitInstances.map(instance => {
     const { col, row, initialEnergy, ...data } = instance;

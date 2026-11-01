@@ -375,7 +375,7 @@ function renderLog() {
 }
 
 function imageFor(type, color, stack) {
-  const displayCount = type === "squadron" ? Math.max(1, stack ?? 3) : "static";
+  const displayCount = VISUALS[type].formationOffsets ? Math.max(1, stack ?? 3) : "static";
   const cacheKey = `${type}:${color}:${displayCount}`;
   if (!entityImages.has(cacheKey)) entityImages.set(cacheKey, createSvgImage(type, color, stack));
   return entityImages.get(cacheKey);

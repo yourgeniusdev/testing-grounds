@@ -1,14 +1,18 @@
 import { VISUALS } from "./config/index.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const SQUADRON_CRAFT = '<path class="hull" data-squadron-craft="" d="m50 37 15 28-15-7-15 7Z"/><path class="panel-line" d="M45 54h10"/>';
+const SQUADRON_CRAFTS = {
+  squadron: '<path class="hull" data-squadron-craft="" data-squadron-kind="fighter" d="m50 37 15 28-15-7-15 7Z"/><path class="panel-line" d="M45 54h10"/>',
+  bomber: '<path class="hull" data-squadron-craft="" data-squadron-kind="bomber" d="M50 38 59 51l10 5-5 10-10-4-4 14-4-14-10 4-5-10 10-5Z"/><path class="panel-line" d="M41 56h18"/>'
+};
 
 function visualMarkup(type, stack) {
   const visual = VISUALS[type];
   if (!visual) throw new Error(`Unknown visual ID "${type}"`);
-  if (type !== "squadron") return visual.svg;
+  const craft = SQUADRON_CRAFTS[type];
+  if (!craft) return visual.svg;
   const displayCount = stack === undefined ? 3 : Math.max(1, stack);
-  return `<circle class="turret-core" cx="50" cy="52" r="7"/>${visual.formationOffsets[displayCount].map(offset => `<g transform="translate(${offset.x} ${offset.y})">${SQUADRON_CRAFT}</g>`).join("")}`;
+  return `<circle class="turret-core" cx="50" cy="52" r="7"/>${visual.formationOffsets[displayCount].map(offset => `<g transform="translate(${offset.x} ${offset.y})">${craft}</g>`).join("")}`;
 }
 
 export function iconMarkup(type, color = "currentColor", label = "", stack) {

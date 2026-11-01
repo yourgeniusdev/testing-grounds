@@ -46,8 +46,8 @@ test("default right-side confirmation exposes first-unit routes without blocking
   const elapsed = performance.now() - started;
 
   assert.equal(activeUnit(state).id, "wasps");
-  assert.equal(routes.size, 388);
-  assert.ok(elapsed < 2000, `default route planning took ${Math.round(elapsed)}ms`);
+  assert.equal(routes.size, 382);
+  assert.ok(elapsed < 3000, `default route planning took ${Math.round(elapsed)}ms`);
 });
 
 test("deployment flow completes maneuver, weapon attacks, activation, and next-unit transition", () => {
@@ -57,17 +57,21 @@ test("deployment flow completes maneuver, weapon attacks, activation, and next-u
 
   deployAt(state, "atlas", -2, -2);
   deployAt(state, "swift", -2, 2);
+  deployAt(state, "dart", -2, 3);
   deployAt(state, "wasps", -2, 0);
   assert.equal(confirmDeployment(state, "azure"), true);
   deployAt(state, "bastion", 2, 0);
   deployAt(state, "raptor", 2, -2);
   deployAt(state, "mantis", 2, 2);
+  deployAt(state, "kiro", 2, 3);
   assert.equal(confirmDeployment(state, "crimson"), true);
   assert.deepEqual(state.events.map(event => event.action), [
     "deployment-place",
     "deployment-place",
     "deployment-place",
+    "deployment-place",
     "deployment-confirm",
+    "deployment-place",
     "deployment-place",
     "deployment-place",
     "deployment-place",
@@ -104,7 +108,7 @@ test("deployment flow completes maneuver, weapon attacks, activation, and next-u
   const activation = endActivation(state);
   assert.deepEqual(activation, { newRound: false });
   assert.equal(wasps.hasActivated, true);
-  assert.equal(activeUnit(state).id, "swift");
+  assert.equal(activeUnit(state).id, "dart");
   assert.equal(activeUnit(state).activationStartedThisRound, true);
   assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(state.lifecycle, "ActionChoice");

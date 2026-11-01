@@ -98,6 +98,24 @@ for (const squadronId of ["wasps", "mantis"]) {
   });
 }
 
+test("Kiro gunship beam turret targets every direction and both unit kinds", () => {
+  const state = createBattleState();
+  const attacker = unitById(state, "kiro");
+  const capitalTarget = unitById(state, "atlas");
+  const squadronTarget = unitById(state, "wasps");
+  const weapon = attacker.weapons[0];
+  state.activeUnitId = attacker.id;
+  attacker.position = { q: 0, r: 0 };
+  assert.equal(weapon.mount, "turret");
+  assert.deepEqual(weapon.targetKinds, ["capital", "squadron"]);
+  for (const target of [capitalTarget, squadronTarget]) {
+    for (const [dq, dr] of DIRECTIONS) {
+      target.position = { q: dq * 2, r: dr * 2 };
+      assert.equal(previewWeaponAttack(state, attacker.id, weapon.id, target.id).canConfirm, true);
+    }
+  }
+});
+
 test("selected squadron slot UI arc uses the same forward geometry as target validation", () => {
   const state = createBattleState();
   const attacker = unitById(state, "mantis");
