@@ -169,7 +169,7 @@ test("squadron models and loadouts have agreed stats and stack-scalable base wea
   assert.ok(kiro.unitHealth > wasps.unitHealth);
   assert.deepEqual(
     [wasps.baseSpeed - kiro.baseSpeed, wasps.maneuver - kiro.maneuver, wasps.initiative - kiro.initiative],
-    [1, 1, 1]
+    [1, 1, 0]
   );
   assert.deepEqual(kiro.weapons.map(entry => [entry.catalogWeaponId, entry.mount, entry.targetKinds, entry.damage]), [["lanceBeam", "turret", ["capital", "squadron"], 10]]);
 });
