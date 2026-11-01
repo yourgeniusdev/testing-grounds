@@ -880,6 +880,18 @@ export function cancelActionPlanning(state) {
   return true;
 }
 
+export function switchActionPlanning(state, action) {
+  if (state.lifecycle !== "ActionPlanning" || state.activeAction?.status !== "planning") return null;
+  const previous = state.activeAction;
+  if (!cancelActionPlanning(state)) return null;
+  const next = beginActionPlanning(state, action);
+  if (next) return next;
+  state.activeAction = previous;
+  state.lifecycle = "ActionPlanning";
+  state.stage = "action-planning";
+  return null;
+}
+
 export function confirmManeuverAction(state, option) {
   const action = state.activeAction;
   const unit = activeUnit(state);

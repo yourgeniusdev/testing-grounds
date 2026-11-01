@@ -265,6 +265,14 @@ export function validateConfig(config) {
     }
     validateString(action.effect, `${path}.effect`);
     if (!SYSTEM_ACTION_EFFECTS.includes(action.effect)) fail(`${path}.effect`, `unknown system action effect "${action.effect}"`);
+    if ("preview" in action) {
+      validateObject(action.preview, `${path}.preview`);
+      for (const [resource, amount] of Object.entries(action.preview)) {
+        if (!["speedCapacity", "maneuverCapacity"].includes(resource)) fail(`${path}.preview.${resource}`, `unknown preview resource "${resource}"`);
+        validateNumber(amount, `${path}.preview.${resource}`);
+        if (!Number.isInteger(amount) || amount < 0) fail(`${path}.preview.${resource}`, "expected a nonnegative integer");
+      }
+    }
     if ("oncePerActivation" in action) validateBoolean(action.oncePerActivation, `${path}.oncePerActivation`);
   }
   validateVisuals(visuals);

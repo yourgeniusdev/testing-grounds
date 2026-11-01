@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createBattleState, unitById } from "./domain.js";
-import { buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourcePresentation, routeConsequenceRows, shouldShowManeuverRoutes, systemActionPresentation } from "./ui-rules.js";
+import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
 
 const signedTurn = (from, to) => {
   let delta = (to - from + 6) % 6;
@@ -64,6 +64,56 @@ test("UI Evasion presentation derives current and preview values from accumulate
   assert.deepEqual(evasionPresentation({ ...unit, evasionLocked: true }, selected), { current: 0, movement: 0, preview: 0, previewMovement: 0 });
 });
 
+test("action tile presentation distinguishes instant confirmation, field confirmation, and resolved effects", () => {
+  assert.deepEqual(actionTilePresentation({ selected: true, confirmation: "tile", icon: "◇" }), {
+    selected: true, pendingConfirmation: true, resolved: false, icon: "✓", className: "pending-confirmation", ariaPressed: "true"
+  });
+  assert.deepEqual(actionTilePresentation({ selected: true, confirmation: "field", icon: "⚠" }), {
+    selected: true, pendingConfirmation: false, resolved: false, icon: "⚠", className: "field-selected", ariaPressed: "true"
+  });
+  assert.deepEqual(actionTilePresentation({ selected: true, confirmation: "field", icon: "◆", resolved: true }), {
+    selected: true, pendingConfirmation: false, resolved: true, icon: "◆", className: "field-selected resolved", ariaPressed: "true"
+  });
+  assert.deepEqual(actionTilePresentation({ selected: false, confirmation: "tile", icon: "»", resolved: true }), {
+    selected: false, pendingConfirmation: false, resolved: true, icon: "»", className: "resolved", ariaPressed: "false"
+  });
+});
+
+test("fixed action preview metadata gives engine boost speed capacity and generic maneuver capacity without mutation", () => {
+  const state = { lifecycle: "ActionPlanning", activeAction: { type: "system-action", systemActionId: "preview-fixture", preview: { maneuverCapacity: 2 } } };
+  const unit = { weapons: [{ id: "selected", energyCost: 2 }, { id: "hovered", energyCost: 3 }] };
+  const before = structuredClone({ state, unit });
+
+  assert.deepEqual(actionResourcePreview(state, unit, { type: "system-action", systemActionId: "reactor-to-engines" }), { energy: 1, speedCapacity: 1, maneuverCapacity: 0 });
+  assert.deepEqual(actionResourcePreview(state, unit, { type: "system-action", systemActionId: "evasive-maneuver" }), { energy: 0, speedCapacity: 0, maneuverCapacity: 0, maneuver: 1 });
+  assert.deepEqual(actionResourcePreview(state, unit, { type: "weapon-attack", slotId: "hovered", preview: { maneuverCapacity: 2 } }), { energy: 3, speedCapacity: 0, maneuverCapacity: 2 });
+  assert.deepEqual(actionResourcePreview(state, unit), { energy: 0, speedCapacity: 0, maneuverCapacity: 2 });
+  assert.deepEqual({ state, unit }, before);
+});
+
+test("hovered action preview takes precedence and selected preview persists after hover leaves", () => {
+  const state = { lifecycle: "ActionPlanning", activeAction: { type: "system-action", systemActionId: "reactor-to-engines" } };
+  const unit = { weapons: [{ id: "gun", energyCost: 2 }] };
+
+  assert.deepEqual(actionResourcePreview(state, unit, { type: "weapon-attack", slotId: "gun" }), { energy: 2, speedCapacity: 0, maneuverCapacity: 0 });
+  assert.deepEqual(actionResourcePreview(state, unit), { energy: 1, speedCapacity: 1, maneuverCapacity: 0 });
+});
+
+test("segmented resource preview clamps spending and distinguishes bonus capacity", () => {
+  assert.deepEqual(segmentedResourcePresentation({ spent: 2, remaining: 1, capacity: 3 }, { spend: 4, capacity: 1 }), {
+    spent: 2, spendPreview: 1, capacity: 4, capacityPreview: 1, remaining: 1, segments: ["preview", "spent", "spent", "bonus"]
+  });
+  assert.deepEqual(segmentedResourcePresentation({ spent: 1, remaining: 2, capacity: 3 }, { capacity: 2 }), {
+    spent: 1, spendPreview: 0, capacity: 5, capacityPreview: 2, remaining: 4, segments: ["available", "available", "spent", "bonus", "bonus"]
+  });
+});
+
+test("weapon selection presentation follows activeAction rather than UI shadow state", () => {
+  assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack", slotId: "left" } }, "left"), { selected: true, ariaPressed: "true" });
+  assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack", slotId: "left" } }, "right"), { selected: false, ariaPressed: "false" });
+  assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionChoice", activeAction: null }, "left"), { selected: false, ariaPressed: "false" });
+});
+
 test("system action presentation exposes domain affordability reasons", () => {
   const unit = { kind: "capital", maneuver: 2, maneuverSpent: 2, reactor: { capacity: 1, currentEnergy: 0 }, engineId: "engine", energySpent: 1 };
   assert.deepEqual(systemActionPresentation({ lifecycle: "ActionChoice", activeAction: null }, unit, "evasive-maneuver"), {
@@ -83,8 +133,21 @@ test("system action presentation exposes selection, preview, confirm, and cancel
     selected: true, canSelect: false, canConfirm: true, canCancel: true
   });
   assert.deepEqual(systemActionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack" } }, unit, "evasive-maneuver"), {
-    selected: false, canSelect: false, canConfirm: false, canCancel: false
+    selected: false, canSelect: true, canConfirm: false, canCancel: false
   });
+});
+
+test("maneuver action presentation remains selectable while another plan is pending", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "atlas");
+  state.units = [unit];
+  state.activeUnitId = unit.id;
+  state.lifecycle = "ActionPlanning";
+  state.activeAction = { type: "weapon-attack", slotId: unit.weapons[0].id };
+  state.scenario.contents = [];
+  unit.position = { q: 0, r: 0 };
+
+  assert.deepEqual(maneuverActionPresentation(state, unit), { selected: false, canSelect: true, canConfirm: false, canCancel: false });
 });
 
 test("maneuver action presentation exposes domain resource reasons", () => {

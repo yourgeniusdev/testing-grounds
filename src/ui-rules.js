@@ -1,3 +1,4 @@
+import { SYSTEM_ACTIONS } from "./config/index.js";
 import { activationMovementFacts, activationResources, currentEvasion, hasLegalManeuverRoute, movementEvasion, movementEvasionFromFacts, systemActionReasons } from "./domain.js";
 
 export function headingAngle(heading) {
@@ -20,6 +21,50 @@ export function resourcePresentation(unit) {
   return activationResources(unit);
 }
 
+function actionFixedPreview(unit, action) {
+  const definition = action?.type === "system-action" ? SYSTEM_ACTIONS[action.systemActionId] : null;
+  const metadata = action?.preview || definition?.preview;
+  const capacity = {
+    speedCapacity: Math.max(0, metadata?.speedCapacity || 0),
+    maneuverCapacity: Math.max(0, metadata?.maneuverCapacity || 0)
+  };
+  if (definition) return { energy: definition.cost.energy || 0, ...capacity, ...(definition.cost.maneuver ? { maneuver: definition.cost.maneuver } : {}) };
+  if (action?.type === "weapon-attack") return { energy: unit?.weapons?.find(weapon => weapon.id === action.slotId)?.energyCost || 0, ...capacity };
+  return { energy: 0, ...capacity };
+}
+
+export function actionResourcePreview(state, unit, hoveredAction = null) {
+  return actionFixedPreview(unit, hoveredAction || (state?.lifecycle === "ActionPlanning" ? state.activeAction : null));
+}
+
+export function actionTilePresentation({ selected = false, confirmation = "field", icon, resolved = false }) {
+  const pendingConfirmation = selected && confirmation === "tile";
+  const className = [pendingConfirmation ? "pending-confirmation" : selected ? "field-selected" : "", resolved ? "resolved" : ""].filter(Boolean).join(" ");
+  return { selected, pendingConfirmation, resolved, icon: pendingConfirmation ? "✓" : icon, className, ariaPressed: String(selected) };
+}
+
+export function segmentedResourcePresentation(resource, preview = {}) {
+  const spent = Math.max(0, Math.min(resource.capacity, resource.spent || 0));
+  const spendPreview = Math.max(0, Math.min(resource.remaining, preview.spend || 0));
+  const capacityPreview = Math.max(0, preview.capacity || 0);
+  const ordinaryCapacity = resource.capacity;
+  const capacity = ordinaryCapacity + capacityPreview;
+  const remaining = Math.max(0, resource.remaining - spendPreview + capacityPreview);
+  const segments = Array.from({ length: ordinaryCapacity }, (_, index) => {
+    const fromEnd = ordinaryCapacity - index;
+    if (fromEnd <= spent) return "spent";
+    if (fromEnd <= spent + spendPreview) return "preview";
+    return "available";
+  });
+  segments.push(...Array.from({ length: capacityPreview }, () => "bonus"));
+  return { spent, spendPreview, capacity, capacityPreview, remaining, segments };
+}
+
+export function weaponSelectionPresentation(state, slotId) {
+  const selected = state?.lifecycle === "ActionPlanning" && state.activeAction?.type === "weapon-attack" && state.activeAction.slotId === slotId;
+  return { selected, ariaPressed: String(selected) };
+}
+
 export function evasionPresentation(unit, selected = null) {
   const movement = movementEvasionFromFacts(unit);
   const current = currentEvasion(unit);
@@ -40,7 +85,7 @@ export function maneuverActionPresentation(state, unit) {
   const available = reasons.length === 0;
   return {
     selected,
-    canSelect: state?.lifecycle === "ActionChoice" && available,
+    canSelect: ["ActionChoice", "ActionPlanning"].includes(state?.lifecycle) && !selected && available,
     canConfirm: selected && available,
     canCancel: selected,
     ...(reasons.length ? { reasons } : {})
@@ -53,7 +98,7 @@ export function systemActionPresentation(state, unit, systemActionId) {
   const available = reasons.length === 0;
   return {
     selected,
-    canSelect: state?.lifecycle === "ActionChoice" && available,
+    canSelect: ["ActionChoice", "ActionPlanning"].includes(state?.lifecycle) && !selected && available,
     canConfirm: selected && available,
     canCancel: selected,
     ...(reasons.length ? { reasons } : {})

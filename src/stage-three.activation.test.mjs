@@ -17,6 +17,7 @@ import {
   movementEvasion,
   planManeuver,
   planRoutes,
+  switchActionPlanning,
   unitById,
   waitActiveUnit
 } from "./domain.js";
@@ -147,6 +148,45 @@ test("planning and cancellation are pure and only one action may be planned or r
   assert.equal(executeManeuverElement(state, plan, 0).status, "completed");
   assert.equal(state.lifecycle, "ActionChoice");
   assert.equal(state.stage, "action-choice");
+});
+
+test("switching an unconfirmed plan is atomic and mutation-free across action types and weapons", () => {
+  const { state, atlas } = activationBattle();
+  beginActivation(state);
+  const before = structuredClone({
+    resources: activationResources(atlas),
+    events: state.events,
+    canWait: atlas.canWait,
+    weapons: atlas.weapons,
+    rng: null
+  });
+  const left = atlas.weapons[0].id;
+  const right = atlas.weapons[1].id;
+
+  assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }));
+  assert.equal(switchActionPlanning(state, { type: "maneuver", reason: "player-choice" })?.type, "maneuver");
+  assert.deepEqual(switchActionPlanning(state, { type: "weapon-attack", slotId: left, reason: "player-choice" }), {
+    status: "planning", type: "weapon-attack", actorId: atlas.id, reason: "player-choice", slotId: left
+  });
+  assert.equal(switchActionPlanning(state, { type: "weapon-attack", slotId: right, reason: "player-choice" })?.slotId, right);
+  assert.equal(switchActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" })?.systemActionId, "reactor-to-engines");
+  assert.deepEqual({
+    resources: activationResources(atlas),
+    events: state.events,
+    canWait: atlas.canWait,
+    weapons: atlas.weapons,
+    rng: null
+  }, before);
+});
+
+test("failed action switch retains the original canonical plan", () => {
+  const { state } = activationBattle();
+  beginActivation(state);
+  const original = beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+
+  assert.equal(switchActionPlanning(state, { type: "system-action", systemActionId: "unknown", reason: "player-choice" }), null);
+  assert.equal(state.activeAction, original);
+  assert.equal(state.lifecycle, "ActionPlanning");
 });
 
 test("confirmation revalidates current executor and legality without trusting the preview", () => {

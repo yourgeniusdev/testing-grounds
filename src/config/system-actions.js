@@ -11,6 +11,7 @@ export const SYSTEM_ACTIONS = deepFreeze({
     id: "reactor-to-engines",
     name: "Форсаж двигателя",
     cost: { energy: 1 },
+    preview: { speedCapacity: 1 },
     effect: "engineBoost",
     oncePerActivation: true
   }
