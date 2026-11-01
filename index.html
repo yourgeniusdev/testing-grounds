@@ -23,7 +23,10 @@
   <main id="battleScreen" class="screen app-shell" hidden>
     <header class="topbar">
       <div class="brand"><div class="brand-mark">EV</div><div><p class="eyebrow">TACTICAL SYSTEMS LAB</p><h1>Тактический бой</h1></div></div>
-      <div class="round-strip"><span>РАУНД <b id="roundNumber">1</b></span></div>
+      <div class="battle-header-status">
+        <div class="round-strip"><span>РАУНД <b id="roundNumber">1</b></span></div>
+        <div class="activation-status"><div class="activation-step"><span class="live-indicator"></span><span id="modeLabel" role="status">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
+      </div>
       <div class="top-actions">
         <button id="menuButton" class="button ghost">В меню</button>
         <button id="rulesButton" class="button ghost">Правила</button>
@@ -42,7 +45,6 @@
 
       <section class="battlefield-column">
         <section class="battlefield-wrap">
-          <div class="canvas-toolbar"><div><span class="live-indicator"></span><span id="modeLabel">ПЛАНИРОВАНИЕ МАРШРУТА</span></div><div id="coordinates" class="coordinates">HEX —</div></div>
           <canvas id="battlefield" tabindex="0" aria-label="Гексагональное поле боя"></canvas>
           <div id="tooltip" class="hex-tooltip" hidden><div class="hex-tooltip-title"></div><div class="hex-tooltip-content"></div></div>
         </section>

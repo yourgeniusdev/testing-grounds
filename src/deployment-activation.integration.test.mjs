@@ -79,7 +79,7 @@ test("default right-side confirmation exposes first-unit routes without blocking
   assert.deepEqual(state.units.filter(unit => unit.squadronModelId === "hornet").map(unit => unit.sideId), ["azure"]);
   assert.deepEqual(state.initiativeOrder.slice(0, 2), ["hornet-azure", "dart"]);
   assert.equal(activeUnit(state).id, "hornet-azure");
-  assert.equal(routes.size, 358);
+  assert.equal(routes.size, 280);
   assert.ok(elapsed < 5000, `default route planning took ${Math.round(elapsed)}ms`);
 });
 

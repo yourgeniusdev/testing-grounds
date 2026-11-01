@@ -44,8 +44,8 @@ function inArc(attacker, target, weapon) {
   return isPositionInFiringArc(attacker.position, attacker.heading || 0, target.position, weapon.firingArc ?? weapon.mount, weapon.orientation);
 }
 
-function effectiveWeapon(attacker, weapon) {
-  return attacker.kind === "squadron" ? { ...weapon, shots: weapon.shots * attacker.stack } : { ...weapon };
+export function effectiveWeapon(attacker, weapon) {
+  return { ...weapon, accuracy: weapon.accuracy - (attacker.dispersionActive ? 15 : 0), shots: weapon.shots * (attacker.kind === "squadron" ? attacker.stack : 1) };
 }
 
 function unavailableReason(attacker, target, weapon, reaction = false) {
@@ -372,6 +372,7 @@ export function confirmWeaponAttackAction(state, attackerId, slotId, targetId, r
   const plan = Object.freeze({ ...planned, actionContext: context });
   spendActivationResource(attacker, "energy", weapon.energyCost || 0);
   beginWeaponCooldown(weapon);
+  attacker.attackedThisRound = true;
   confirmOwnAction(attacker);
   state.activeAction = Object.freeze({ ...action, status: "resolving", actionId: declaration.eventId, planId: plan.id });
   state.lifecycle = "ActionResolution";
@@ -478,6 +479,7 @@ export function planPostEntryAA(state, target, context = {}, rollD100 = () => Ma
       actionReason: "post-entry-aa"
     });
     beginWeaponCooldown(slot);
+    owner.attackedThisRound = true;
     if (slot.energyCost > 0) owner.reactor.currentEnergy -= slot.energyCost;
     const plan = planWeaponAttack(state, owner, slot, target, rollD100, random, { reaction: true, context, actionId: declaration.eventId });
     state.reactionApplication = { plan, planId: plan.id, nextStep: 0, actionId: declaration.eventId, ownerId: owner.id, targetId: target.id };

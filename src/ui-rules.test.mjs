@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createBattleState, unitById } from "./domain.js";
-import { actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { confirmSystemAction, createBattleState, unitById } from "./domain.js";
+import { cancelPendingAction, selectPendingAction } from "./ui-controller.js";
+import { DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+
+test("terrain tooltip describes nebula and station without fabricated unit data", () => {
+  assert.deepEqual(terrainTooltipRows([{ type: "nebula", label: "Туманность" }, { type: "station", label: "Станция" }]), [
+    { title: "Туманность", detail: "Стоимость входа 1 · −15 п.п. к попаданию по любому юниту в туманности" },
+    { title: "Станция", detail: "Непроходимый объект" }
+  ]);
+  assert.match(DISPERSION_DESCRIPTION, /после атаки включить нельзя/);
+  assert.match(DISPERSION_DESCRIPTION, /включая Наблюдение/);
+});
 
 const signedTurn = (from, to) => {
   let delta = (to - from + 6) % 6;
@@ -64,6 +74,46 @@ test("UI Evasion presentation derives current and preview values from accumulate
   assert.deepEqual(evasionPresentation({ ...unit, evasionLocked: true }, selected), { current: 0, movement: 0, preview: 0, previewMovement: 0 });
 });
 
+test("dispersion evasion preview follows hover and selection without mutation or double counting", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "wasps");
+  state.activeUnitId = unit.id;
+  state.lifecycle = "ActionChoice";
+  unit.activationMovement = { elements: [{ type: "move" }, { type: "move" }] };
+  const action = { type: "system-action", systemActionId: "dispersion", reason: "player-choice" };
+  const ui = { hoveredAction: action };
+  const present = () => evasionPresentation(unit, null, state, ui.hoveredAction);
+  const baseline = evasionPresentation(unit);
+  const before = structuredClone({ ...state, rng: null });
+
+  assert.deepEqual(present(), { ...baseline, preview: baseline.current + 15 });
+  assert.deepEqual({ ...state, rng: null }, before);
+  ui.hoveredAction = null;
+  assert.deepEqual(present(), baseline);
+  assert.equal(selectPendingAction(state, ui, action), true);
+  assert.equal(present().preview, baseline.current + 15);
+  ui.hoveredAction = { type: "system-action", systemActionId: "interceptor-boost" };
+  assert.deepEqual(present(), baseline);
+  ui.hoveredAction = null;
+  assert.equal(present().preview, baseline.current + 15);
+  ui.hoveredAction = action;
+  assert.equal(cancelPendingAction(state, ui), true);
+  assert.deepEqual(present(), baseline);
+  assert.deepEqual(unit, before.units.find(candidate => candidate.id === unit.id));
+
+  unit.attackedThisRound = true;
+  ui.hoveredAction = action;
+  assert.deepEqual(present(), baseline);
+  unit.attackedThisRound = false;
+  assert.equal(selectPendingAction(state, ui, action), true);
+  assert.ok(confirmSystemAction(state));
+  ui.hoveredAction = action;
+  assert.equal(present().current, baseline.current + 15);
+  assert.equal(present().preview, present().current);
+  ui.hoveredAction = null;
+  assert.equal(present().preview, present().current);
+});
+
 test("action tile presentation distinguishes instant confirmation, field confirmation, and resolved effects", () => {
   assert.deepEqual(actionTilePresentation({ selected: true, confirmation: "tile", icon: "◇" }), {
     selected: true, pendingConfirmation: true, resolved: false, icon: "✓", className: "pending-confirmation", ariaPressed: "true"
@@ -121,6 +171,45 @@ test("weapon selection presentation follows activeAction rather than UI shadow s
   assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack", slotId: "left" } }, "left"), { selected: true, ariaPressed: "true" });
   assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionPlanning", activeAction: { type: "weapon-attack", slotId: "left" } }, "right"), { selected: false, ariaPressed: "false" });
   assert.deepEqual(weaponSelectionPresentation({ lifecycle: "ActionChoice", activeAction: null }, "left"), { selected: false, ariaPressed: "false" });
+});
+
+test("system action tiles show authoritative cooldown rounds without confusing activation usage or dispersion", () => {
+  const state = { lifecycle: "ActionChoice", activeAction: null };
+  const unit = { kind: "squadron", craftType: "interceptor", interceptorBoostCooldown: 2, usedSystemActions: ["interceptor-boost"], engineBoostActive: true };
+  const present = (systemActionId = "interceptor-boost", icon = "»") => {
+    const action = systemActionPresentation(state, unit, systemActionId);
+    return { action, tile: actionTilePresentation({ ...action, confirmation: "tile", icon, resolved: unit.engineBoostActive }) };
+  };
+
+  for (const rounds of [2, 1]) {
+    unit.interceptorBoostCooldown = rounds;
+    const { action, tile } = present();
+    assert.equal(action.cooldownRemaining, rounds);
+    assert.equal(action.canSelect, false);
+    assert.equal(action.canConfirm, false);
+    assert.ok(action.reasons.includes(`Перезарядка ${rounds} ${rounds === 1 ? "раунд" : "раунда"}`));
+    assert.equal(tile.icon, rounds);
+    assert.equal(tile.className, "resolved cooldown");
+    const dispersion = present("dispersion", "✣");
+    assert.equal(dispersion.tile.icon, "✣");
+    assert.equal(dispersion.action.cooldownRemaining, undefined);
+  }
+
+  unit.interceptorBoostCooldown = 0;
+  assert.equal(present().tile.icon, "»");
+  assert.equal(present().tile.className, "resolved");
+  assert.equal(present().action.canSelect, false);
+  assert.deepEqual(present().action.reasons, ["Уже использовано в этой активации"]);
+  unit.usedSystemActions = [];
+  unit.engineBoostActive = false;
+  assert.equal(present().action.canSelect, true);
+  assert.equal(present().tile.icon, "»");
+  assert.equal(present().tile.className, "");
+
+  const capital = { kind: "capital", reactor: { currentEnergy: 2 }, engineId: "engine", interceptorBoostCooldown: 2, usedSystemActions: ["reactor-to-engines"] };
+  const action = systemActionPresentation(state, capital, "reactor-to-engines");
+  assert.equal(action.cooldownRemaining, undefined);
+  assert.equal(actionTilePresentation({ ...action, icon: "»" }).icon, "»");
 });
 
 test("system action presentation exposes domain affordability reasons", () => {

@@ -282,8 +282,11 @@ test("approved profiles, crew metadata and overwatch references are exact", () =
   assert.deepEqual(Object.fromEntries(Object.entries(WEAPONS).map(([id, entry]) => [id, entry.accuracy])), {
     wardAutocannon: 90, needleAutocannon: 80, twinNeedleAutocannon: 80, sentinelAutocannon: 92, rayAALaser: 95, lanceBeam: 90, torchPlasmaCannon: 88, stormKineticBattery: 82, hailMissileBattery: 85, titanRailgun: 80, focusEmitter: 91, spearMissile: 76, impulseTurret: 91, hammerTorpedo: 70
   });
+  assert.deepEqual([WEAPONS.titanRailgun.damage, WEAPONS.titanRailgun.energyCost, WEAPONS.titanRailgun.cooldownRounds], [30, 4, 2]);
+  assert.equal(WEAPONS.hailMissileBattery.cooldownRounds, 1);
+  assert.deepEqual([WEAPONS.lanceBeam.energyCost, WEAPONS.lanceBeam.cooldownRounds], [0, 0]);
   const hornet = buildSquadronProfile("hornet");
-  assert.deepEqual([hornet.stack, hornet.unitHealth, hornet.shield, hornet.armor, hornet.baseSpeed, hornet.maneuver, hornet.initiative, hornet.baseEvasion, hornet.crewRequirement], [2, 4, 0, 0, 7, 6, 6, 16, 30]);
+  assert.deepEqual([hornet.stack, hornet.unitHealth, hornet.shield, hornet.armor, hornet.baseSpeed, hornet.maneuver, hornet.initiative, hornet.baseEvasion, hornet.crewRequirement], [2, 4, 0, 0, 6, 6, 6, 16, 30]);
   assert.deepEqual(hornet.weapons.map(slot => slot.catalogWeaponId), ["twinNeedleAutocannon", "twinNeedleAutocannon"]);
   for (const [id, crew] of [["wasps", 20], ["mantis", 25], ["kiro", 30]]) {
     const profile = buildSquadronProfile(id);

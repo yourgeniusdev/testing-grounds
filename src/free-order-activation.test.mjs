@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyAttackStep, availableWeaponAttackTargets, confirmWeaponAttackAction } from "./battle.js";
 import {
+  currentEvasion,
+  systemActionVisible,
   activationResources,
   actionAvailability,
   activeUnit,
@@ -40,6 +42,76 @@ function activationBattle() {
   bastion.position = { q: 2, r: 0 };
   atlas.reactor.currentEnergy = 1;
   return { state, atlas, swift, bastion };
+}
+
+function squadronActivation(id = "hornet-azure") {
+  const state = createBattleState();
+  const unit = unitById(state, id);
+  state.scenario.contents = [];
+  state.activeUnitId = unit.id;
+  state.lifecycle = "WaitDecision";
+  beginActivation(state);
+  return { state, unit };
+}
+
+function useSystem(state, systemActionId) {
+  assert.ok(beginActionPlanning(state, { type: "system-action", reason: "player-choice", systemActionId }));
+  assert.ok(confirmSystemAction(state));
+}
+
+test("squadron actions enforce visibility and domain eligibility", () => {
+  for (const id of ["hornet-azure", "wasps", "mantis", "kiro", "atlas"]) {
+    const { state, unit } = squadronActivation(id);
+    for (const [action, allowed] of [["dispersion", ["hornet-azure", "wasps"].includes(id)], ["interceptor-boost", id === "hornet-azure"]]) {
+      assert.equal(systemActionVisible(unit, action), allowed);
+      assert.equal(actionAvailability(state, { type: "system-action", reason: "player-choice", systemActionId: action }).available, allowed);
+      if (!allowed) assert.equal(beginActionPlanning(state, { type: "system-action", reason: "player-choice", systemActionId: action }), null);
+    }
+  }
+});
+
+test("dispersion permits earlier movement, stacks effects, and expires only at own activation start", () => {
+  const { state, unit } = squadronActivation();
+  unit.activationMovement.elements.push({ type: "move" });
+  unit.speedSpent = 1;
+  unit.disengageEvasionPenalty = -10;
+  const before = activationResources(unit);
+  const evasion = currentEvasion(unit);
+  useSystem(state, "dispersion");
+  assert.deepEqual(activationResources(unit), before);
+  assert.equal(currentEvasion(unit), evasion + 15);
+  assert.equal(beginActionPlanning(state, { type: "system-action", reason: "player-choice", systemActionId: "dispersion" }), null);
+  useSystem(state, "interceptor-boost");
+  assert.equal(activationResources(unit).speed.remaining, before.speed.remaining + 1);
+  state.initiativeOrder = [unit.id, "mantis"];
+  endActivation(state);
+  assert.equal(unit.dispersionActive, true);
+  assert.equal(unit.currentSpeed, 6);
+  state.activeUnitId = unit.id;
+  unit.activationStartedThisRound = false;
+  state.lifecycle = "WaitDecision";
+  beginActivation(state);
+  assert.equal(unit.dispersionActive, false);
+});
+
+test("interceptor boost skips the following round and returns in R+2", () => {
+  const { state, unit } = squadronActivation();
+  state.units = [unit];
+  state.initiativeOrder = [unit.id];
+  useSystem(state, "interceptor-boost");
+  assert.equal(unit.currentSpeed, 7);
+  assert.equal(beginActionPlanning(state, { type: "system-action", reason: "player-choice", systemActionId: "interceptor-boost" }), null);
+  endActivation(state);
+  assert.equal(state.roundNumber, 2);
+  assert.equal(unit.currentSpeed, 6);
+  assert.deepEqual(systemActionPresentationReasons(state, "interceptor-boost"), ["Перезарядка 1 раунд"]);
+  endActivation(state);
+  assert.equal(state.roundNumber, 3);
+  useSystem(state, "interceptor-boost");
+});
+
+function systemActionPresentationReasons(state, systemActionId) {
+  return actionAvailability(state, { type: "system-action", reason: "player-choice", systemActionId }).reasons.map(reason => reason.message);
 }
 
 function damagingStayEffect(id, position, amount = 1) {
@@ -472,12 +544,12 @@ test("attacks and system actions share an activation energy budget across maximu
 
   atlas.reactor.capacity = 1;
   assert.deepEqual(activationResources(atlas).energy, { spent: 1, remaining: 0, capacity: 1 });
-  assert.equal(actionAvailability(state, { type: "system-action", systemActionId: "reactor-to-engines" }).available, false);
+  assert.equal(actionAvailability(state, { type: "system-action", reason: "player-choice", systemActionId: "reactor-to-engines" }).available, false);
   assert.equal(beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" }), null);
 
   atlas.reactor.capacity = 4;
   assert.deepEqual(activationResources(atlas).energy, { spent: 1, remaining: 2, capacity: 3 });
-  assert.equal(actionAvailability(state, { type: "system-action", systemActionId: "reactor-to-engines" }).available, true);
+  assert.equal(actionAvailability(state, { type: "system-action", reason: "player-choice", systemActionId: "reactor-to-engines" }).available, true);
   assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" }));
   assert.ok(confirmSystemAction(state));
   assert.equal(atlas.energySpent, 2);

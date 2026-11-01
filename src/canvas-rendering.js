@@ -1,5 +1,20 @@
 import { routePreviewKindsAt } from "./ui-rules.js";
 
+export function battlefieldGeometry(width, height, dpr = 1) {
+  const heightSize = (height - 50) / 18;
+  const widthSize = (width - 32) / (Math.sqrt(3) * 14);
+  return { dpr, size: Math.max(1, Math.min(44, heightSize, widthSize)), cx: width / 2, cy: height / 2 };
+}
+
+export function maneuverTargetPosition(target, neighbor, width, height) {
+  const margin = 24;
+  const rawInside = neighbor.x >= margin && neighbor.x <= width - margin && neighbor.y >= margin && neighbor.y <= height - margin;
+  const distance = rawInside ? 1 : .62;
+  const x = target.x + (neighbor.x - target.x) * distance;
+  const y = target.y + (neighbor.y - target.y) * distance;
+  return { x: Math.max(margin, Math.min(width - margin, x)), y: Math.max(margin, Math.min(height - margin, y)), radius: 20 };
+}
+
 export function maneuverZoneRenderCommands({ plannedRoutes, selectedRoute, position, event }) {
   const routes = [...(plannedRoutes?.values?.() || []), selectedRoute].filter(Boolean);
   const previewKinds = routes.reduce((known, route) => {

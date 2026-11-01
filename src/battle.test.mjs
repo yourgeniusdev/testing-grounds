@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { aaPreviewDescriptors } from "./route-preview.js";
-import { overwatchAvailability } from "./domain.js";
+import { actionAvailability, beginActivation, confirmSystemAction, overwatchAvailability } from "./domain.js";
 import test from "node:test";
 import {
   applyAttackStep,
@@ -168,11 +168,106 @@ test("weapon readiness is derived and shared by manual fire and overwatch", () =
   assert.deepEqual(weaponReadiness(slot), { ready: false, reason: "Уже стреляло в этом раунде" });
   assert.equal(slot.overwatch, false);
   advanceWeaponRound(slot);
-  assert.deepEqual(weaponReadiness(slot), { ready: false, reason: "Перезарядка: 1" });
+  assert.deepEqual(weaponReadiness(slot), { ready: false, reason: "Перезарядка 1 раунд" });
   advanceWeaponRound(slot);
   assert.deepEqual(weaponReadiness(slot), { ready: true, reason: null });
   resetUnitWeaponsForNewRound({ weapons: [slot] });
   assert.equal("ready" in slot, false);
+});
+
+test("nebula cover applies to both unit kinds and dispersion hit chance stays within bounds", () => {
+  for (const kind of ["capital", "squadron"]) {
+    const { state, attacker, target } = battle([weapon({ targetKinds: ["capital", "squadron"] })], { kind });
+    const slot = attacker.weapons[0];
+    const clear = previewWeaponAttack(state, attacker.id, slot.id, target.id).hitChance;
+    state.scenario.contents = [{ type: "nebula", position: { ...target.position } }];
+    assert.equal(previewWeaponAttack(state, attacker.id, slot.id, target.id).hitChance, clear - 15);
+    attacker.dispersionActive = true;
+    target.dispersionActive = true;
+    slot.accuracy = 10;
+    assert.equal(previewWeaponAttack(state, attacker.id, slot.id, target.id).hitChance, 0);
+    slot.accuracy = 200;
+    assert.equal(previewWeaponAttack(state, attacker.id, slot.id, target.id).hitChance, 100);
+  }
+});
+
+test("overwatch route preview shares effective accuracy and shots with actual dispersed Hornet attacks", () => {
+  for (const dispersed of [false, true]) {
+    for (const stack of [1, 2]) {
+      const state = createBattleState();
+      const owner = state.units.find(unit => unit.id === "hornet-azure");
+      const target = state.units.find(unit => unit.id === "mantis");
+      state.units = [owner, target];
+      state.scenario.contents = [];
+      owner.position = { q: 0, r: 0 };
+      owner.heading = 0;
+      owner.stack = stack;
+      owner.dispersionActive = dispersed;
+      target.position = { q: 1, r: 0 };
+      owner.weapons.forEach(slot => { slot.overwatch = true; });
+      const before = JSON.stringify(state);
+      const previews = aaPreviewDescriptors(state, target, target.position);
+      assert.equal(JSON.stringify(state), before);
+      assert.equal(previews.length, 2);
+      const expected = dispersed ? 63 : 78;
+      for (const preview of previews) {
+        assert.equal(preview.probability, expected / 100);
+        assert.equal(preview.max, stack * 2);
+        assert.equal(preview.expectedHarm, expected / 100 * stack * 2);
+      }
+      const plan = planPostEntryAA(state, target, {}, () => expected + 1, () => 0);
+      assert.ok(plan);
+      assert.equal(plan.steps.length, stack * 2);
+      assert.ok(plan.steps.every(step => step.chance === previews[0].probability * 100 && step.outcome === "miss"));
+    }
+  }
+});
+
+test("dispersion applies to manual and overwatch attacks and attack history survives readiness restoration", () => {
+  for (const reaction of [false, true]) {
+    const state = createBattleState();
+    const owner = state.units.find(unit => unit.id === "hornet-azure");
+    const target = state.units.find(unit => unit.id === "mantis");
+    state.units = [owner, target];
+    state.initiativeOrder = [owner.id, target.id];
+    state.scenario.contents = [{ type: "nebula", position: { q: 1, r: 0 } }];
+    owner.position = { q: 0, r: 0 };
+    owner.heading = 0;
+    target.position = { q: 1, r: 0 };
+    target.baseEvasion = 10;
+    target.dispersionActive = true;
+    state.activeUnitId = owner.id;
+    state.lifecycle = "WaitDecision";
+    beginActivation(state);
+    assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "dispersion", reason: "player-choice" }));
+    assert.ok(confirmSystemAction(state));
+    const slot = owner.weapons[0];
+    assert.equal(previewWeaponAttack(state, owner.id, slot.id, target.id).hitChance, 25);
+    if (reaction) {
+      slot.overwatch = true;
+      const plan = planPostEntryAA(state, target, {}, () => 26, () => 0);
+      assert.ok(plan);
+      assert.ok(plan.steps.every(step => step.outcome === "miss"));
+      for (let index = 0; index < plan.steps.length; index++) assert.equal(applyReactionStep(state, plan, index).status, "applied");
+    } else {
+      const plan = planAttack(state, owner, slot, target, () => 26);
+      assert.ok(plan.steps.every(step => step.outcome === "miss"));
+      applyPlan(state, plan);
+    }
+    assert.equal(owner.attackedThisRound, true);
+    owner.weapons.forEach(slot => { slot.firedThisRound = false; slot.cooldownRemaining = 0; });
+    owner.dispersionActive = false;
+    owner.usedSystemActions = [];
+    owner.activationStartedThisRound = false;
+    state.lifecycle = "WaitDecision";
+    beginActivation(state);
+    assert.ok(actionAvailability(state, { type: "system-action", systemActionId: "dispersion", reason: "player-choice" }).reasons.some(reason => reason.message.includes("после собственной атаки")));
+    state.units = [owner];
+    state.initiativeOrder = [owner.id];
+    endActivation(state);
+    assert.equal(owner.attackedThisRound, false);
+    assert.equal(actionAvailability(state, { type: "system-action", systemActionId: "dispersion", reason: "player-choice" }).available, true);
+  }
 });
 
 test("an explicitly enabled squadron hardpoint enters overwatch at activation end", () => {

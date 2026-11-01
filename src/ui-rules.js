@@ -1,5 +1,14 @@
 import { activationMovementFacts, activationResources, actionAvailability, currentEvasion, movementEvasion, movementEvasionFromFacts } from "./domain.js";
 
+export const DISPERSION_DESCRIPTION = "Уклонение +15 п.п.; точность всех собственных атак, включая Наблюдение, −15 п.п. До начала следующей собственной активации. Бесплатно, без перезарядки. Только до первой собственной атаки текущего раунда, включая Наблюдение; после атаки включить нельзя. Движение до включения разрешено. Не отключается; совместимо с форсажем.";
+
+export function terrainTooltipRows(contents) {
+  return contents.filter(item => ["nebula", "station"].includes(item.type)).map(item => ({
+    title: item.label,
+    detail: item.type === "nebula" ? "Стоимость входа 1 · −15 п.п. к попаданию по любому юниту в туманности" : "Непроходимый объект"
+  }));
+}
+
 export function headingAngle(heading) {
   return Math.PI / 2 - heading * Math.PI / 3;
 }
@@ -33,10 +42,11 @@ export function actionResourcePreview(state, unit, hoveredAction = null, availab
   };
 }
 
-export function actionTilePresentation({ selected = false, confirmation = "field", icon, resolved = false }) {
-  const pendingConfirmation = selected && confirmation === "tile";
-  const className = [pendingConfirmation ? "pending-confirmation" : selected ? "field-selected" : "", resolved ? "resolved" : ""].filter(Boolean).join(" ");
-  return { selected, pendingConfirmation, resolved, icon: pendingConfirmation ? "✓" : icon, className, ariaPressed: String(selected) };
+export function actionTilePresentation({ selected = false, confirmation = "field", icon, resolved = false, cooldownRemaining = 0 }) {
+  const cooldown = cooldownRemaining > 0;
+  const pendingConfirmation = !cooldown && selected && confirmation === "tile";
+  const className = [pendingConfirmation ? "pending-confirmation" : selected ? "field-selected" : "", resolved ? "resolved" : "", cooldown ? "cooldown" : ""].filter(Boolean).join(" ");
+  return { selected, pendingConfirmation, resolved, icon: cooldown ? cooldownRemaining : pendingConfirmation ? "✓" : icon, className, ariaPressed: String(selected) };
 }
 
 export function segmentedResourcePresentation(resource, preview = {}) {
@@ -67,7 +77,7 @@ export function weaponSelectionPresentation(state, slotId) {
   return { selected, ariaPressed: String(selected) };
 }
 
-export function evasionPresentation(unit, selected = null) {
+export function evasionPresentation(unit, selected = null, state = null, hoveredAction = null) {
   const movement = movementEvasionFromFacts(unit);
   const current = currentEvasion(unit);
   const plannedSteps = selected?.route?.steps?.length || 0;
@@ -75,7 +85,9 @@ export function evasionPresentation(unit, selected = null) {
   const accumulatedSteps = unit?.activationMovement ? activationMovementFacts(unit).filter(element => element.type === "move").length : 0;
   const locksEvasion = Boolean(selected && plannedSteps === 0 && plannedTurns > 0);
   const previewMovement = unit?.evasionLocked || locksEvasion ? 0 : selected ? movementEvasion(accumulatedSteps + plannedSteps, unit?.evasiveManeuver) : movement;
-  return { current, movement, preview: unit?.evasionLocked || locksEvasion ? 0 : (unit?.baseEvasion || 0) + previewMovement + (unit?.disengageEvasionPenalty || 0), previewMovement };
+  const action = hoveredAction || (state?.lifecycle === "ActionPlanning" ? state.activeAction : null);
+  const previewsDispersion = action?.type === "system-action" && action.systemActionId === "dispersion" && actionAvailability(state, action, unit).available;
+  return { current, movement, preview: (unit?.evasionLocked || locksEvasion ? 0 : (unit?.baseEvasion || 0) + previewMovement + (unit?.disengageEvasionPenalty || 0)) + (unit?.dispersionActive || previewsDispersion ? 15 : 0), previewMovement };
 }
 
 function actionPresentation(state, unit, action) {
@@ -91,6 +103,7 @@ function actionPresentation(state, unit, action) {
     canSelect: ["ActionChoice", "ActionPlanning"].includes(state?.lifecycle) && !selected && availability.available,
     canConfirm: selected && availability.available,
     canCancel: selected,
+    ...(availability.readiness?.state === "cooldown" ? { cooldownRemaining: availability.readiness.cooldownRemaining } : {}),
     ...(reasons.length ? { reasons } : {})
   };
 }

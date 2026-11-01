@@ -1,7 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { maneuverZoneRenderCommands } from "./canvas-rendering.js";
+import { readFileSync } from "node:fs";
+import { battlefieldGeometry, maneuverTargetPosition, maneuverZoneRenderCommands } from "./canvas-rendering.js";
 import { planRoutes } from "./domain.js";
+
+test("canvas reserves complete maneuver targets above and below outer hexes without changing side padding", () => {
+  for (const [width, height] of [[440, 300], [800, 500], [1200, 900]]) {
+    const geometry = battlefieldGeometry(width, height, 2);
+    const radius = 20;
+    assert.equal(geometry.cy, height / 2);
+    assert.equal(geometry.size, Math.min(44, (height - 50) / 18, (width - 32) / (Math.sqrt(3) * 14)));
+    assert.ok(geometry.cy - 9 * geometry.size - radius >= 4);
+    assert.ok(geometry.cy + 9 * geometry.size + radius <= height);
+    assert.equal(geometry.cx, width / 2);
+    assert.ok(geometry.size <= (width - 32) / (Math.sqrt(3) * 14));
+    assert.equal(geometry.dpr, 2);
+    for (const sign of [-1, 1]) {
+      const target = { x: geometry.cx, y: geometry.cy + sign * 7.5 * geometry.size };
+      const neighbor = { x: target.x, y: target.y + sign * 1.5 * geometry.size };
+      const marker = maneuverTargetPosition(target, neighbor, width, height);
+      assert.ok(marker.y - marker.radius >= 4);
+      assert.equal(marker.y, neighbor.y);
+      assert.ok(Math.abs(marker.y - target.y) > geometry.size);
+      assert.ok(marker.y + marker.radius <= height);
+      assert.ok(marker.x - marker.radius >= 0 && marker.x + marker.radius <= width);
+      assert.ok(marker.radius >= (16 + 2.5 / 2) * 1.14);
+    }
+  }
+});
+
+test("activation status and coordinates live in the header rather than over the battlefield", () => {
+  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+  const header = html.match(/<header class="topbar">([\s\S]*?)<\/header>/)[1];
+  for (const id of ["modeLabel", "coordinates"]) {
+    assert.ok(header.includes(`id="${id}"`));
+    assert.equal(html.split(`id="${id}"`).length - 1, 1);
+  }
+  assert.ok(!html.includes('class="canvas-toolbar"'));
+});
 
 function squadron(overrides = {}) {
   return {

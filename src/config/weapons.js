@@ -106,7 +106,7 @@ const lanceBeam = weapon({
   damage: 10,
   critChance: 8,
   energyCost: 0,
-  cooldownRounds: 1,
+  cooldownRounds: 0,
   future: { massUnits: 5 },
   visual: visual("beam", "#ff668f", 0.08, 30, 0, "none", "spark", 0.12)
 });
@@ -163,7 +163,7 @@ const hailMissileBattery = weapon({
   damage: 6,
   critChance: 14,
   energyCost: 0,
-  cooldownRounds: 0,
+  cooldownRounds: 1,
   future: { massUnits: 4 },
   visual: visual("missile", "#ffb067", 0.12, 6, 150, "smoke", "smallExplosion", 0.22)
 });
@@ -179,10 +179,10 @@ const titanRailgun = weapon({
   effectiveRange: 5,
   maxRange: 7,
   shots: 1,
-  damage: 20,
+  damage: 30,
   critChance: 20,
-  energyCost: 0,
-  cooldownRounds: 1,
+  energyCost: 4,
+  cooldownRounds: 2,
   future: { massUnits: 12 },
   visual: visual("tracer", "#fff0bd", 0.13, 16, 0, "short", "largeExplosion", 0.28)
 });

@@ -14,7 +14,7 @@ const TARGET_KINDS = ["capital", "squadron"];
 const PROJECTILES = ["beam", "tracer", "missile", "torpedo"];
 const TRAILS = ["none", "short", "smoke"];
 const IMPACTS = ["none", "spark", "smallExplosion", "largeExplosion"];
-const SYSTEM_ACTION_EFFECTS = ["evasiveManeuver", "engineBoost"];
+const SYSTEM_ACTION_EFFECTS = ["evasiveManeuver", "engineBoost", "dispersion"];
 
 const fail = (path, message) => {
   throw new Error(`Invalid config at ${path}: ${message}`);

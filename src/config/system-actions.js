@@ -1,6 +1,22 @@
 import { deepFreeze } from "./deep-freeze.js";
 
 export const SYSTEM_ACTIONS = deepFreeze({
+  dispersion: {
+    id: "dispersion",
+    name: "Рассеивание",
+    cost: {},
+    effect: "dispersion",
+    oncePerActivation: true
+  },
+  "interceptor-boost": {
+    id: "interceptor-boost",
+    name: "Форсаж",
+    cost: {},
+    preview: { speedCapacity: 1 },
+    effect: "engineBoost",
+    cooldownRounds: 1,
+    oncePerActivation: true
+  },
   "evasive-maneuver": {
     id: "evasive-maneuver",
     name: "Манёвр уклонения",

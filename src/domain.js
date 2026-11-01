@@ -53,7 +53,7 @@ export function movementEvasionFromFacts(unit) {
 }
 
 export function currentEvasion(unit) {
-  return unit?.evasionLocked ? 0 : (unit?.baseEvasion || 0) + movementEvasionFromFacts(unit) + (unit?.disengageEvasionPenalty || 0);
+  return (unit?.evasionLocked ? 0 : (unit?.baseEvasion || 0) + movementEvasionFromFacts(unit) + (unit?.disengageEvasionPenalty || 0)) + (unit?.dispersionActive ? 15 : 0);
 }
 
 function updateMovementEvasion(unit) {
@@ -140,9 +140,20 @@ export function initializeWeaponState(weapon, fallbackSlotOrder = 0) {
   };
 }
 
+export function cooldownLabel(rounds) {
+  const ending = rounds % 10 === 1 && rounds % 100 !== 11 ? "раунд" : [2, 3, 4].includes(rounds % 10) && ![12, 13, 14].includes(rounds % 100) ? "раунда" : "раундов";
+  return `Перезарядка ${rounds} ${ending}`;
+}
+
+export function systemActionVisible(unit, id) {
+  if (id === "dispersion") return unit?.kind === "squadron" && ["fighter", "interceptor"].includes(unit.craftType);
+  if (id === "interceptor-boost") return unit?.kind === "squadron" && unit.craftType === "interceptor";
+  return Boolean(SYSTEM_ACTIONS[id]) && (!unit?.kind || unit.kind === "capital");
+}
+
 export function weaponReadiness(weapon) {
   if (weapon.firedThisRound) return { ready: false, reason: "Уже стреляло в этом раунде" };
-  if (weapon.cooldownRemaining > 0) return { ready: false, reason: `Перезарядка: ${weapon.cooldownRemaining}` };
+  if (weapon.cooldownRemaining > 0) return { ready: false, reason: cooldownLabel(weapon.cooldownRemaining) };
   return { ready: true, reason: null };
 }
 
@@ -389,6 +400,9 @@ function startNewRound(state) {
     candidate.hasWaited = false;
     candidate.canWait = true;
     candidate.activationStartedThisRound = false;
+    candidate.attackedThisRound = false;
+    if (candidate.interceptorBoostUsedThisRound) candidate.interceptorBoostUsedThisRound = false;
+    else if (candidate.interceptorBoostCooldown > 0) candidate.interceptorBoostCooldown--;
     resetUnitWeaponsForNewRound(candidate);
   }
   state.initiativeOrder = [...state.units].sort((a, b) => b.initiative - a.initiative || b.currentSpeed - a.currentSpeed || a.id.localeCompare(b.id)).map(candidate => candidate.id);
@@ -1135,7 +1149,7 @@ function actionContext(state, action, eventId) {
 export function beginActionPlanning(state, action) {
   const unit = activeUnit(state);
   if (!unit || state.lifecycle !== "ActionChoice" || state.activeAction || !action || !["maneuver", "weapon-attack", "system-action", "disengage"].includes(action.type) || !action.reason) return null;
-  if (action.type === "system-action" && (!SYSTEM_ACTIONS[action.systemActionId] || unit.kind !== "capital")) return null;
+  if (action.type === "system-action" && !systemActionVisible(unit, action.systemActionId)) return null;
   if (action.type === "weapon-attack" && !unit.weapons.some(weapon => weapon.id === action.slotId)) return null;
   if (!actionAvailability(state, action, unit).available) return null;
   const planning = deepFreeze({ status: "planning", type: action.type, actorId: unit.id, reason: action.reason, ...(action.slotId ? { slotId: action.slotId } : {}), ...(action.systemActionId ? { systemActionId: action.systemActionId } : {}) });
@@ -1192,6 +1206,7 @@ export function beginActivation(state) {
   unit.activationMovement = { elements: [], steps: 0, turns: 0 };
   unit.movementEvasion = 0;
   unit.evasiveManeuver = false;
+  unit.dispersionActive = false;
   unit.disengageEvasionPenalty = 0;
   if (unit.engineBoostActive) unit.currentSpeed = Math.max(0, unit.currentSpeed - 1);
   unit.engineBoostActive = false;
@@ -1278,13 +1293,17 @@ export function actionAvailability(state, request, explicitUnit = null) {
       cost = definition.cost;
       capacityChange = { speed: definition.preview?.speedCapacity || 0, maneuver: definition.preview?.maneuverCapacity || 0 };
     }
-    if (!definition || unit.kind && unit.kind !== "capital") reasons.push(availabilityReason("action.invalid", "Недоступно этому юниту", { systemActionId: action.systemActionId || null }));
+    if (!definition || !systemActionVisible(unit, definition.id)) reasons.push(availabilityReason("action.invalid", "Недоступно этому юниту", { systemActionId: action.systemActionId || null }));
     else {
       reasons.push(...insufficientResourceReasons(resources, cost));
+      if (definition.id === "dispersion" && unit.attackedThisRound) reasons.push(availabilityReason("action.not-ready", "Рассеивание запрещено после собственной атаки в этом раунде, включая Наблюдение"));
+      if (definition.id === "dispersion" && unit.dispersionActive) reasons.push(availabilityReason("action.not-ready", "Рассеивание уже активно"));
+      if (definition.id === "interceptor-boost" && unit.interceptorBoostCooldown > 0) reasons.push(availabilityReason("action.not-ready", cooldownLabel(unit.interceptorBoostCooldown)));
       if (definition.id === "evasive-maneuver" && unit.evasiveManeuver) reasons.push(availabilityReason("action.not-ready", "Манёвр уклонения уже активен", { readiness: "already-active" }));
       if (definition.oncePerActivation && unit.usedSystemActions?.includes(definition.id)) reasons.push(availabilityReason("action.not-ready", "Уже использовано в этой активации", { readiness: "used-this-activation" }));
       if (definition.id === "reactor-to-engines" && !(unit.reactor && unit.engineId)) reasons.push(availabilityReason("resource.unavailable", "Требуется реактор и двигатель", { resource: "energy" }));
-      readiness = { ready: !reasons.some(reason => ["action.not-ready", "resource.unavailable"].includes(reason.code)), state: unit.usedSystemActions?.includes(definition.id) ? "used" : "ready" };
+      const cooldownRemaining = definition.id === "interceptor-boost" ? unit.interceptorBoostCooldown || 0 : 0;
+      readiness = { ready: !reasons.some(reason => ["action.not-ready", "resource.unavailable"].includes(reason.code)), state: cooldownRemaining > 0 ? "cooldown" : unit.usedSystemActions?.includes(definition.id) ? "used" : "ready", cooldownRemaining };
     }
   } else if (action.type === "end-activation") {
     cost = {};
@@ -1374,13 +1393,7 @@ function canPaySystemAction(unit, definition) {
 }
 
 export function systemActionReasons(unit, systemActionId) {
-  const definition = SYSTEM_ACTIONS[systemActionId];
-  if (!definition || unit?.kind !== "capital") return ["Недоступно этому юниту"];
-  const reasons = actionCostReasons(unit, definition.cost);
-  if (definition.id === "evasive-maneuver" && unit.evasiveManeuver) reasons.push("Манёвр уклонения уже активен");
-  if (definition.oncePerActivation && unit.usedSystemActions?.includes(definition.id)) reasons.push("Уже использовано в этой активации");
-  if (definition.id === "reactor-to-engines" && !(unit.reactor && unit.engineId)) reasons.push("Требуется реактор и двигатель");
-  return reasons;
+  return actionAvailability({}, { type: "system-action", systemActionId }, unit).reasons.map(reason => reason.message);
 }
 
 function systemActionCondition(unit, definition) {
@@ -1400,6 +1413,12 @@ export function confirmSystemAction(state, _preview = null) {
   if (definition.effect === "evasiveManeuver") {
     unit.evasiveManeuver = true;
     updateMovementEvasion(unit);
+  }
+  if (definition.effect === "dispersion") unit.dispersionActive = true;
+  if (definition.id === "interceptor-boost") {
+    unit.interceptorBoostCooldown = definition.cooldownRounds;
+    unit.interceptorBoostUsedThisRound = true;
+    if (Number.isFinite(unit.activationSpeedCapacity)) unit.activationSpeedCapacity += 1;
   }
   if (definition.effect === "engineBoost") {
     unit.engineBoostActive = true;
