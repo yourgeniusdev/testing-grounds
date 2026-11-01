@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { applyAttackStep, confirmWeaponAttack, previewWeaponAttack, weaponAttackArc } from "./battle.js";
+import { applyAttackStep, confirmWeaponAttackAction, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import {
   DIRECTIONS,
   activeUnit,
+  beginActionPlanning,
   beginActivation,
   confirmDeployment,
+  confirmManeuverAction,
   createBattleState,
   deployUnit,
   endActivation,
   executeManeuverElement,
   key,
   offsetToAxial,
-  planManeuver,
   planRoutes,
   unitById
 } from "./domain.js";
@@ -25,7 +26,8 @@ function deployAt(state, unitId, col, row) {
 
 function executeManeuver(state, route) {
   const option = buildManeuverOptions(activeUnit(state), route)[0];
-  const plan = planManeuver(state, option);
+  beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  const plan = confirmManeuverAction(state, option);
   assert.ok(plan);
   let result;
   for (let index = 0; index < plan.elements.length; index++) result = executeManeuverElement(state, plan, index);
@@ -83,13 +85,14 @@ test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and ne
   assert.deepEqual(maneuverPlan.elements.map(element => element.type), ["move", "move"]);
   assert.deepEqual(wasps.position, { q: 0, r: 0 });
   assert.equal(wasps.heading, 0);
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
 
   let totalShots = 0;
   for (const weapon of wasps.weapons) {
     const preview = previewWeaponAttack(state, wasps.id, weapon.id, bastion.id);
     assert.equal(preview.canConfirm, true);
-    const attackPlan = confirmWeaponAttack(state, wasps.id, weapon.id, bastion.id, () => 100, () => 0);
+    beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: weapon.id });
+    const attackPlan = confirmWeaponAttackAction(state, wasps.id, weapon.id, bastion.id, () => 100, () => 0);
     assert.ok(attackPlan);
     totalShots += attackPlan.steps.length;
     for (let index = 0; index < attackPlan.steps.length; index++) assert.equal(applyAttackStep(state, attackPlan, index).status, "applied");
@@ -101,9 +104,9 @@ test("Stage 1 completes deployment, maneuver, weapon attacks, activation, and ne
   assert.deepEqual(activation, { newRound: false });
   assert.equal(wasps.hasActivated, true);
   assert.equal(activeUnit(state).id, "swift");
-  assert.equal(activeUnit(state).activationStartedThisRound, true);
-  assert.equal(state.lifecycle, "SystemActions");
-  assert.equal(state.stage, "system");
+  assert.equal(activeUnit(state).activationStartedThisRound, false);
+  assert.equal(state.lifecycle, "WaitDecision");
+  assert.equal(state.stage, "wait-decision");
 });
 
 test("a squadron maneuver final heading controls every weapon slot arc", () => {
@@ -127,7 +130,7 @@ test("a squadron maneuver final heading controls every weapon slot arc", () => {
   assert.deepEqual(plan.elements.map(element => element.type), ["turn", "move"]);
   assert.deepEqual(mantis.position, { q: -1, r: 1 });
   assert.equal(mantis.heading, 4);
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
 
   const [finalDq, finalDr] = DIRECTIONS[mantis.heading];
   const [formerDq, formerDr] = DIRECTIONS[3];

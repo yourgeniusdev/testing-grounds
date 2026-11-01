@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { applyAttackStep, confirmWeaponAttack, resolvePostEntryAA } from "./battle.js";
+import { applyAttackStep, confirmWeaponAttackAction, resolvePostEntryAA } from "./battle.js";
 import * as domain from "./domain.js";
 import { buildManeuverOptions } from "./ui-rules.js";
 
@@ -74,8 +74,11 @@ function battle(units, contents = []) {
     units,
     activeUnitId: units[0].id,
     roundNumber: 1,
-    lifecycle: "SystemActions",
-    stage: "system",
+    lifecycle: "ActionChoice",
+    stage: "action-choice",
+    activeAction: null,
+    maneuverApplication: null,
+    attackApplication: null,
     log: [],
     events: [],
     sequence: 0,
@@ -117,7 +120,8 @@ test("Stage 0 battle seam executes movement stepwise through hazards, AA, interc
   assert.equal(preview, null);
   assert.deepEqual(snapshot(state), beforePreview);
 
-  const plan = domain.planManeuver(state, option);
+  domain.beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  const plan = domain.confirmManeuverAction(state, option);
   assert.ok(plan);
   interceptor.position = { q: 3, r: 1 };
   const positions = [];
@@ -135,7 +139,7 @@ test("Stage 0 battle seam executes movement stepwise through hazards, AA, interc
   assert.deepEqual(positions, [{ q: 1, r: 0 }, { q: 2, r: 0 }, { q: 3, r: 0 }]);
   assert.equal(result.status, "stopped");
   assert.equal(result.reason, "interception");
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
   assert.equal(mover.speedSpent, 4);
   assert.equal(mover.integrity, 17);
   assert.deepEqual(mover.engagedWith, ["interceptor"]);
@@ -143,7 +147,8 @@ test("Stage 0 battle seam executes movement stepwise through hazards, AA, interc
   assert.equal(passThroughCapital.weapons[0].firedThisRound, true);
   assert.deepEqual(state.scenario.contents.map(content => content.id), ["asteroid", "mine"]);
 
-  const attackPlan = confirmWeaponAttack(state, mover.id, mover.weapons[0].id, passThroughCapital.id, () => 100, () => 0);
+  domain.beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: mover.weapons[0].id });
+  const attackPlan = confirmWeaponAttackAction(state, mover.id, mover.weapons[0].id, passThroughCapital.id, () => 100, () => 0);
   assert.ok(attackPlan);
   assert.equal(applyAttackStep(state, attackPlan, 0).status, "applied");
 
@@ -169,7 +174,9 @@ test("hazard destruction completes the active action and advances valid initiati
   const enemy = unit({ id: "enemy", sideId: "crimson", position: { q: 4, r: 0 }, weapons: [], activationStartedThisRound: false });
   const mine = { id: "mine", kind: "hazard", type: "minefield", label: "Minefield", position: { q: 1, r: 0 }, hazard: { probability: 1, min: 3, max: 3, effect: "integrity damage" } };
   const state = battle([mover, ally, enemy], [mine]);
-  const plan = domain.planManeuver(state, optionFor(state, "1,0"));
+  const option = optionFor(state, "1,0");
+  domain.beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  const plan = domain.confirmManeuverAction(state, option);
 
   const result = domain.executeManeuverElement(state, plan, 0);
 
@@ -178,8 +185,8 @@ test("hazard destruction completes the active action and advances valid initiati
   assert.equal(state.activeUnitId, ally.id);
   assert.equal(domain.activeUnit(state), ally);
   assert.deepEqual(state.initiativeOrder, [ally.id, enemy.id]);
-  assert.equal(state.lifecycle, "SystemActions");
-  assert.equal(state.stage, "system");
+  assert.equal(state.lifecycle, "WaitDecision");
+  assert.equal(state.stage, "wait-decision");
   assert.deepEqual(result.destruction.debris.position, { q: 1, r: 0 });
 });
 
@@ -187,7 +194,9 @@ test("AA destruction completes the action with a valid victory state and causal 
   const mover = unit({ currentSpeed: 1, speedRemaining: 1, integrity: 1, stack: 1 });
   const owner = unit({ id: "owner", sideId: "crimson", kind: "capital", position: { q: 0, r: 1 }, heading: 0, stack: 1, unitHealth: null, weapons: [weapon({ id: "aa", name: "AA", targetKinds: ["squadron"], accuracy: 100, damage: 1, overwatch: true })] });
   const state = battle([mover, owner]);
-  const plan = domain.planManeuver(state, optionFor(state, "1,0"));
+  const option = optionFor(state, "1,0");
+  domain.beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  const plan = domain.confirmManeuverAction(state, option);
 
   const result = domain.executeManeuverElement(state, plan, 0, {
     resolvePostEntry({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) {

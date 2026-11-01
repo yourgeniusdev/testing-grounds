@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { destroyUnit, executeManeuverElement, movementEvasion, planManeuver, planRoutes, resolvePostEntryInterceptions } from "./domain.js";
+import { beginActionPlanning, confirmManeuverAction, destroyUnit, executeManeuverElement, movementEvasion, planRoutes, resolvePostEntryInterceptions } from "./domain.js";
 import { resolvePostEntryAA } from "./battle.js";
 import { buildManeuverOptions } from "./ui-rules.js";
 
@@ -44,8 +44,11 @@ function battle(mover, { units = [], contents = [] } = {}) {
     units: [mover, ...units],
     activeUnitId: mover.id,
     roundNumber: 1,
-    lifecycle: "SystemActions",
-    stage: "system",
+    lifecycle: "ActionChoice",
+    stage: "action-choice",
+    activeAction: null,
+    maneuverApplication: null,
+    attackApplication: null,
     log: [],
     events: [],
     sequence: 0,
@@ -60,6 +63,11 @@ function optionAt(state, mover, destination, heading) {
   const route = heading === undefined ? routes.get(destination) : routes.get(`${destination}:${heading}`);
   assert.ok(route, `expected route to ${destination}`);
   return buildManeuverOptions(mover, route)[0];
+}
+
+function chooseManeuver(state, option) {
+  beginActionPlanning(state, { type: "maneuver", reason: "test" });
+  return confirmManeuverAction(state, option);
 }
 
 function recursivelyFrozen(value, seen = new Set()) {
@@ -87,13 +95,13 @@ test("confirmed maneuver plan is recursively immutable and detached from mutable
   };
   const state = battle(mover, { contents: [hazard] });
   const option = optionAt(state, mover, "1,0");
-  const before = structuredClone({ ...state, rng: null });
+  const before = structuredClone({ mover, hazard });
 
-  const plan = planManeuver(state, option);
+  const plan = chooseManeuver(state, option);
 
   assert.ok(plan);
   assert.equal(recursivelyFrozen(plan), true);
-  assert.deepEqual({ ...state, rng: null }, before);
+  assert.deepEqual({ mover, hazard }, before);
   assert.deepEqual({
     actorId: plan.actorId,
     start: plan.start,
@@ -133,7 +141,7 @@ test("confirmation revalidates executor, start, adjacency, traversal, and resour
     const state = battle(mover, { units: [unit({ id: "other", position: { q: -3, r: 0 } })] });
     const option = optionAt(state, mover, "1,-1", 1);
     mutate({ state, mover, option });
-    assert.equal(planManeuver(state, option), null);
+    assert.equal(chooseManeuver(state, option), null);
   });
 });
 
@@ -143,7 +151,7 @@ test("a completely empty maneuver is rejected", () => {
   const route = { position: { ...mover.position }, heading: mover.heading, movementCost: 0, turnsSpent: 0, steps: [], actions: [], consequences: [], previewConsequences: [], path: [{ ...mover.position }] };
   const [option] = buildManeuverOptions(mover, route);
 
-  assert.equal(planManeuver(state, option), null);
+  assert.equal(chooseManeuver(state, option), null);
 });
 
 test("preview changes and cancellation remain pure", () => {
@@ -179,7 +187,7 @@ test("forged UI cost, endpoint, and heading fields are rejected", () => {
   for (const forge of forgeries) {
     const option = structuredClone(original);
     forge(option);
-    assert.equal(planManeuver(state, option), null);
+    assert.equal(chooseManeuver(state, option), null);
   }
   assert.deepEqual(mover.position, { q: 0, r: 0 });
   assert.equal(mover.speedSpent, 0);
@@ -190,7 +198,7 @@ test("a destination move remains final when the maneuver ends with a turn", () =
   const mover = unit({ kind: "squadron", heading: 0, maneuver: 1, maneuverRemaining: 1, currentSpeed: 1, speedRemaining: 1 });
   const state = battle(mover);
   const option = optionAt(state, mover, "1,0", 1);
-  const plan = planManeuver(state, option);
+  const plan = chooseManeuver(state, option);
 
   assert.deepEqual(plan.elements.map(element => ({ type: element.type, final: element.final })), [
     { type: "move", final: true },
@@ -209,7 +217,7 @@ test("executor charges each move and turn, including the final turn, before appl
   const mover = unit({ kind: "capital", heading: 0, maneuver: 2, maneuverRemaining: 2 });
   const state = battle(mover);
   const option = optionAt(state, mover, "1,-1", 0);
-  const plan = planManeuver(state, option);
+  const plan = chooseManeuver(state, option);
 
   assert.deepEqual(plan.elements.map(element => ({ type: element.type, cost: element.cost, heading: element.heading })), [
     { type: "turn", cost: 1, heading: 1 },
@@ -221,7 +229,7 @@ test("executor charges each move and turn, including the final turn, before appl
   assert.equal(first.status, "executed");
   assert.equal(first.transition.maneuverCost, 1);
   assert.equal(mover.heading, 1);
-  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, stage: state.stage }, { speedSpent: 0, maneuverSpent: 1, stage: "system" });
+  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, stage: state.stage }, { speedSpent: 0, maneuverSpent: 1, stage: "action-resolution" });
 
   const second = executeManeuverElement(state, plan, 1);
   assert.equal(second.status, "executed");
@@ -232,14 +240,14 @@ test("executor charges each move and turn, including the final turn, before appl
   const third = executeManeuverElement(state, plan, 2);
   assert.equal(third.status, "completed");
   assert.equal(mover.heading, 0);
-  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, stage: state.stage }, { speedSpent: 1, maneuverSpent: 2, stage: "attack" });
+  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, stage: state.stage }, { speedSpent: 1, maneuverSpent: 2, stage: "action-choice" });
 });
 
 test("illegal next element stops at the last legal state without rolling back completed work", () => {
   const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
   const state = battle(mover);
   const option = optionAt(state, mover, "2,0");
-  const plan = planManeuver(state, option);
+  const plan = chooseManeuver(state, option);
 
   assert.equal(executeManeuverElement(state, plan, 0).status, "executed");
   state.scenario.contents.push({ id: "station", kind: "object", type: "station", position: { q: 2, r: 0 } });
@@ -253,23 +261,45 @@ test("illegal next element stops at the last legal state without rolling back co
     maneuverSpent: 0,
     evasion: movementEvasion(1)
   });
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
 });
 
 test("unaffordable next element stops and only executed elements affect resources and Evasion", () => {
   const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
   const state = battle(mover);
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
-  assert.equal(executeManeuverElement(state, plan, 0).status, "executed");
+  const first = executeManeuverElement(state, plan, 0);
+  assert.equal(first.status, "executed");
+  assert.deepEqual(first.completedElements, [{ type: "move", planId: plan.id, elementIndex: 0, speedCost: 1, maneuverCost: 0 }]);
   mover.speedRemaining = 0;
   const result = executeManeuverElement(state, plan, 1);
 
   assert.equal(result.status, "stopped");
+  assert.deepEqual(result.completedElements, [{ type: "move", planId: plan.id, elementIndex: 0, speedCost: 1, maneuverCost: 0 }]);
   assert.deepEqual(mover.position, { q: 1, r: 0 });
   assert.equal(mover.speedSpent, 1);
   assert.equal(mover.movementEvasion, movementEvasion(1));
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
+});
+
+test("actual movement facts count entered hexes rather than terrain Speed surcharge", () => {
+  const mover = unit({ currentSpeed: 3, speedRemaining: 3 });
+  const terrain = { id: "debris", kind: "terrain", type: "debrisField", label: "Debris", position: { q: 1, r: 0 } };
+  const state = battle(mover, { contents: [terrain] });
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
+
+  const first = executeManeuverElement(state, plan, 0);
+  const second = executeManeuverElement(state, plan, 1);
+
+  assert.equal(first.transition.speedCost, 2);
+  assert.equal(second.status, "completed");
+  assert.deepEqual(second.completedElements.map(element => ({ type: element.type, speedCost: element.speedCost })), [
+    { type: "move", speedCost: 2 },
+    { type: "move", speedCost: 1 }
+  ]);
+  assert.equal(mover.activationMovement.steps, 2);
+  assert.equal(mover.movementEvasion, movementEvasion(2));
 });
 
 function hazard(position, overrides = {}) {
@@ -301,7 +331,7 @@ test("move effect pipeline orders exit, revalidation, spending, entry, hazards, 
   const trace = [];
   const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
   const state = battle(mover, { contents: [hazard({ q: 1, r: 0 })] });
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
   const contents = instrumentedContents(state, trace);
   let spent = mover.speedSpent;
   Object.defineProperty(mover, "speedSpent", {
@@ -347,7 +377,7 @@ test("repeated identical-source hazard triggers roll independently after confirm
     randomCalls++;
     return randomCalls === 1 ? 1 : 0;
   };
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   assert.equal(randomCalls, 0);
   const first = executeManeuverElement(state, plan, 0);
@@ -373,7 +403,7 @@ test("guaranteed route entry effects execute deterministically after hazards", (
     routeEffect: { guaranteed: true, negative: true, effect: "speed lock", execute: { type: "set", path: "speedRemaining", value: 0 } }
   };
   const state = battle(mover, { contents: [gravity] });
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   const entry = executeManeuverElement(state, plan, 0);
   const result = executeManeuverElement(state, plan, 1);
@@ -390,7 +420,7 @@ test("nonlethal hazard applies in the entered hex and permits continuation", () 
   const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
   const state = battle(mover, { contents: [hazard({ q: 1, r: 0 })] });
   state.rng = () => 0;
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   const result = executeManeuverElement(state, plan, 0);
 
@@ -417,7 +447,7 @@ test("lethal hazard stops immediately, retains completed spending, and creates d
     randomCalls++;
     return 0;
   };
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   const result = executeManeuverElement(state, plan, 0);
 
@@ -441,7 +471,7 @@ test("unexecuted elements cause no costs, Evasion, or consequences after an earl
     randomCalls++;
     return 0;
   };
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   const result = executeManeuverElement(state, plan, 0, { canContinue: () => false });
 
@@ -458,14 +488,14 @@ test("maneuver step hazard events carry plan, step, and cause context", () => {
   const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
   const state = battle(mover, { contents: [hazard({ q: 1, r: 0 }, { hazard: { probability: 1, min: 20, max: 20, effect: "integrity damage" } })] });
   state.rng = () => 0;
-  const plan = planManeuver(state, optionAt(state, mover, "1,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "1,0"));
 
   executeManeuverElement(state, plan, 0);
 
-  const actions = state.events.map(event => event.action);
-  assert.deepEqual(actions, ["maneuver-exit", "maneuver-move", "hazard-check", "damage", "destroy", "debris-create"]);
-  const [exit, move, check, damage, destruction, debris] = state.events;
-  for (const event of state.events) {
+  const actionEvents = state.events.filter(event => event.action !== "activation-action-confirm");
+  assert.deepEqual(actionEvents.map(event => event.action), ["maneuver-exit", "maneuver-move", "hazard-check", "damage", "destroy", "debris-create"]);
+  const [exit, move, check, damage, destruction, debris] = actionEvents;
+  for (const event of actionEvents) {
     assert.equal(event.planId, plan.id);
     assert.equal(event.elementIndex, 0);
   }
@@ -503,7 +533,7 @@ test("interception occurs only after a surviving actual Squadron move and after 
     trace.push("hazard");
     return 0;
   };
-  const plan = planManeuver(state, optionAt(state, mover, "1,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "1,0"));
   enemy.position = { q: 2, r: 0 };
 
   assert.deepEqual(mover.engagedWith, []);
@@ -521,7 +551,7 @@ test("interception occurs only after a surviving actual Squadron move and after 
   assert.deepEqual(enemy.engagedWith, ["mover"]);
   assert.deepEqual(mover.position, { q: 1, r: 0 });
   assert.equal(executeManeuverElement(state, plan, 1).status, "invalid");
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
 });
 
 test("lethal entry hazard prevents interception", () => {
@@ -529,7 +559,7 @@ test("lethal entry hazard prevents interception", () => {
   const enemy = unit({ id: "enemy", sideId: "crimson", position: { q: 4, r: 0 } });
   const state = battle(mover, { units: [enemy], contents: [hazard({ q: 1, r: 0 })] });
   state.rng = () => 0;
-  const result = executeManeuverElement(state, planManeuver(state, optionAt(state, mover, "1,0")), 0);
+  const result = executeManeuverElement(state, chooseManeuver(state, optionAt(state, mover, "1,0")), 0);
 
   assert.equal(result.status, "destroyed");
   assert.deepEqual(enemy.engagedWith, []);
@@ -539,7 +569,7 @@ test("passing through a capital alone creates no interception and route continue
   const mover = unit({ currentSpeed: 2, speedRemaining: 2 });
   const capital = unit({ id: "capital", kind: "capital", sideId: "crimson", position: { q: 1, r: 0 }, heading: 3 });
   const state = battle(mover, { units: [capital] });
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   assert.equal(executeManeuverElement(state, plan, 0).status, "executed");
   assert.deepEqual(mover.engagedWith, []);
@@ -553,7 +583,7 @@ test("turn-only routes do not synthesize interception previews", () => {
   const stationary = planRoutes(state, mover, "risky").get("0,0:1");
 
   assert.deepEqual(stationary.interceptions, []);
-  assert.equal(stationary.interception, null);
+  assert.equal("interception" in stationary, false);
   assert.deepEqual(resolvePostEntryInterceptions({ ...state, units: [mover] }, mover), []);
 });
 
@@ -599,9 +629,7 @@ test("post-entry AA revalidates after entry and destroys mover before later reac
   const interceptor = unit({ id: "interceptor", sideId: "crimson", position: { q: 3, r: 0 } });
   const state = battle(mover, { units: [killer, later, interceptor] });
   state.activeUnitId = mover.id;
-  state.lifecycle = "SystemActions";
-  state.stage = "system";
-  const plan = planManeuver(state, optionAt(state, mover, "2,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "2,0"));
 
   const result = executeManeuverElement(state, plan, 0, {
     resolvePostEntry({ state: current, unit: entered, plan: currentPlan, elementIndex, causeEventId }) {
@@ -621,14 +649,14 @@ test("post-entry AA revalidates after entry and destroys mover before later reac
   assert.equal(declaration.causeEventId, move.eventId);
   assert.equal(declaration.planId, plan.id);
   assert.equal(declaration.elementIndex, 0);
-  assert.equal(declaration.phase, "SystemActions");
+  assert.equal(declaration.lifecycle, "ActionResolution");
 });
 
 test("post-entry AA legality is revalidated immediately before each declaration", () => {
   const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
   const owner = unit({ id: "owner", kind: "capital", sideId: "crimson", position: { q: 0, r: 0 }, heading: 0, weapons: [aaWeapon({ maxRange: 1 })] });
   const state = battle(mover, { units: [owner] });
-  const plan = planManeuver(state, optionAt(state, mover, "1,0"));
+  const plan = chooseManeuver(state, optionAt(state, mover, "1,0"));
   const result = executeManeuverElement(state, plan, 0, {
     resolveEntry() {
       owner.position = { q: -4, r: 0 };

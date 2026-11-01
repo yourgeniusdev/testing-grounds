@@ -4,11 +4,12 @@ import { PRIMARY_SYSTEMS } from "./primary-systems.js";
 import { SHIP_LOADOUTS } from "./ship-loadouts.js";
 import { SQUADRON_LOADOUTS } from "./squadron-loadouts.js";
 import { SQUADRON_MODELS } from "./squadron-models.js";
+import { SYSTEM_ACTIONS } from "./system-actions.js";
 import { validateConfig } from "./validate-config.js";
 import { VISUALS } from "./visuals.js";
 import { WEAPONS, weapon, weaponVariant } from "./weapons.js";
 
-export { CAPITAL_HULLS, PRIMARY_SYSTEMS, SHIP_LOADOUTS, SQUADRON_LOADOUTS, SQUADRON_MODELS, validateConfig, VISUALS, WEAPONS, weapon, weaponVariant };
+export { CAPITAL_HULLS, PRIMARY_SYSTEMS, SHIP_LOADOUTS, SQUADRON_LOADOUTS, SQUADRON_MODELS, SYSTEM_ACTIONS, validateConfig, VISUALS, WEAPONS, weapon, weaponVariant };
 
 export const CONFIG = deepFreeze({
   capitalHulls: CAPITAL_HULLS,
@@ -17,6 +18,7 @@ export const CONFIG = deepFreeze({
   weapons: WEAPONS,
   shipLoadouts: SHIP_LOADOUTS,
   squadronLoadouts: SQUADRON_LOADOUTS,
+  systemActions: SYSTEM_ACTIONS,
   visuals: VISUALS
 });
 

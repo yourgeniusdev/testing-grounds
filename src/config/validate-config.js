@@ -14,6 +14,7 @@ const TARGET_KINDS = ["capital", "squadron"];
 const PROJECTILES = ["beam", "tracer", "missile", "torpedo"];
 const TRAILS = ["none", "short", "smoke"];
 const IMPACTS = ["none", "spark", "smallExplosion", "largeExplosion"];
+const SYSTEM_ACTION_EFFECTS = ["evasiveManeuver", "engineBoost"];
 
 const fail = (path, message) => {
   throw new Error(`Invalid config at ${path}: ${message}`);
@@ -217,8 +218,8 @@ const validateVisuals = visuals => {
 
 export function validateConfig(config) {
   validateObject(config, "config");
-  const { capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, visuals } = config;
-  for (const [name, dictionary] of Object.entries({ capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, visuals })) validateDictionary(name, dictionary);
+  const { capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, systemActions, visuals } = config;
+  for (const [name, dictionary] of Object.entries({ capitalHulls, squadronModels, primarySystems, weapons, shipLoadouts, squadronLoadouts, systemActions, visuals })) validateDictionary(name, dictionary);
 
   for (const [hullId, hull] of Object.entries(capitalHulls)) {
     const path = `capitalHulls.${hullId}`;
@@ -253,6 +254,19 @@ export function validateConfig(config) {
   }
 
   for (const [weaponId, entry] of Object.entries(weapons)) validateCatalogWeapon(entry, `weapons.${weaponId}`, weapons);
+  for (const [actionId, action] of Object.entries(systemActions)) {
+    const path = `systemActions.${actionId}`;
+    validateString(action.name, `${path}.name`);
+    validateObject(action.cost, `${path}.cost`);
+    for (const [resource, amount] of Object.entries(action.cost)) {
+      if (!["energy", "maneuver"].includes(resource)) fail(`${path}.cost.${resource}`, `unknown resource "${resource}"`);
+      validateNumber(amount, `${path}.cost.${resource}`);
+      if (!Number.isInteger(amount) || amount < 0) fail(`${path}.cost.${resource}`, "expected a nonnegative integer");
+    }
+    validateString(action.effect, `${path}.effect`);
+    if (!SYSTEM_ACTION_EFFECTS.includes(action.effect)) fail(`${path}.effect`, `unknown system action effect "${action.effect}"`);
+    if ("oncePerActivation" in action) validateBoolean(action.oncePerActivation, `${path}.oncePerActivation`);
+  }
   validateVisuals(visuals);
 
   for (const [loadoutId, loadout] of Object.entries(shipLoadouts)) {

@@ -1,4 +1,4 @@
-import { activeUnit, applyDamage, beginWeaponCooldown, destroyUnit, hexDistance, inside, key, recordEvent, unitById, weaponReadiness } from "./domain.js";
+import { activationResources, activeUnit, applyDamage, beginWeaponCooldown, currentEvasion, destroyUnit, hexDistance, inside, key, recordEvent, spendActivationResource, unitById, weaponReadiness } from "./domain.js";
 
 const MULTIPLIERS = {
   kinetic: { shield: 1.5, armor: 0.75, integrity: 1 },
@@ -47,11 +47,12 @@ function effectiveWeapon(attacker, weapon) {
   return attacker.kind === "squadron" ? { ...weapon, shots: weapon.shots * attacker.stack } : { ...weapon };
 }
 
-function unavailableReason(attacker, target, weapon) {
+function unavailableReason(attacker, target, weapon, reaction = false) {
   const readiness = weaponReadiness(weapon);
   if (!readiness.ready) return readiness.reason;
   if (weapon.energyCost > 0 && !attacker.reactor) return NO_REACTOR;
-  if (weapon.energyCost > (attacker.reactor?.currentEnergy || 0)) return `Недостаточно энергии: требуется ${weapon.energyCost}, доступно ${attacker.reactor?.currentEnergy || 0}`;
+  const energyRemaining = reaction ? attacker.reactor?.currentEnergy || 0 : activationResources(attacker).energy.remaining;
+  if (weapon.energyCost > energyRemaining) return `Недостаточно энергии: требуется ${weapon.energyCost}, доступно ${energyRemaining}`;
   if (!target) return "Цель отсутствует";
   if (target.sideId === attacker.sideId) return "Союзная цель";
   if (!weapon.targetKinds.includes(target.kind)) return INVALID_TARGET;
@@ -94,7 +95,7 @@ function lineBlocker(state, attacker, target, excludedIds = new Set()) {
 }
 
 export function targetEvasion(target) {
-  return target.evasionLocked ? 0 : (target.baseEvasion || 0) + (target.movementEvasion || 0);
+  return currentEvasion(target);
 }
 
 export function hitChance(weapon, target, cover = 0) {
@@ -150,7 +151,7 @@ export function previewWeaponAttack(state, attackerId, slotId, targetId) {
     effectiveRange: effective?.effectiveRange ?? null,
     maxRange: effective?.maxRange ?? null,
     energyRequired: effective?.energyCost || 0,
-    energyAvailable: attacker?.reactor?.currentEnergy || 0,
+    energyAvailable: attacker ? activationResources(attacker).energy.remaining : 0,
     layer,
     potentialDamage: effective && layer ? effective.shots * weaponDamage(effective, layer) : 0,
     hitChance: chance,
@@ -290,18 +291,24 @@ function planWeaponAttack(state, attacker, installedWeapon, target, rollD100, ra
   });
 }
 
-export function confirmWeaponAttack(state, attackerId, slotId, targetId, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random) {
-  if (state.stage !== "attack" || state.winner || attackerId !== activeUnit(state)?.id || state.attackApplication) return null;
+export function confirmWeaponAttackAction(state, attackerId, slotId, targetId, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random) {
+  const action = state.activeAction;
+  if (state.winner || state.lifecycle !== "ActionPlanning" || action?.status !== "planning" || action.type !== "weapon-attack" || action.actorId !== attackerId || action.slotId !== slotId || attackerId !== activeUnit(state)?.id || state.attackApplication || state.maneuverApplication) return null;
   const preview = previewWeaponAttack(state, attackerId, slotId, targetId);
   if (!preview.canConfirm) return null;
-  const declaration = recordEvent(state, "weapon-attack-confirm", { actorId: attackerId, subjectIds: [targetId], slotId, targetId });
   const attacker = unitById(state, attackerId);
   const target = unitById(state, targetId);
   const weapon = attacker.weapons.find(candidate => candidate.id === slotId);
-  const plan = planWeaponAttack(state, attacker, weapon, target, rollD100, random, { actionId: declaration.eventId });
-  if (weapon.energyCost > 0) attacker.reactor.currentEnergy -= weapon.energyCost;
+  const declaration = recordEvent(state, "activation-action-confirm", { actorId: attackerId, subjectIds: [targetId], slotId, targetId, actionType: "weapon-attack", actionReason: action.reason });
+  const context = Object.freeze({ actionId: declaration.eventId, actionType: "weapon-attack", actorId: attackerId, reason: action.reason });
+  const planned = planWeaponAttack(state, attacker, weapon, target, rollD100, random, { actionId: declaration.eventId, context });
+  const plan = Object.freeze({ ...planned, actionContext: context });
+  spendActivationResource(attacker, "energy", weapon.energyCost || 0);
   beginWeaponCooldown(weapon);
-    state.attackApplication = { plan, planId: plan.id, nextStep: 0, actionId: declaration.eventId };
+  state.activeAction = Object.freeze({ ...action, status: "resolving", actionId: declaration.eventId, planId: plan.id });
+  state.lifecycle = "ActionResolution";
+  state.stage = "action-resolution";
+  state.attackApplication = { plan, planId: plan.id, nextStep: 0, actionId: declaration.eventId };
   log(state, `${weapon.name}: открыта атака оружием.`, attacker.sideId);
   return plan;
 }
@@ -329,8 +336,8 @@ export function applyAttackStep(state, plan, stepIndex) {
   if (step.outcome === "miss") log(state, `${step.weaponName}, выстрел ${step.shot}: ${step.roll}/${step.chance}, промах.`);
   else if (hitUnit) {
     const context = plan.reaction
-      ? { planId: plan.context?.planId, actionId: plan.actionId, elementIndex: plan.context?.elementIndex, causeEventId: progress.actionId || plan.context?.causeEventId }
-      : { planId: plan.id, actionId: plan.actionId, causeEventId: progress.actionId };
+      ? { actorId: plan.attackerId, planId: plan.context?.planId, actionId: plan.actionId, actionType: "reaction-attack", actionReason: "post-entry-aa", elementIndex: plan.context?.elementIndex, causeEventId: progress.actionId || plan.context?.causeEventId }
+      : { actorId: plan.attackerId, planId: plan.id, actionId: plan.actionId, actionType: plan.actionContext?.actionType, actionReason: plan.actionContext?.reason, causeEventId: progress.actionId };
     applyDamage(state, hitUnit, step.damage, `weapon:${step.slotId}`, step.layer, context);
     log(state, `${step.weaponName} [${step.weaponClass}], выстрел ${step.shot}: ${step.roll}/${step.chance}, попадание; ${step.damage} урона по ${step.layer}.`, attacker.sideId);
     if (step.critical) {
@@ -341,7 +348,16 @@ export function applyAttackStep(state, plan, stepIndex) {
     if (hitUnit.integrity === 0) destroyTarget(state, hitUnit, { ...context, causeEventId: state.events.at(-1)?.eventId });
   }
   progress.nextStep++;
-  if (progress.nextStep === plan.steps.length) state.attackApplication = null;
+  if (progress.nextStep === plan.steps.length) {
+    state.attackApplication = null;
+    if (!plan.reaction && state.activeAction?.planId === plan.id) {
+      state.activeAction = null;
+      if (!state.winner) {
+        state.lifecycle = "ActionChoice";
+        state.stage = "action-choice";
+      }
+    }
+  }
   return { status: "applied", step, destroyed: step.destroyed };
 }
 
@@ -358,20 +374,23 @@ function reactionCandidates(state, target) {
 }
 
 export function resolvePostEntryAA(state, target, context = {}, rollD100 = () => Math.floor(Math.random() * 100) + 1, random = Math.random) {
-  if (state.stage === "attack") return [];
   const outcomes = [];
   for (const candidate of reactionCandidates(state, target)) {
     if (!state.units.includes(target)) break;
     const { owner, slot } = candidate;
-    const preview = previewWeaponAttack(state, owner.id, slot.id, target.id);
-    if (!preview.canConfirm) continue;
+    if (unavailableReason(owner, target, slot, true)) continue;
     const declaration = recordEvent(state, "aa-reaction-declare", {
       actorId: owner.id,
       subjectIds: [target.id],
       slotId: slot.id,
       planId: context.planId,
       elementIndex: context.elementIndex,
-      causeEventId: context.causeEventId
+      causeEventId: context.causeEventId,
+      maneuverActionId: context.actionId,
+      maneuverActionType: context.actionType,
+      maneuverActionReason: context.actionReason,
+      actionType: "reaction-attack",
+      actionReason: "post-entry-aa"
     });
     const plan = planWeaponAttack(state, owner, slot, target, rollD100, random, { reaction: true, context, actionId: declaration.eventId });
     if (slot.energyCost > 0) owner.reactor.currentEnergy -= slot.energyCost;

@@ -6,6 +6,7 @@ import {
   CAPITAL_HULLS,
   CONFIG,
   PRIMARY_SYSTEMS,
+  SYSTEM_ACTIONS,
   validateConfig,
   VISUALS,
   WEAPONS,
@@ -33,6 +34,22 @@ test("independent weapon catalog has neutral IDs, complete combat data and no sh
     assert.doesNotMatch(entry.id, /atlas|swift|bastion|raptor/i);
   }
   assert.equal(validateConfig(CONFIG), true);
+});
+
+test("system action catalog is part of the validated frozen configuration graph", () => {
+  assert.equal(CONFIG.systemActions, SYSTEM_ACTIONS);
+  assertDeepFrozen(SYSTEM_ACTIONS);
+  const cases = [
+    [config => { config.systemActions["reactor-to-engines"].id = "forged"; }, /expected "reactor-to-engines"/],
+    [config => { config.systemActions["reactor-to-engines"].cost.energy = -1; }, /nonnegative integer/],
+    [config => { config.systemActions["reactor-to-engines"].effect = "unknown"; }, /unknown system action effect/],
+    [config => { config.systemActions["reactor-to-engines"].oncePerActivation = "yes"; }, /expected a boolean/]
+  ];
+  for (const [mutate, expected] of cases) {
+    const config = cloneConfig();
+    mutate(config);
+    assert.throws(() => validateConfig(config), expected);
+  }
 });
 
 test("weapon variants deep-merge visuals, retain provenance and materialize independent frozen objects", () => {

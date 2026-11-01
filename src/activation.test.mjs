@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import {
   activeUnit,
+  beginActionPlanning,
   beginActivation,
+  confirmManeuverAction,
+  confirmSystemAction,
   createBattleState,
   createScenario,
   deployUnit,
   destroyUnit,
   endActivation,
   executeManeuverElement,
-  planManeuver,
   planRoutes,
-  useEvasiveManeuver,
   waitActiveUnit
 } from "./domain.js";
 import { buildManeuverOptions } from "./ui-rules.js";
@@ -63,7 +64,7 @@ function activationState() {
 }
 
 {
-  const { state, atlas, swift } = activationState();
+  const { state, atlas } = activationState();
   beginActivation(state);
   assert.equal(atlas.reactor.currentEnergy, 3);
   assert.equal(atlas.activationStartedThisRound, true);
@@ -72,16 +73,6 @@ function activationState() {
     { speedSpent: atlas.speedSpent, speedRemaining: atlas.speedRemaining, maneuverSpent: atlas.maneuverSpent, maneuverRemaining: atlas.maneuverRemaining },
     { speedSpent: 0, speedRemaining: atlas.currentSpeed, maneuverSpent: 0, maneuverRemaining: atlas.maneuver }
   );
-
-  assert.equal(waitActiveUnit(state), true);
-  assert.equal(activeUnit(state), swift);
-  assert.equal(swift.reactor.currentEnergy, 3);
-  assert.equal(swift.activationStartedThisRound, true);
-
-  assert.equal(waitActiveUnit(state), true);
-  assert.equal(activeUnit(state), atlas);
-  assert.equal(atlas.reactor.currentEnergy, 3);
-  assert.equal(atlas.canWait, false);
   assert.equal(waitActiveUnit(state), false);
 }
 
@@ -102,14 +93,14 @@ function activationState() {
 {
   const { state, atlas } = activationState();
   beginActivation(state);
-  assert.equal(useEvasiveManeuver(state), true);
-  assert.equal(atlas.canWait, false);
+  assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }));
+  assert.equal(atlas.canWait, true);
+  assert.equal(atlas.maneuverSpent, 0);
+  assert.ok(confirmSystemAction(state, { systemActionId: "evasive-maneuver" }));
   assert.equal(atlas.maneuverSpent, 1);
   assert.equal(atlas.maneuverRemaining, atlas.maneuver - 1);
-  assert.equal(useEvasiveManeuver(state), true);
-  assert.equal(atlas.evasiveManeuver, false);
-  assert.equal(atlas.canWait, false);
-  assert.equal(atlas.maneuverSpent, 0);
+  assert.equal(atlas.evasiveManeuver, true);
+  assert.equal(atlas.canWait, true);
   assert.equal(waitActiveUnit(state), false);
 }
 
@@ -122,7 +113,8 @@ function activationState() {
   assert.equal(atlas.maneuverSpent, 0);
   const route = planRoutes(state, atlas, "safe").get(`${atlas.position.q + 2},${atlas.position.r}:${(atlas.heading + 1) % 6}`);
   const option = buildManeuverOptions(atlas, route)[0];
-  const plan = planManeuver(state, option);
+  beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  const plan = confirmManeuverAction(state, option);
   for (let index = 0; index < plan.elements.length; index++) executeManeuverElement(state, plan, index);
   assert.equal(atlas.canWait, false);
   assert.deepEqual(
@@ -141,16 +133,17 @@ function activationState() {
   const targetHeading = (atlas.heading + 2) % 6;
   const route = routes.get(`${atlas.position.q},${atlas.position.r}:${targetHeading}`);
   const [option] = buildManeuverOptions(atlas, route);
-  const before = structuredClone({ heading: atlas.heading, maneuverSpent: atlas.maneuverSpent, stage: state.stage });
-  const plan = planManeuver(state, option);
-  assert.deepEqual({ heading: atlas.heading, maneuverSpent: atlas.maneuverSpent, stage: state.stage }, before);
+  const before = structuredClone({ heading: atlas.heading, maneuverSpent: atlas.maneuverSpent });
+  beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  const plan = confirmManeuverAction(state, option);
+  assert.deepEqual({ heading: atlas.heading, maneuverSpent: atlas.maneuverSpent }, before);
   assert.deepEqual(plan.elements.map(element => element.type), ["turn", "turn"]);
   assert.ok(plan.elements.every(Object.isFrozen));
   for (let index = 0; index < plan.elements.length; index++) executeManeuverElement(state, plan, index);
   assert.equal(atlas.heading, targetHeading);
   assert.equal(atlas.speedSpent, 0);
   assert.equal(atlas.maneuverSpent, 2);
-  assert.equal(state.stage, "attack");
+  assert.equal(state.stage, "action-choice");
 }
 
 {
@@ -160,8 +153,9 @@ function activationState() {
   atlas.speedRemaining = 0;
   const route = { position: { ...atlas.position }, heading: atlas.heading, movementCost: 0, turnsSpent: 0, steps: [], actions: [], consequences: [], previewConsequences: [], path: [{ ...atlas.position, heading: atlas.heading }] };
   const [emptyOption] = buildManeuverOptions(atlas, route);
-  assert.equal(planManeuver(state, emptyOption), null);
-  assert.equal(state.stage, "system");
+  beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
+  assert.equal(confirmManeuverAction(state, emptyOption), null);
+  assert.equal(state.stage, "action-planning");
 }
 
 {
@@ -174,9 +168,10 @@ function activationState() {
   assert.equal(result.newRound, true);
   assert.equal(atlas.activationStartedThisRound, false);
   assert.equal(activeUnit(state), swift);
-  assert.equal(swift.activationStartedThisRound, true);
-  assert.equal(swift.speedSpent, 0);
-  assert.equal(swift.speedRemaining, swift.currentSpeed);
+  assert.equal(swift.activationStartedThisRound, false);
+  assert.equal(state.lifecycle, "WaitDecision");
+  assert.equal(swift.speedSpent, 2);
+  assert.equal(swift.speedRemaining, 1);
 }
 
 {
@@ -207,9 +202,10 @@ function activationState() {
     assert.equal(survivor.hasActivated, false);
     assert.equal(survivor.hasWaited, false);
   }
-  assert.equal(activatedAlly.activationStartedThisRound, true);
+  assert.equal(activatedAlly.activationStartedThisRound, false);
   assert.equal(enemy.activationStartedThisRound, false);
-  assert.equal(activatedAlly.speedSpent, 0);
+  assert.equal(activatedAlly.speedSpent, 2);
+  assert.equal(state.lifecycle, "WaitDecision");
 }
 
 console.log("activation checks passed");

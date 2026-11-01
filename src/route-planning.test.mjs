@@ -62,8 +62,7 @@ function routeShape(routes) {
       consequences: route.consequences,
       previewConsequences: route.previewConsequences,
       path: route.path,
-      interceptions: route.interceptions,
-      interception: route.interception
+      interceptions: route.interceptions
     }));
 }
 
@@ -250,13 +249,13 @@ test("maneuver options preserve stable public data without mutating battle state
     finalState: option.finalState,
     resources: option.resources,
     consequences: option.consequences,
-    interception: option.interception
+    interceptions: option.interceptions
   }, {
     optionId: "maneuver:1:0:heading:0",
     finalState: { hex: { q: 1, r: 0 }, heading: 0 },
     resources: { speed: { spent: 1, remaining: 2, capacity: 3 }, maneuver: { spent: 0, remaining: 5, capacity: 5 } },
     consequences: [{ sourceId: "mines-a", sourceName: "Minefield", probability: 0.5, min: 4, max: 8, effect: "integrity damage" }],
-    interception: null
+    interceptions: []
   });
   assert.equal(option.route, route);
   assert.equal(option.consequences, route.consequences);
@@ -265,7 +264,7 @@ test("maneuver options preserve stable public data without mutating battle state
   assert.equal(randomCalls, 0);
 });
 
-test("Squadron route preview exposes every expected interception in stable order with a deterministic singular adapter", () => {
+test("Squadron route preview exposes every expected interception in stable order", () => {
   const mover = unit({ currentSpeed: 1, speedRemaining: 1 });
   const enemies = [
     unit({ id: "enemy-z", sideId: "crimson", position: { q: 2, r: 0 } }),
@@ -277,9 +276,9 @@ test("Squadron route preview exposes every expected interception in stable order
   const [option] = buildManeuverOptions(mover, route, null);
 
   assert.deepEqual(route.interceptions, ["enemy-a", "enemy-z"]);
-  assert.equal(route.interception, "enemy-a");
+  assert.equal("interception" in route, false);
   assert.deepEqual(option.interceptions, ["enemy-a", "enemy-z"]);
-  assert.equal(option.interception, "enemy-a");
+  assert.equal("interception" in option, false);
 });
 
 test("common routing supports turn-only maneuvers but excludes the empty start state", () => {
@@ -426,7 +425,7 @@ test("expected interception terminates a risky route without publishing later tu
 
   assert.deepEqual(intercepted.path, [{ q: 0, r: 0 }, { q: 1, r: 0 }]);
   assert.deepEqual(intercepted.interceptions, ["interceptor"]);
-  assert.equal(intercepted.interception, "interceptor");
+  assert.equal("interception" in intercepted, false);
   assert.equal(routes.has("2,0"), false);
   assert.equal([...routes.values()].some(route => route.path.length > 2), false);
   assert.equal(routes.matching({ q: 1, r: 0 }).length, 1);

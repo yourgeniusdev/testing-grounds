@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { activeUnit, axialToOffset, createBattleState, useEvasiveManeuver } from "./domain.js";
-import { headingAngle, maneuverResourcePreview, shouldAutoEndActivation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
+import { activeUnit, axialToOffset, beginActionPlanning, confirmSystemAction, createBattleState } from "./domain.js";
+import { headingAngle, maneuverResourcePreview, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit } from "./ui-rules.js";
 
 assert.equal(headingAngle(0), Math.PI / 2, "курс 0 должен направлять нарисованный вверх нос вправо");
 assert.equal(headingAngle(3), -Math.PI / 2, "курс 3 должен направлять нос влево");
-assert.equal(shouldAutoEndActivation({ attackImplemented: false }), true, "без реализованной атаки манёвр должен завершать активацию");
 assert.equal(shouldDrawRoute({ targetId: "raptor" }), false, "выбранная цель атаки не должна отрисовываться как маршрут");
 assert.equal(shouldDrawRoute({ route: { path: [] } }), true, "выбранный маршрут должен отрисовываться");
 assert.equal(shouldHighlightOccupiedHex("DeploymentLeft"), false, "корабли не должны подсвечивать гекс во время расстановки левой стороны");
@@ -27,9 +26,12 @@ for (const candidate of state.units) {
   assert.equal(col, candidate.sideId === "azure" ? -5 : 5, "корабли должны начинать на втором от края ряду гексов");
 }
 const unit = activeUnit(state);
-assert.equal(useEvasiveManeuver(state), true, "манёвр уклонения должен включаться до подтверждения");
-assert.equal(unit.evasiveManeuver, true, "включённое действие должно учитываться в предпросмотре");
-assert.equal(state.stage, "system", "переключение действия не должно менять этап");
-assert.equal(useEvasiveManeuver(state), true, "манёвр уклонения должен выключаться повторным нажатием");
-assert.equal(unit.evasiveManeuver, false, "повторное нажатие должно отменять действие");
+state.lifecycle = "ActionChoice";
+state.stage = "action-choice";
+assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }), "манёвр уклонения должен переходить в предпросмотр");
+assert.equal(unit.evasiveManeuver, false, "предпросмотр не должен применять эффект");
+assert.equal(state.stage, "action-planning", "выбор действия должен открыть планирование");
+assert.ok(confirmSystemAction(state, { systemActionId: "evasive-maneuver" }), "манёвр уклонения должен подтверждаться");
+assert.equal(unit.evasiveManeuver, true, "подтверждение должно применить эффект");
+assert.equal(state.stage, "action-choice", "разрешение должно вернуть общий выбор");
 console.log("regression checks passed");
