@@ -1,4 +1,5 @@
-import { activationMovementFacts, activationResources, actionAvailability, currentEvasion, movementEvasion, movementEvasionFromFacts } from "./domain.js";
+import { SYSTEM_ACTIONS } from "./config/index.js";
+import { cooldownLabel, evasiveMovementBonusRange, actionEvasionPreview, activationMovementFacts, activationResources, actionAvailability, currentEvasion, movementEvasion, movementEvasionFromFacts } from "./domain.js";
 
 export const DISPERSION_DESCRIPTION = "Уклонение +15 п.п.; точность всех собственных атак, включая Наблюдение, −15 п.п. До начала следующей собственной активации. Бесплатно, без перезарядки. Только до первой собственной атаки текущего раунда, включая Наблюдение; после атаки включить нельзя. Движение до включения разрешено. Не отключается; совместимо с форсажем.";
 
@@ -23,6 +24,63 @@ export function shouldDrawRoute(selected) {
 
 export function shouldShowManeuverRoutes(state) {
   return state?.lifecycle === "ActionPlanning" && state.activeAction?.type === "maneuver";
+}
+
+export function planningControlsPresentation(state, ui, mobile = false) {
+  const planning = mobile && state?.lifecycle === "ActionPlanning" && !ui.animation;
+  const maneuver = state?.activeAction?.type === "maneuver";
+  const option = ui.selected?.headingOption;
+  const visible = planning && (!maneuver || Boolean(option));
+  return { visible, cancelOnly: planning && maneuver && !option };
+}
+
+export function maneuverPlanningPreview(state, unit, option) {
+  const availability = actionAvailability(state, { type: "maneuver", option }, unit);
+  const resources = resourcePresentation(unit);
+  const evasion = evasionPresentation(unit, { route: option.route }, state);
+  return {
+    canConfirm: availability.available,
+    resources,
+    speed: { spend: availability.forecast.cost.speed },
+    maneuver: { spend: availability.forecast.cost.maneuver },
+    evasion,
+    evasionDelta: Math.round((evasion.preview - evasion.current) * 10) / 10
+  };
+}
+
+export function actionPlanningPreview(state, unit, action = state.activeAction) {
+  if (!action) return null;
+  const availability = actionAvailability(state, action, unit);
+  const definition = action.type === "system-action" ? SYSTEM_ACTIONS[action.systemActionId] : null;
+  const evasion = actionEvasionPreview(state, action, unit, availability);
+  const bonusRange = definition?.effect === "evasiveManeuver" ? evasiveMovementBonusRange(unit) : null;
+  const formatBonus = value => value.toLocaleString("ru-RU");
+  const showsEvasion = action.type === "disengage" || ["evasiveManeuver", "dispersion"].includes(definition?.effect);
+  const gauges = ["speed", "maneuver", "energy"].filter(name =>
+    (name !== "maneuver" || Number.isFinite(unit.maneuver)) &&
+    (name !== "energy" || (unit.reactor && definition?.effect !== "engineBoost")) &&
+    (availability.forecast.cost[name] || availability.forecast.capacityChange[name])
+  ).map(name => ({
+    name,
+    resource: availability.resources[name],
+    preview: availability.available ? { spend: availability.forecast.cost[name], capacity: availability.forecast.capacityChange[name] } : {},
+    cost: availability.forecast.cost[name]
+  }));
+  return {
+    title: definition?.name || (action.type === "disengage" ? "Отрыв" : "Выберите цель"),
+    canConfirm: availability.available,
+    gauges,
+    evasion: showsEvasion ? evasion : null,
+    evasionDelta: Math.round((evasion.preview - evasion.current) * 10) / 10,
+    notes: [
+      ...availability.reasons.map(reason => reason.message),
+      ...(action.type === "disengage" && availability.available ? [`Шанс отрыва ${availability.details.chance}%; расход и штраф уклонения — даже при неудаче`] : []),
+      ...(definition?.effect === "engineBoost" ? [definition.cooldownRounds ? cooldownLabel(definition.cooldownRounds) : "Без перезарядки", ...(definition.oncePerActivation ? ["Один раз за активацию"] : [])] : []),
+      ...(definition?.effect === "dispersion" ? [`Точность атак <b style="color:var(--red)">-${definition.accuracyPenalty}%</b> · до следующей активации`] : []),
+      ...(bonusRange ? [`Бонус уклонения от движения +${formatBonus(bonusRange.min)}–${formatBonus(bonusRange.max)} п.п. · зависит от пройденного пути`] : []),
+      ...(definition && !Object.values(availability.forecast.cost).some(Boolean) ? ["Без затрат ресурсов"] : [])
+    ]
+  };
 }
 
 export function resourcePresentation(unit) {

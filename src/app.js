@@ -1,12 +1,24 @@
 import { cooldownLabel, systemActionVisible, DIRECTIONS, actionAvailability, activeUnit, axialToOffset, buildBattleLog, confirmDeployment, confirmDisengageAction, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, overwatchAvailability, planRoutes, resumeManeuverPostEntry, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
-import { bindRulesDialog, cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction, shouldCancelCanvasAction, shouldCancelDocumentAction } from "./ui-controller.js";
+import { actionPlanningPreview, planningControlsPresentation, maneuverPlanningPreview, DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { bindRulesDialog, cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction } from "./ui-controller.js";
 import { applyAttackStep, applyReactionStep, availableWeaponAttackTargets, confirmWeaponAttackAction, planPostEntryAA, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import { VISUALS } from "./config/index.js";
 import { movementAnimationContinuation, planMovementAnimationSegment, reactionAnimationContinuation, sampleMovementAnimationSegment } from "./movement-animation.js";
 import { battlefieldGeometry, maneuverTargetPosition, maneuverZoneRenderCommands } from "./canvas-rendering.js";
 
+import { createActivationTransitionGuard, adjacentTooltip, createHoldGesture, damageIndicators, impactPlacement, informationTooltipLayout, inspectionObjects, repeatedTargetTap, visualShotSchedule } from "./battle-presentation.js";
+
+const mobileMedia = matchMedia("(pointer:coarse), (max-width:950px)");
+const mobile = () => mobileMedia.matches;
+let battleStarted = false;
+let targetTap = null;
+let pinned = false;
+let holdTimer = null;
+let holdOrigin = null;
+const holdGesture = createHoldGesture();
+const activationTransitionGuard = createActivationTransitionGuard();
+const liveImpacts = new Set();
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
 const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "disengageButton", "disengageIcon", "disengageTooltip", "engineBoostButton", "engineBoostTooltip", "attackWeaponActions", "combatLog", "clearLogButton"];
@@ -17,6 +29,90 @@ const entityImages = new Map();
 let state = createBattleState();
 let ui = { policy: "risky", hoveredAction: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, tooltipInside: false, tooltipTimer: null, animation: null, lastActiveUnit: null, geometry: { size: 38, cx: 0, cy: 0, dpr: 1 } };
 
+function closePanels() {
+  el.battleScreen.dataset.panel = "";
+}
+
+function renderPlanning() {
+  const planning = state.lifecycle === "ActionPlanning" && !ui.animation;
+  const presentation = planningControlsPresentation(state, ui, mobile());
+  const controls = document.getElementById("planningControls");
+  const preview = document.getElementById("planningPreview");
+  const confirm = document.getElementById("confirmPlan");
+  controls.hidden = !presentation.visible && !presentation.cancelOnly;
+  controls.classList.toggle("cancel-only", presentation.cancelOnly);
+  preview.hidden = presentation.cancelOnly;
+  confirm.hidden = presentation.cancelOnly;
+  const option = ui.selected?.headingOption;
+  const maneuver = planning && state.activeAction?.type === "maneuver" && option ? maneuverPlanningPreview(state, activeUnit(state), option) : null;
+  const actionPreview = planning && state.activeAction?.type !== "maneuver" ? actionPlanningPreview(state, activeUnit(state)) : null;
+  if (maneuver) {
+    const gauges = [["speed", "Скорость"], ["maneuver", "Манёвренность"]].filter(([name]) => name !== "maneuver" || Number.isFinite(activeUnit(state).maneuver)).map(([name, label]) => `<div class="planning-resource"><span>${label} <b>${resourceMetricsText(maneuver.resources[name], maneuver[name])}</b></span>${resourceSegments(maneuver.resources[name], maneuver[name], name)}</div>`).join("");
+    preview.innerHTML = `<strong>Маршрут и курс</strong>${gauges}<span>Уклонение ${maneuver.evasion.current}% <b style="color:var(--${maneuver.evasionDelta >= 0 ? "green" : "red"})">${maneuver.evasionDelta >= 0 ? "+" : ""}${maneuver.evasionDelta} %</b></span>`;
+  } else if (actionPreview) {
+    const labels = { speed: "Скорость", maneuver: "Манёвренность", energy: "Энергия" };
+    const gauges = actionPreview.gauges.map(({ name, resource, preview: change, cost }) => `<div class="planning-resource"><span>${labels[name]} <b>${resourceMetricsText(resource, change)}${cost ? ` · цена ${cost}` : ""}</b></span>${resourceSegments(resource, change, name)}</div>`).join("");
+    const evasion = actionPreview.evasion ? `<span>Уклонение ${actionPreview.evasion.current}% <b style="color:var(--${actionPreview.evasionDelta >= 0 ? "green" : "red"})">${actionPreview.evasionDelta >= 0 ? "+" : ""}${actionPreview.evasionDelta} %</b></span>` : "";
+    preview.innerHTML = `<strong>${actionPreview.title}</strong>${gauges}${evasion}${actionPreview.notes.map(note => `<small>${note}</small>`).join("")}`;
+  } else preview.textContent = "Подтвердите действие";
+  document.getElementById("confirmPlan").disabled = !planning || (actionPreview && !actionPreview.canConfirm) || (state.activeAction?.type === "maneuver" && !maneuver?.canConfirm) || (state.activeAction?.type === "weapon-attack" && (!ui.selected?.targetId || !previewWeaponAttack(state, activeUnit(state).id, pendingWeaponId(state), ui.selected.targetId).canConfirm));
+}
+
+function popup(position, values) {
+  if (el.battleScreen.hidden || (mobile() && matchMedia("(orientation:portrait)").matches)) return;
+  const point = axialToPixel(position);
+  const nodes = values.map(value => {
+    const node = document.createElement("span");
+    node.className = `damage-popup ${value.layer}`;
+    node.textContent = value.text;
+    canvas.parentElement.append(node);
+    return node;
+  });
+  const width = Math.max(...nodes.map(node => node.offsetWidth));
+  const rowHeight = Math.max(18, ...nodes.map(node => node.offsetHeight)) + 3;
+  const placement = impactPlacement(point, width, values.length * rowHeight, [...liveImpacts]);
+  liveImpacts.add(placement);
+  nodes.forEach((node, index) => {
+    node.style.left = `${placement.left}px`;
+    node.style.top = `${placement.top + index * rowHeight}px`;
+  });
+  setTimeout(() => { nodes.forEach(node => node.remove()); liveImpacts.delete(placement); }, 1400);
+}
+
+function collectTerrainDamage() {
+  const events = state.events.slice(ui.damageCursor || 0);
+  ui.damageCursor = state.events.length;
+  for (const event of events) {
+    if (event.action !== "damage" || String(event.cause).startsWith("weapon:")) continue;
+    const id = event.subjectIds[0];
+    const unit = unitById(state, id);
+    const move = [...state.events].reverse().find(candidate => candidate.action === "maneuver-move" && candidate.actorId === id && candidate.eventOrder <= event.eventOrder);
+    const position = event.position || move?.after.position || unit?.position;
+    if (!position) continue;
+    const unitHealth = event.unitHealth || unit?.unitHealth || ui.animation?.unitHealth;
+    const before = { ...event.before, stack: unitHealth ? Math.ceil(event.before.integrity / unitHealth) : 0 };
+    const after = { ...event.after, stack: unitHealth ? Math.ceil(event.after.integrity / unitHealth) : 0 };
+    const item = { position, values: damageIndicators(before, after) };
+    if (ui.animation?.kind === "movement") (ui.animation.damagePending ||= []).push(item);
+    else popup(position, item.values);
+  }
+}
+
+function flushTerrainDamage(animation) {
+  collectTerrainDamage();
+  for (const item of animation.damagePending || []) popup(item.position, item.values);
+  animation.damagePending = [];
+}
+
+function applyVisualStep(plan, index, apply) {
+  const step = plan.steps[index];
+  const recipient = unitById(state, step.hitUnitId || plan.targetId);
+  const before = recipient ? { ...recipient } : null;
+  const result = apply(state, plan.domainPlan || plan, index);
+  if (result.status === "applied") popup(before?.position || step.endpoint, damageIndicators(before, recipient, step.outcome === "miss" ? "miss" : "hit"));
+  return result;
+}
+
 function addLog(message, tone = "neutral") {
   const journalOrder = state.journalSequence = (state.journalSequence ?? 0) + 1;
   state.log.unshift({ id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`, journalOrder, round: state.roundNumber, message, tone });
@@ -25,8 +121,12 @@ function addLog(message, tone = "neutral") {
 }
 
 function resetBattle() {
+  document.body.classList.remove("animating");
+  closePanels();
+  targetTap = null;
+  canvas.parentElement.querySelectorAll(".damage-popup").forEach(node => node.remove());
   state = createBattleState();
-  ui = { ...ui, hoveredAction: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, animation: null, logEventCursor: 0 };
+  ui = { ...ui, hoveredAction: null, hoveredWeapon: null, routes: new Map(), selected: null, hovered: null, hoveredOption: null, optionTargets: [], tooltipHex: null, animation: null, logEventCursor: 0, damageCursor: 0 };
   state.activeUnitId = state.units.find(unit => unit.sideId === "azure")?.id || null;
   addLog("Расстановка: разместите и подтвердите левую сторону.", "system");
   refresh();
@@ -70,7 +170,7 @@ function pointerHex(event) {
 }
 
 function selectedOption() {
-  return ui.hoveredOption || ui.selected?.baseOption || null;
+  return ui.selected?.headingOption || ui.hoveredOption || ui.selected?.baseOption || null;
 }
 
 function selectedRoute() {
@@ -85,13 +185,16 @@ function clearManeuverSelection() {
 }
 
 function cancelActionSelection() {
+  pinned = false;
+  targetTap = null;
+  closePanels();
   cancelPendingAction(state, ui);
   hideTooltip();
 }
 
 function chooseAction(action) {
   const selected = selectPendingAction(state, ui, action);
-  if (selected) hideTooltip();
+  if (selected) { pinned = false; targetTap = null; hideTooltip(); closePanels(); }
   return selected;
 }
 
@@ -107,11 +210,11 @@ function bindActionPreview(element, action) {
 function optionTarget(option) {
   const target = axialToPixel(option.finalState.hex);
   const heading = maneuverPreviewHeading(activeUnit(state), option);
-  if (heading === undefined) return { x: target.x, y: target.y, radius: 17, option };
+  if (heading === undefined) return { x: target.x, y: target.y, radius: 17 * Math.min(1, ui.geometry.size / 38), option };
   const [dq, dr] = DIRECTIONS[heading];
   const neighbor = axialToPixel({ q: option.finalState.hex.q + dq, r: option.finalState.hex.r + dr });
   const rect = canvas.getBoundingClientRect();
-  return { ...maneuverTargetPosition(target, neighbor, rect.width, rect.height), option };
+  return { ...maneuverTargetPosition(target, neighbor, rect.width, rect.height), radius: 20 * Math.min(1, ui.geometry.size / 38), option };
 }
 
 function optionAtPoint(point) {
@@ -122,7 +225,10 @@ function optionAtPoint(point) {
 
 function refreshRoutes() {
   const unit = activeUnit(state);
+  const selected = pinned ? ui.selected : null;
   recalculateActionUi(state, ui, unit, planRoutes, ui.policy);
+  if (selected && pendingWeaponId(state) && unitById(state, selected.targetId)) ui.selected = selected;
+  else pinned = false;
   hideTooltip();
 }
 
@@ -132,6 +238,8 @@ function refresh() {
 }
 
 function renderAll() {
+  if (ui.panelUnit !== state.activeUnitId) { closePanels(); ui.panelUnit = state.activeUnitId; }
+  renderPlanning();
   renderHeader();
   renderInitiative();
   renderUnitSummary();
@@ -161,8 +269,10 @@ function renderHeader() {
   const unit = currentUnit();
   const deploying = isDeploying();
   const finished = state.lifecycle === "Finished" || Boolean(state.winner);
-  el.roundNumber.textContent = state.roundNumber;
+  el.roundNumber.textContent = `${state.roundNumber}${mobile() && unit ? ` · ${unit.sideId === "azure" ? "Л" : "П"}` : ""}`;
   el.modeLabel.textContent = deploying ? `РАССТАНОВКА · ${state.lifecycle === "DeploymentLeft" ? "ЛЕВАЯ СТОРОНА" : "ПРАВАЯ СТОРОНА"}` : finished ? "БОЙ ЗАВЕРШЁН" : ui.animation ? "ВЫПОЛНЕНИЕ МАНЁВРА" : state.lifecycle === "ActionChoice" ? "ВЫБОР ДЕЙСТВИЯ" : state.activeAction?.type === "weapon-attack" ? "АТАКА ОРУЖИЕМ" : state.activeAction?.type === "system-action" ? "СИСТЕМНОЕ ДЕЙСТВИЕ" : state.activeAction?.type === "maneuver" ? "ПЛАНИРОВАНИЕ МАНЁВРА" : "АКТИВАЦИЯ";
+  document.getElementById("mobileRoundNumber").textContent = `РАУНД ${el.roundNumber.textContent}`;
+  document.getElementById("mobileModeLabel").textContent = el.modeLabel.textContent;
   el.confirmDeploymentButton.hidden = !deploying;
   el.confirmDeploymentButton.disabled = Boolean(ui.animation);
   el.waitButton.hidden = deploying || finished || !unit?.canWait || unit.hasWaited || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
@@ -223,7 +333,7 @@ function renderInitiative() {
     if (!unit) return "";
     const model = unit.kind === "capital" ? unit.hullClassName : unit.craftType === "interceptor" ? `Перехватчик · ${unit.squadronModelName}` : unit.squadronModelName;
     const waitMark = unit.hasWaited && !unit.hasActivated ? '<span class="queue-state" aria-label="Ожидает">◷</span>' : "";
-    return `<article class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${model} · INI ${unit.initiative}</small></span>${waitMark}</article>`;
+    return `<article data-unit-id="${id}" tabindex="0" role="button" aria-label="${unit.name}" class="ship-card ${id === state.activeUnitId ? "active" : ""} ${unit.hasActivated ? "done" : ""}" style="--ship-color:${unit.color}"><span class="mini-ship">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</span><span class="ship-info"><strong>${unit.name}</strong><small>${model} · INI ${unit.initiative}</small></span>${waitMark}</article>`;
   }).join("");
 }
 
@@ -362,10 +472,11 @@ function renderResourceBar() {
   const fixedPreview = actionResourcePreview(state, unit, ui.hoveredAction);
   const preview = Math.min(energy.remaining, fixedPreview.energy);
   const energyPreview = { spend: preview };
-  el.energyResource.innerHTML = `<span class="energy-label"><b>${unit.name}</b><span>Энергия · ${resourceMetricsText(energy, energyPreview)}</span></span>${resourceSegments(energy, energyPreview, "energy")}`;
+  el.energyResource.innerHTML = `<span class="energy-label"><b>${unit.name}</b><span>Энергия<span class="energy-details"> · ${resourceMetricsText(energy, energyPreview)}</span></span></span><div role="img" aria-label="Энергия: ${resourceMetricsText(energy, energyPreview)}">${resourceSegments(energy, energyPreview, "energy")}</div>`;
 }
 
 function renderLog() {
+  collectTerrainDamage();
   const entries = buildBattleLog(state, ui.logEventCursor || 0);
   el.combatLog.innerHTML = entries.map(entry => `<li class="${entry.tone}"><time>R${entry.round}</time><span>${entry.message}</span></li>`).join("") || '<li class="empty-log">Журнал пуст</li>';
 }
@@ -484,10 +595,10 @@ function drawEntity(entity, glyph, color, heading = 0) {
   const { x, y } = axialToPixel(position);
   const image = imageFor(glyph, color, entity.stack);
   ctx.save(); ctx.translate(x, y); ctx.rotate(headingAngle(heading || 0)); ctx.shadowColor = color; ctx.shadowBlur = entity.id === state.activeUnitId ? 18 : 8;
-  const size = VISUALS[glyph].size;
+  const size = VISUALS[glyph].size * Math.min(1, ui.geometry.size / 38);
   if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size); else image.onload = draw;
   ctx.restore();
-  if (shouldOutlineUnit(entity.id, state.activeUnitId, ui.selected?.deploymentUnitId, state.lifecycle)) { ctx.strokeStyle = color; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, 25, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
+  if (shouldOutlineUnit(entity.id, state.activeUnitId, ui.selected?.deploymentUnitId, state.lifecycle)) { ctx.strokeStyle = color; ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.arc(x, y, 25 * Math.min(1, ui.geometry.size / 38), 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]); }
 }
 
 function selectedEventAt(position) {
@@ -535,7 +646,7 @@ function drawManeuverGhost() {
   if (previewHeading === undefined) return;
   const image = imageFor(unit.glyph, unit.color, unit.stack);
   const { x, y } = axialToPixel(option.finalState.hex);
-  const size = VISUALS[unit.glyph].size;
+  const size = VISUALS[unit.glyph].size * Math.min(1, ui.geometry.size / 38);
   ctx.save();
   ctx.globalAlpha = ui.hoveredOption ? .55 : .35;
   ctx.translate(x, y); ctx.rotate(headingAngle(previewHeading));
@@ -548,9 +659,10 @@ function drawManeuverOptions() {
   const options = ui.selected?.options || [];
   ui.optionTargets = options.map(optionTarget);
   for (const target of ui.optionTargets) {
-    const active = ui.hoveredOption?.optionId === target.option.optionId;
+    const active = (ui.selected?.headingOption || ui.hoveredOption)?.optionId === target.option.optionId;
     ctx.save();
     ctx.translate(target.x, target.y);
+    ctx.scale(Math.min(1, ui.geometry.size / 38), Math.min(1, ui.geometry.size / 38));
     if (active) ctx.scale(1.14, 1.14);
     ctx.fillStyle = active ? "rgba(102,228,255,.98)" : "rgba(8,18,28,.94)";
     ctx.strokeStyle = active ? "#d8f8ff" : "#66e4ff";
@@ -615,15 +727,19 @@ function drawAnimatedEntity() {
   const animation = ui.animation;
   const image = imageFor(animation.glyph, animation.color, animation.stack);
   ctx.save(); ctx.translate(animation.x, animation.y); ctx.rotate(headingAngle(animation.heading)); ctx.shadowColor = animation.color; ctx.shadowBlur = 18;
-  if (image.complete) ctx.drawImage(image, -animation.size / 2, -animation.size / 2, animation.size, animation.size);
+  const size = animation.size * Math.min(1, ui.geometry.size / 38);
+  if (image.complete) ctx.drawImage(image, -size / 2, -size / 2, size, size);
   ctx.restore();
 }
 
 function resizeCanvas() {
+  renderPlanning();
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(rect.width * dpr); canvas.height = Math.round(rect.height * dpr);
   ui.geometry = battlefieldGeometry(rect.width, rect.height, dpr);
+  if (pinned && ui.selected?.position) positionTooltip({});
+  if (mobile() && matchMedia("(orientation:portrait)").matches) canvas.parentElement.querySelectorAll(".damage-popup").forEach(node => node.remove());
   draw();
 }
 
@@ -632,8 +748,11 @@ function startMovement(option = selectedOption()) {
   const unit = activeUnit(state);
   const plan = confirmManeuverAction(state, option);
   if (!plan) { refresh(); return; }
-  ui.animation = { kind: "movement", unitId: unit.id, unitName: unit.name, sideId: unit.sideId, glyph: unit.glyph, color: unit.color, stack: unit.stack, size: VISUALS[unit.glyph].size, plan, nextElement: 0 };
+  ui.animation = { kind: "movement", unitId: unit.id, unitName: unit.name, sideId: unit.sideId, glyph: unit.glyph, color: unit.color, stack: unit.stack, unitHealth: unit.unitHealth, size: VISUALS[unit.glyph].size, plan, nextElement: 0 };
   document.body.classList.add("animating");
+  closePanels();
+  hideTooltip();
+  renderPlanning();
   renderHeader();
   executeNextManeuverElement();
 }
@@ -669,7 +788,6 @@ function executeNextManeuverElement() {
 function animate(now) {
   const animation = ui.animation;
   if (!animation?.segment) return;
-  if (animation.kind === "movement" && !unitById(state, animation.unitId)) { finishMovement(animation.result); return; }
   const segment = animation.segment;
   const turnOnly = segment.transitions.length === 1 && segment.transitions[0].type !== "move";
   const duration = turnOnly ? 280 : 320 * segment.transitions.length;
@@ -685,6 +803,7 @@ function animate(now) {
   animation.heading = fromHeading + signedTurn(fromHeading, toHeading) * sample.progress;
   draw();
   if (progress < 1) { requestAnimationFrame(animate); return; }
+  flushTerrainDamage(animation);
   const result = animation.result;
   animation.segment = null;
   const continuation = movementAnimationContinuation(result);
@@ -697,7 +816,7 @@ function animate(now) {
 function startReactionAnimation(plan) {
   const movement = ui.animation;
   if (!movement || movement.kind !== "movement" || !plan) { finishMovement({ status: "invalid" }); return; }
-  movement.reaction = { plan, from: { ...unitById(state, plan.attackerId).position }, stepIndex: 0, started: performance.now() };
+  movement.reaction = { plan: visualShotSchedule(plan), from: { ...unitById(state, plan.attackerId).position }, stepIndex: 0, started: performance.now() };
   requestAnimationFrame(animateReaction);
 }
 
@@ -723,7 +842,7 @@ function animateReaction(now) {
   ui.animation = previous;
   const elapsed = now - reaction.started;
   while (!reaction.terminalResult && reaction.stepIndex < reaction.plan.steps.length && elapsed >= reaction.plan.steps[reaction.stepIndex].arrivalTime) {
-    const result = applyReactionStep(state, reaction.plan, reaction.stepIndex);
+    const result = applyVisualStep(reaction.plan, reaction.stepIndex, applyReactionStep);
     reaction.stepIndex++;
     renderUnitSummary();
     renderLog();
@@ -736,13 +855,14 @@ function animateReaction(now) {
 function finishMovement(result) {
   const animation = ui.animation;
   if (!animation) return;
+  flushTerrainDamage(animation);
   const unit = unitById(state, animation.unitId);
   ui.animation = null; ui.selected = null; document.body.classList.remove("animating");
   if (result?.status === "destroyed" || !unit) { refresh(); return; }
   refresh();
 }
 
-function selectHex(position) {
+function selectHex(position, targetId = null) {
   if (state.lifecycle === "DeploymentLeft" || state.lifecycle === "DeploymentRight") {
     const side = state.lifecycle === "DeploymentLeft" ? "azure" : "crimson";
     const occupant = unitAt(state, position);
@@ -753,20 +873,32 @@ function selectHex(position) {
   }
   if (state.activeAction?.type === "weapon-attack" && state.lifecycle === "ActionPlanning") {
     const attacker = activeUnit(state);
-    const target = unitAt(state, position, attacker.id);
+    const eligible = state.units.filter(unit => key(unit.position.q, unit.position.r) === key(position.q, position.r) && unit.sideId !== attacker.sideId);
+    if (!targetId && eligible.length > 1) {
+      const dialog = document.createElement("dialog");
+      for (const unit of eligible) {
+        const button = document.createElement("button");
+        button.className = "button"; button.textContent = unit.name;
+        button.onclick = () => { dialog.close(); selectHex(position, unit.id); showHexTooltip(position, {}); };
+        dialog.append(button);
+      }
+      document.body.append(dialog); dialog.addEventListener("close", () => dialog.remove()); dialog.showModal(); return;
+    }
+    const target = targetId ? unitById(state, targetId) : eligible[0];
     if (!canSelectWeaponAttackTarget(attacker, target, pendingWeaponId(state))) return;
+    const now = performance.now();
+    if (mobile() && previewWeaponAttack(state, attacker.id, pendingWeaponId(state), target.id).canConfirm && repeatedTargetTap(targetTap, target.id, now)) { confirmAttack(); return; }
+    targetTap = { targetId: target.id, time: now };
     ui.selected = { position, targetId: target.id };
+    pinned = true;
+    renderPlanning();
     draw();
     return;
   }
   const routes = ui.routes.matching?.(position) || [];
-  const occupant = unitAt(state, position, activeUnit(state).id);
-  if (!routes.length) {
-    if (!occupant) { clearManeuverSelection(); renderUnitSummary(); draw(); }
-    return;
-  }
+  if (!routes.length) return;
   if (ui.selected?.position && key(ui.selected.position.q, ui.selected.position.r) === key(position.q, position.r)) {
-    clearManeuverSelection(); renderUnitSummary(); draw(); return;
+    return;
   }
   const unit = activeUnit(state);
   const options = routes.flatMap(route => buildManeuverOptions(unit, route));
@@ -782,6 +914,7 @@ function cancelTooltipClose() {
 }
 
 function hideTooltip() {
+  if (pinned && state.lifecycle === "ActionPlanning") return;
   cancelTooltipClose();
   el.tooltip.hidden = true;
   ui.tooltipHex = null;
@@ -796,6 +929,16 @@ function scheduleTooltipClose() {
 }
 
 function positionTooltip(event) {
+  if (pinned && ui.selected?.position) {
+    const bounds = canvas.getBoundingClientRect();
+    const layout = adjacentTooltip(axialToPixel(ui.selected.position), ui.geometry.size, bounds, mobile() ? 220 : 280, Math.min(el.tooltip.offsetHeight, bounds.height - 16));
+    el.tooltip.style.width = `${layout.width}px`;
+    const measured = adjacentTooltip(axialToPixel(ui.selected.position), ui.geometry.size, bounds, mobile() ? 220 : 280, el.tooltip.offsetHeight);
+    el.tooltip.style.left = `${measured.left}px`;
+    el.tooltip.style.top = `${measured.top}px`;
+    return;
+  }
+  el.tooltip.style.width = "";
   const wrap = canvas.parentElement.getBoundingClientRect();
   const width = el.tooltip.offsetWidth || 240;
   const height = el.tooltip.offsetHeight || 140;
@@ -804,7 +947,7 @@ function positionTooltip(event) {
   const left = localX + width + 24 <= wrap.width ? localX + 14 : localX - width - 14;
   const top = localY + height + 18 <= wrap.height ? localY + 14 : localY - height - 14;
   el.tooltip.style.left = `${Math.max(8, Math.min(left, wrap.width - width - 8))}px`;
-  el.tooltip.style.top = `${Math.max(44, Math.min(top, wrap.height - height - 8))}px`;
+  el.tooltip.style.top = `${Math.max(mobile() ? 8 : 44, Math.min(top, wrap.height - height - 8))}px`;
 }
 
 function eventTooltip(position) {
@@ -833,14 +976,12 @@ function attackTooltip(occupant) {
   if (!selectedWeaponId) return unitTooltip(occupant);
   const preview = previewWeaponAttack(state, activeUnit(state).id, selectedWeaponId, occupant.id);
   const base = unitTooltip(occupant, preview);
-  const weapon = activeUnit(state).weapons.find(candidate => candidate.id === selectedWeaponId);
-  const weapons = weapon ? `<span><strong>${weapon.name}</strong><small>${preview.shots}×${preview.damage} · ${preview.hitChance}% попадание</small></span>` : "";
+  const modifiers = [...(preview.cover ? [`Укрытие ${preview.cover}%`] : []), ...(preview.endpointCover ? [`Местность ${preview.endpointCover}%`] : []), ...(occupant.dispersionActive ? ["Рассеивание +15% уклонения"] : [])].join(" · ");
   const exclusions = preview.reasons.map(reason => `<li>${reason}</li>`).join("");
-  const energy = preview.energyRequired ? `<p>Энергия: <b>${preview.energyRequired}/${preview.energyAvailable}</b></p>` : "";
   const selectedTarget = ui.selected?.targetId === occupant.id;
   const hint = !selectedWeaponId ? "<p>Сначала выберите оружейный слот</p>" : !preview.canConfirm ? "<p>Атака оружием недоступна</p>" : !selectedTarget ? "<p>Выберите цель кликом</p>" : "";
-  const detail = `<div class="tooltip-attack-metrics"><span><b>${weapon ? 1 : 0}</b> СЛОТ</span><span><b>${preview.shots}</b> ВЫСТР.</span><span><b>${preview.potentialDamage}</b> УРОН</span></div><div class="tooltip-attack-weapons">${weapons}</div>${energy}${exclusions ? `<ul>${exclusions}</ul>` : ""}${hint}<div class="tooltip-attack-actions"><button type="button" class="button primary" data-tooltip-action="confirm-attack" ${preview.canConfirm && selectedTarget ? "" : "disabled"}>Подтвердить атаку</button><button type="button" class="button" data-tooltip-action="cancel-attack">Отменить</button></div>`;
-  return { title: base.title, content: `${base.content}<div class="tooltip-attack">${detail}</div>` };
+  const detail = `<div class="tooltip-attack-metrics"><span><b>${preview.hitChance}%</b> ПОПАДАНИЕ</span><span><b>${preview.shots}</b> ВЫСТР.</span><span><b>${preview.potentialDamage}</b> ПРОГНОЗ</span></div>${exclusions ? `<ul>${exclusions}</ul>` : ""}${hint}<div class="tooltip-attack-actions"><button type="button" class="button primary" data-tooltip-action="confirm-attack" ${preview.canConfirm && selectedTarget ? "" : "disabled"}>Подтвердить атаку</button><button type="button" class="button" data-tooltip-action="cancel-attack">Отменить</button></div>`;
+  return { title: base.title, content: `${base.content}<div>${modifiers}</div><div class="tooltip-attack">${detail}</div>` };
 }
 
 function combineTooltips(primary, secondary) {
@@ -849,13 +990,79 @@ function combineTooltips(primary, secondary) {
   return { title: primary.title, content: `${primary.content}<div class="tooltip-section">${secondary.content}</div>` };
 }
 
+let informationPopover = null;
+
+function closeInformationPopover() {
+  informationPopover?.remove();
+  informationPopover = null;
+}
+
+function showInformationPopover(content, event) {
+  closeInformationPopover();
+  const popover = document.createElement("div");
+  popover.className = "information-popover";
+  popover.setAttribute("role", "tooltip");
+  popover.innerHTML = content;
+  document.body.append(popover);
+  informationPopover = popover;
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  const anchor = { x: event.clientX, y: event.clientY };
+  const layout = informationTooltipLayout(anchor, viewport);
+  popover.style.width = `${layout.width}px`;
+  popover.style.maxHeight = `${layout.maxHeight}px`;
+  const measured = informationTooltipLayout(anchor, viewport, popover.offsetHeight);
+  popover.style.left = `${measured.left}px`;
+  popover.style.top = `${measured.top}px`;
+}
+
+function inspectHex(position, event = null) {
+  if (event) {
+    const objects = inspectionObjects(state.units, state.scenario.contents, position);
+    const models = objects.map(object => state.units.includes(object) ? unitTooltip(object) : { title: object.label || object.type, content: terrainTooltipRows([object]).map(row => `<p>${row.detail}</p>`).join("") });
+    const consequences = eventTooltip(position);
+    if (consequences) models.push(consequences);
+    if (!models.length) return false;
+    showInformationPopover(models.map(model => `<section><b>${model.title}</b>${model.content}</section>`).join(""), event);
+    return true;
+  }
+  const objects = inspectionObjects(state.units, state.scenario.contents, position);
+  if (!objects.length) return false;
+  const dialog = document.createElement("dialog");
+  const show = object => {
+    const model = state.units.includes(object) ? unitTooltip(object) : { title: object.label || object.type, content: terrainTooltipRows([object]).map(row => `<p>${row.detail}</p>`).join("") };
+    detail.innerHTML = `<h3>${model.title}</h3>${model.content}`;
+  };
+  const detail = document.createElement("section");
+  if (objects.length > 1) {
+    const list = document.createElement("nav");
+    for (const object of objects) {
+      const button = document.createElement("button");
+      button.className = "button";
+      button.textContent = object.name || object.label || object.type;
+      button.onclick = () => show(object);
+      list.append(button);
+    }
+    dialog.append(list);
+  }
+  dialog.append(detail);
+  show(objects[0]);
+  const close = document.createElement("button");
+  close.className = "button"; close.textContent = "Закрыть";
+  close.onclick = () => dialog.close(); dialog.append(close);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove());
+  dialog.showModal();
+  return true;
+}
+
 function showHexTooltip(position, event) {
-  const occupant = unitAt(state, position);
+  if (pinned && ui.selected?.targetId && key(position.q, position.r) !== key(ui.selected.position.q, ui.selected.position.r)) return;
+  const occupant = pinned ? unitById(state, ui.selected?.targetId) : unitAt(state, position);
   const events = eventTooltip(position);
   const target = state.activeAction?.type === "weapon-attack" && state.lifecycle === "ActionPlanning" && occupant && occupant.sideId !== activeUnit(state).sideId ? attackTooltip(occupant) : occupant ? unitTooltip(occupant) : null;
   const terrainRows = terrainTooltipRows(contentsAt(state, position));
   const terrain = terrainRows.length ? { title: terrainRows[0].title, content: terrainRows.map(row => `<article class="tooltip-event"><b>${row.title}</b><span>${row.detail}</span></article>`).join("") } : null;
-  const model = combineTooltips(combineTooltips(target, terrain), events);
+  const model = pinned ? target : combineTooltips(combineTooltips(target, terrain), events);
   if (!model) { scheduleTooltipClose(); return; }
   cancelTooltipClose();
   ui.tooltipHex = position;
@@ -866,6 +1073,7 @@ function showHexTooltip(position, event) {
 }
 
 canvas.addEventListener("pointermove", event => {
+  if (event.pointerType !== "mouse") return;
   const point = pointerPoint(event);
   const option = !ui.animation && ui.selected && !(state.activeAction?.type === "weapon-attack" && state.lifecycle === "ActionPlanning") ? optionAtPoint(point) : null;
   if (option !== ui.hoveredOption) {
@@ -884,19 +1092,16 @@ canvas.addEventListener("pointermove", event => {
 canvas.addEventListener("pointerleave", () => { ui.hovered = null; ui.hoveredOption = null; scheduleTooltipClose(); el.coordinates.textContent = "HEX —"; renderUnitSummary(); draw(); });
 canvas.addEventListener("click", event => {
   if (ui.animation) return;
+  if (!state.activeAction && !isDeploying()) { inspectHex(pointerHex(event)); return; }
   const position = pointerHex(event);
   const option = optionAtPoint(pointerPoint(event));
-  const actionType = state.activeAction?.type;
-  const maneuverRoute = actionType === "maneuver" && Boolean(ui.routes.matching?.(position)?.length);
-  const attacker = actionType === "weapon-attack" ? activeUnit(state) : null;
-  const weaponTarget = actionType === "weapon-attack" && canSelectWeaponAttackTarget(attacker, unitAt(state, position, attacker.id), pendingWeaponId(state));
-  if (shouldCancelCanvasAction({ actionType, maneuverRoute, maneuverOption: Boolean(option), weaponTarget })) {
-    cancelActionSelection();
-    refresh();
+  if (option) {
+    if (mobile()) { ui.selected.headingOption = option; ui.hoveredOption = null; renderPlanning(); renderUnitSummary(); draw(); }
+    else startMovement(option);
     return;
   }
-  if (option) { startMovement(option); return; }
   selectHex(position);
+  renderPlanning();
   if (state.activeAction?.type === "weapon-attack" && state.lifecycle === "ActionPlanning" && ui.selected?.targetId) showHexTooltip(ui.selected.position, event);
 });
 el.tooltip.addEventListener("pointerenter", () => { ui.tooltipInside = true; cancelTooltipClose(); });
@@ -908,13 +1113,30 @@ el.routePolicyButton.addEventListener("click", () => {
   else chooseAction({ type: "maneuver", reason: "player-choice" });
   refresh();
 });
-el.startBattleButton.addEventListener("click", () => { el.menuScreen.hidden = true; el.battleScreen.hidden = false; resetBattle(); requestAnimationFrame(resizeCanvas); });
-el.menuButton.addEventListener("click", () => { if (ui.animation) return; el.battleScreen.hidden = true; el.menuScreen.hidden = false; });
+function enterBattle() {
+  el.menuScreen.hidden = true; el.battleScreen.hidden = false;
+  if (!battleStarted) { resetBattle(); battleStarted = true; }
+  el.startBattleButton.textContent = "Продолжить бой";
+  document.getElementById("newBattleButton").hidden = false;
+  requestAnimationFrame(resizeCanvas);
+}
+function exitBattle() {
+  el.battleScreen.hidden = true; el.menuScreen.hidden = false;
+  canvas.parentElement.querySelectorAll(".damage-popup").forEach(node => node.remove());
+}
+el.startBattleButton.addEventListener("click", enterBattle);
+el.menuButton.addEventListener("click", exitBattle);
+document.getElementById("mobileMenuButton").addEventListener("click", exitBattle);
+document.getElementById("portraitMenu").addEventListener("click", exitBattle);
+document.getElementById("newBattleButton").addEventListener("click", () => {
+  if (!window.confirm("Начать новый бой? Текущий бой будет потерян.")) return;
+  ui.animation = null; pinned = false; battleStarted = false; enterBattle();
+});
 bindRulesDialog(el.rulesDialog, el.rulesButton, [el.closeRules, el.dialogOkay]);
-el.resetButton.addEventListener("click", () => { if (!ui.animation) resetBattle(); });
+el.resetButton.addEventListener("click", () => { if (!ui.animation && window.confirm("Начать новый бой?")) { pinned = false; resetBattle(); } });
 el.confirmDeploymentButton.addEventListener("click", () => {
   const side = state.lifecycle === "DeploymentLeft" ? "azure" : "crimson";
-  if (confirmDeployment(state, side)) { ui.selected = null; if (side === "azure") state.units.forEach(unit => { unit.deployed = true; }); refresh(); }
+  if (activationTransitionGuard.run(mobile(), () => confirmDeployment(state, side))) { ui.selected = null; if (side === "azure") state.units.forEach(unit => { unit.deployed = true; }); refresh(); }
 });
 
 function evasionActionId() {
@@ -949,13 +1171,13 @@ el.disengageButton.addEventListener("click", () => {
 el.engineBoostButton.addEventListener("click", () => chooseSystemAction(boostActionId()));
 el.waitButton.addEventListener("click", () => {
   const unit = activeUnit(state);
-  if (waitActiveUnit(state)) addLog(`${unit.name} ждёт и переносится в конец очереди.`, "system");
+  if (activationTransitionGuard.run(mobile(), () => waitActiveUnit(state))) addLog(`${unit.name} ждёт и переносится в конец очереди.`, "system");
   refresh();
 });
 el.endActivationButton.addEventListener("click", () => {
   if (ui.animation) return;
   const unit = activeUnit(state);
-  const result = endActivation(state);
+  const result = activationTransitionGuard.run(mobile(), () => endActivation(state));
   if (!result) return;
   ui.selected = null;
   addLog(`${unit.name} завершает активацию.`, "system");
@@ -966,8 +1188,12 @@ el.endActivationButton.addEventListener("click", () => {
 function confirmAttack() {
   if (!ui.selected?.targetId || ui.animation) return;
   const target = unitById(state, ui.selected.targetId);
-  const plan = confirmWeaponAttackAction(state, activeUnit(state).id, pendingWeaponId(state), target.id);
-  if (!plan?.steps.length) return;
+  const committed = confirmWeaponAttackAction(state, activeUnit(state).id, pendingWeaponId(state), target.id);
+  if (!committed?.steps.length) return;
+  const plan = visualShotSchedule(committed);
+  pinned = false;
+  targetTap = null;
+  closePanels();
   hideTooltip();
   const started = performance.now();
   ui.animation = { kind: "attack", plan, from: { ...activeUnit(state).position }, stepIndex: 0, started };
@@ -978,7 +1204,7 @@ function confirmAttack() {
     if (!animation || animation.kind !== "attack") return;
     const elapsed = now - animation.started;
     while (animation.stepIndex < animation.plan.steps.length && elapsed >= animation.plan.steps[animation.stepIndex].arrivalTime) {
-      const result = applyAttackStep(state, animation.plan, animation.stepIndex);
+      const result = applyVisualStep(animation.plan, animation.stepIndex, applyAttackStep);
       if (result.status !== "applied") { ui.animation = null; document.body.classList.remove("animating"); refresh(); return; }
       animation.stepIndex++;
       renderUnitSummary();
@@ -1002,25 +1228,85 @@ el.tooltip.addEventListener("click", event => {
     refresh();
   }
 });
+el.initiativeList.addEventListener("click", event => {
+  const unit = unitById(state, event.target.closest("[data-unit-id]")?.dataset.unitId);
+  if (!unit) return;
+  if (mobile()) {
+    const card = event.target.closest("[data-unit-id]").getBoundingClientRect();
+    const content = document.createElement("span");
+    content.textContent = `${unit.name} · Инициатива ${unit.initiative}`;
+    showInformationPopover(content.outerHTML, { clientX: card.right, clientY: card.top });
+    return;
+  }
+  const model = unitTooltip(unit);
+  const dialog = document.createElement("dialog");
+  dialog.innerHTML = `<h3>${model.title}</h3>${model.content}<button class="button">Закрыть</button>`;
+  document.body.append(dialog);
+  dialog.querySelector("button").onclick = () => dialog.close();
+  dialog.addEventListener("close", () => dialog.remove());
+  dialog.showModal();
+});
 el.clearLogButton.addEventListener("click", () => { state.log = []; ui.logEventCursor = state.sequence; renderLog(); });
 document.addEventListener("click", event => {
-  if (ui.animation || event.defaultPrevented || el.rulesDialog.open) return;
-  const target = event.target;
-  if (target.closest?.("#rulesDialog,#rulesButton")) return;
-  const planning = state.lifecycle === "ActionPlanning" && state.activeAction?.status === "planning";
-  const insideActionControl = Boolean(target.closest?.(".action-slot,.action-slot-shell"));
-  const insideCanvas = target === canvas;
-  const insideWeaponTooltip = Boolean(target.closest?.("#tooltip")) && state.activeAction?.type === "weapon-attack";
-  if (!shouldCancelDocumentAction({ planning, insideActionControl, insideCanvas, insideWeaponTooltip })) return;
-  cancelActionSelection();
-  refresh();
-});
-window.addEventListener("resize", resizeCanvas);
+  const held = holdGesture.click();
+  const outside = informationPopover && !informationPopover.contains(event.target);
+  if (outside && !held) closeInformationPopover();
+  if (held || outside) { event.preventDefault(); event.stopImmediatePropagation(); }
+}, true);
+window.addEventListener("resize", () => { closeInformationPopover(); resizeCanvas(); });
+mobileMedia.addEventListener("change", () => { closeInformationPopover(); resizeCanvas(); });
 window.addEventListener("keydown", event => {
-  if (event.key !== "Escape" || el.rulesDialog.open || ui.animation) return;
+  if (event.key === "Escape" && informationPopover) { closeInformationPopover(); event.preventDefault(); return; }
+  if (event.key !== "Escape" || el.rulesDialog.open || document.querySelector("dialog[open]") || ui.animation) return;
   if (state.lifecycle === "ActionPlanning") cancelActionSelection();
   else clearManeuverSelection();
   refresh();
 });
+
+document.querySelectorAll("[data-panel]").forEach(button => button.addEventListener("click", () => {
+  const panel = button.dataset.panel;
+  el.battleScreen.dataset.panel = el.battleScreen.dataset.panel === panel ? "" : panel;
+}));
+document.getElementById("cancelPlan").addEventListener("click", () => { cancelActionSelection(); refresh(); });
+document.getElementById("confirmPlan").addEventListener("click", () => {
+  if (ui.animation) return;
+  closePanels();
+  const action = state.activeAction;
+  if (action?.type === "weapon-attack") confirmAttack();
+  else if (action?.type === "maneuver" && ui.selected?.headingOption) startMovement(ui.selected.headingOption);
+  else if (action?.type === "system-action") chooseSystemAction(action.systemActionId);
+  else if (action?.type === "disengage") { confirmDisengageAction(state); refresh(); }
+});
+document.addEventListener("pointerdown", event => {
+  holdGesture.begin();
+  clearTimeout(holdTimer);
+  if (informationPopover) {
+    if (!informationPopover.contains(event.target)) {
+      closeInformationPopover();
+      holdGesture.consume();
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+    return;
+  }
+  if (event.pointerType === "mouse") return;
+  holdOrigin = { x: event.clientX, y: event.clientY };
+  const control = event.target.closest(".action-slot-shell,.action-slot,.status-item");
+  if (!control && event.target !== canvas) return;
+  holdTimer = setTimeout(() => {
+    if (control) {
+      const description = (control.closest(".action-slot-shell") || control).querySelector(".action-tooltip,.status-tooltip");
+      if (!description) return;
+      holdGesture.consume();
+      showInformationPopover(description.innerHTML, event);
+    } else {
+      if (inspectHex(pointerHex(event), event)) holdGesture.consume();
+    }
+  }, 450);
+}, true);
+document.addEventListener("pointermove", event => {
+  if (holdOrigin && Math.hypot(event.clientX - holdOrigin.x, event.clientY - holdOrigin.y) > 10) clearTimeout(holdTimer);
+}, true);
+for (const name of ["pointerup", "pointercancel"]) document.addEventListener(name, () => { clearTimeout(holdTimer); holdOrigin = null; if (name === "pointercancel") holdGesture.cancel(); }, true);
 
 renderAll();

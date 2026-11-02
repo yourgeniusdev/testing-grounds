@@ -6,6 +6,7 @@ export const SYSTEM_ACTIONS = deepFreeze({
     name: "Рассеивание",
     cost: {},
     effect: "dispersion",
+    accuracyPenalty: 15,
     oncePerActivation: true
   },
   "interceptor-boost": {

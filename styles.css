@@ -7,6 +7,10 @@ button { color:inherit; }
 button:focus-visible,canvas:focus-visible { outline:2px solid var(--cyan); outline-offset:2px; }
 [hidden] { display:none !important; }
 h1,h2,h3,p { margin:0; }
+.information-popover { position:fixed; z-index:1000; width:220px; max-width:calc(100vw - 16px); max-height:calc(100dvh - 16px); overflow:auto; overscroll-behavior:contain; padding:9px 11px; border:1px solid var(--line); border-radius:5px; background:var(--panel); color:var(--text); box-shadow:0 8px 24px #0008; font:11px/1.45 Inter,Segoe UI,sans-serif; overflow-wrap:anywhere; }
+.information-popover b,.information-popover small { display:block; font-size:inherit; }
+.information-popover small { color:#a1afc0; }
+.information-popover section+section { margin-top:8px; padding-top:8px; border-top:1px solid var(--line); }
 .screen { min-height:100vh; }
 body::before { content:""; position:fixed; inset:0; pointer-events:none; background:radial-gradient(circle at 52% 45%,rgba(40,97,128,.11),transparent 38%),linear-gradient(rgba(255,255,255,.012) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.012) 1px,transparent 1px); background-size:auto,32px 32px,32px 32px; }
 .eyebrow { color:#64748b; font:600 9px ui-monospace,monospace; letter-spacing:.19em; margin-bottom:5px; }
@@ -280,6 +284,7 @@ dialog::backdrop { background:rgba(2,5,9,.76); backdrop-filter:blur(4px); }
 .resource-state:has(i.bonus) b { color:var(--green); animation:resource-preview 1.35s ease-in-out infinite; }
 @keyframes resource-preview { 0%,100% { opacity:.72; } 50% { opacity:.25; } }
 .action-groups { display:grid; grid-template-columns:minmax(140px,.7fr) minmax(170px,1.4fr) auto; gap:10px; min-width:0; }
+.primary-action-groups { display:contents; }
 .action-group { min-width:0; padding:0 9px; border-left:1px solid var(--line); }
 .action-group:first-child { padding-left:0; border-left:0; }
 .action-group-title { margin-bottom:5px; color:#68788d; font:700 7px ui-monospace,monospace; letter-spacing:.13em; text-transform:uppercase; }
@@ -346,4 +351,52 @@ dialog::backdrop { background:rgba(2,5,9,.76); backdrop-filter:blur(4px); }
 .tooltip-status { padding:3px 5px; border:1px solid var(--red); color:var(--red); font:7px ui-monospace,monospace; }
 .tooltip-status.positive { border-color:var(--green); color:var(--green); }
 
-@media (max-width:840px) { .workspace { grid-template-columns:210px minmax(440px,1fr) 300px; } }
+.mobile-controls,.mobile-battle-status,.rotate-screen { display:none; }
+#planningControls { position:fixed; z-index:9; bottom:8px; left:50%; transform:translateX(-50%); display:none; align-items:center; gap:8px; padding:6px; background:#0b1522; border:1px solid var(--cyan); max-width:90vw; font-size:11px; }
+#planningPreview { display:grid; gap:4px; min-width:0; }
+#planningControls .button { min-height:32px; padding:4px 7px; font-size:10px; }
+#planningControls.cancel-only { border:0; background:none; padding:0; }
+.planning-resource span { display:flex; flex-wrap:wrap; justify-content:space-between; gap:2px 8px; }
+.planning-resource b { font-weight:400; color:var(--muted); }
+.planning-resource .resource-segments { height:5px; gap:2px; margin-top:2px; }
+#battlefield { touch-action:none; }
+.damage-popup { position:absolute; z-index:7; pointer-events:none; color:#fff; font:bold 14px ui-monospace,monospace; text-shadow:0 1px 3px #000,0 0 4px #000; animation:impact-number 1.4s ease-out forwards; white-space:nowrap; }
+.damage-popup.shield { color:var(--cyan); }.damage-popup.armor { color:var(--yellow); }.damage-popup.integrity { color:var(--red); }
+@keyframes impact-number { from { opacity:1; translate:0 0; } to { opacity:0; translate:0 -32px; } }
+@media (prefers-reduced-motion:reduce) { .damage-popup { animation-name:impact-fade; } @keyframes impact-fade { to { opacity:0; } } }
+@media (pointer:coarse), (max-width:950px) {
+  .app-shell { height:100dvh; grid-template-rows:minmax(0,1fr); }
+  .topbar { display:none; }
+  .mobile-battle-status { display:grid; position:fixed; top:6px; right:84px; z-index:4; gap:3px; max-width:calc(100vw - 204px); padding:4px 6px; background:rgba(7,12,19,.85); color:var(--muted); font:8px ui-monospace,monospace; text-align:right; pointer-events:none; }
+  .brand,.coordinates,#rulesButton,#resetButton { display:none; }
+  .battle-header-status { gap:6px; }.round-strip { padding:6px; }.activation-status { font-size:9px; }
+  .workspace { grid-template-columns:52px minmax(0,1fr); padding-bottom:0; }
+  .fleet-panel { padding:3px; display:block; }.initiative-panel { height:100%; }.panel-heading,.ship-info { display:none; }
+  .ship-list { gap:3px; }.ship-card { position:relative; display:block; padding:4px; min-height:44px; }.queue-state { position:absolute; right:0; top:0; font-size:11px; }
+  .deployment-note { padding:3px; }.deployment-note strong { font-size:8px; }.deployment-note span { display:none; }
+  .battlefield-column { grid-template-rows:minmax(0,1fr); }
+  .command-deck { position:fixed; left:55px; top:6px; bottom:6px; width:62px; padding:4px; display:flex; flex-direction:column; border:1px solid var(--line); box-shadow:none; backdrop-filter:none; }
+  .energy-resource { position:fixed; left:123px; right:auto; bottom:6px; width:152px; max-width:calc(100vw - 204px); height:auto; margin:0; padding:3px 5px; grid-template-columns:minmax(0,1fr); gap:3px; background:rgba(7,12,19,.9); }.energy-label b,.energy-label .energy-details { display:none; }
+  .energy-resource .resource-segments { gap:2px; grid-template-columns:repeat(var(--segments,auto-fit),minmax(0,1fr)); grid-auto-columns:minmax(0,1fr); }
+  .energy-resource .resource-segments i { min-width:0; }
+  .inspector-panel,.fleet-panel .combat-log-panel { display:none; }
+  .action-groups { display:flex; flex:1; flex-direction:column; gap:6px; min-height:0; }
+  .primary-action-groups { display:flex; flex:1; flex-direction:column; gap:6px; min-height:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-width:thin; }
+  .action-group,.action-group:first-child { padding:6px 0 0; border-left:0; border-top:1px solid var(--line); }
+  .action-group:first-child { padding-top:0; border-top:0; }
+  .action-group-title,.command-deck .action-placeholders { display:none; }
+  .action-group-scroll,.attack-action-slots,.turn-actions { flex-direction:column; align-items:center; gap:4px; padding:0; }
+  .weapon-action-group .attack-action-slots { overflow:visible; }
+  .mobile-controls { display:flex; flex-direction:column; position:fixed; bottom:6px; right:6px; width:72px; gap:4px; z-index:10; }.mobile-controls button { min-height:44px; padding:6px 4px; font-size:10px; background:#070c13; }
+  .action-group { flex:none; }.action-slot,.action-slot-shell { width:44px; height:44px; }.command-deck .action-slot,.action-slot-shell { flex-basis:44px; }
+  .app-shell[data-panel="inspector"] .inspector-panel,.app-shell[data-panel="log"] .combat-log-panel { display:block; position:fixed; z-index:8; right:84px; top:44px; bottom:40px; width:min(300px,calc(100vw - 204px)); padding:12px; overflow:auto; background:#0b1522; border:1px solid var(--line); }
+  #planningControls { display:flex; bottom:40px; left:auto; right:84px; transform:none; max-width:calc(100vw - 204px); justify-content:flex-end; flex-wrap:wrap; width:330px; padding:5px; gap:5px; font-size:10px; }
+  #planningPreview { flex-basis:100%; }
+  #planningControls.cancel-only { width:auto; }
+  #planningControls .button { min-height:32px; padding:4px 7px; font-size:10px; }
+  .hex-tooltip { min-width:0; max-height:calc(100% - 12px); font-size:10px; }.hex-tooltip-content { padding:6px; }.hex-tooltip-title { padding:6px; }
+  .action-tooltip { display:none !important; }.menu-screen { height:100dvh; overflow:auto; }.menu-card { padding:22px; }
+}
+@media (orientation:portrait) and (pointer:coarse), (orientation:portrait) and (max-width:950px) {
+  .rotate-screen { display:flex; position:fixed; inset:0; z-index:100; background:#060a11; align-items:center; justify-content:center; flex-direction:column; gap:20px; }
+}

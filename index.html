@@ -15,6 +15,7 @@
       <h1>Этика пустоты</h1>
       <p class="menu-lead">Стенд пошагового боя для проверки манёвров, инициативы и тактического риска.</p>
       <button id="startBattleButton" class="button primary menu-button">Перейти к бою</button>
+      <button id="newBattleButton" class="button menu-button" hidden>Новый бой</button>
       <button class="button ghost menu-button" disabled>Конфигуратор флотилии · скоро</button>
       <div class="menu-meta"><span>PLAYTEST 1</span><span>2–5 ЮНИТОВ</span><span>15–25 МИНУТ</span></div>
     </div>
@@ -34,6 +35,10 @@
       </div>
     </header>
 
+    <nav class="mobile-controls" aria-label="Панели боя"><button class="button" data-panel="inspector">Юнит</button><button class="button" data-panel="log">Журнал</button><button id="mobileMenuButton" class="button">В меню</button></nav>
+    <div class="mobile-battle-status"><span id="mobileRoundNumber"></span><span id="mobileModeLabel" role="status"></span></div>
+    <div id="planningControls" hidden><div id="planningPreview" aria-live="polite"></div><button id="confirmPlan" class="button primary">Подтвердить</button><button id="cancelPlan" class="button">Отменить</button></div>
+    <div class="rotate-screen"><strong>Поверните устройство</strong><span>Для боя нужен альбомный режим</span><button id="portraitMenu" class="button">В меню</button></div>
     <section class="workspace">
       <aside class="panel fleet-panel">
         <section class="initiative-panel">
@@ -51,6 +56,7 @@
         <section class="command-deck" aria-label="Панель действий активного юнита">
           <div id="energyResource" class="energy-resource"></div>
           <div class="action-groups">
+            <div class="primary-action-groups">
             <section class="action-group"><div class="action-group-title">Активные действия</div><div class="action-group-scroll">
               <button id="routePolicyButton" class="action-slot" type="button" aria-describedby="routePolicyTooltip" aria-pressed="false"><span id="routePolicyIcon" class="action-icon">⚠</span><span id="routePolicyTooltip" class="action-tooltip" role="tooltip"><b>Рискованный маршрут</b><small>Допускает опасности. Нажмите, чтобы выбрать безопасный режим.</small></span></button>
               <button id="evasionButton" class="action-slot" type="button" aria-label="Манёвр уклонения" aria-describedby="evasionTooltip" aria-pressed="false"><span id="evasionIcon" class="action-icon">◇</span><span id="evasionTooltip" class="action-tooltip" role="tooltip"><b>Манёвр уклонения</b><small>1 очко манёвренности · бонус движения ×1.5</small></span></button>
@@ -59,6 +65,7 @@
               <div id="actionPlaceholders" class="action-placeholders" aria-hidden="true"></div>
             </div></section>
             <section class="action-group weapon-action-group"><div class="action-group-title">Орудия</div><div id="attackWeaponActions" class="attack-action-slots" aria-label="Атаки оружием"></div></section>
+            </div>
             <section class="action-group turn-action-group"><div class="action-group-title">Активация</div><div class="turn-actions">
               <button id="waitButton" class="action-slot" type="button" aria-label="Ждать"><span class="action-icon">◷</span><span class="action-tooltip"><b>Ждать</b><small>Перенести юнит в конец очереди.</small></span></button>
               <button id="endActivationButton" class="action-slot" type="button" aria-label="Завершить активацию"><span class="action-icon">■</span><span class="action-tooltip"><b>Завершить активацию</b><small>Завершить текущую активацию.</small></span></button>

@@ -52,6 +52,13 @@ export function movementEvasionFromFacts(unit) {
   return movementEvasion(steps, unit.evasiveManeuver);
 }
 
+export function evasiveMovementBonusRange(unit) {
+  if (unit?.evasionLocked) return { min: 0, max: 0 };
+  const steps = activationMovementFacts(unit).filter(element => element.type === "move").length;
+  const remainingSteps = Math.floor(activationResources(unit).speed.remaining);
+  return { min: movementEvasion(steps, true), max: movementEvasion(steps + remainingSteps, true) };
+}
+
 export function currentEvasion(unit) {
   return (unit?.evasionLocked ? 0 : (unit?.baseEvasion || 0) + movementEvasionFromFacts(unit) + (unit?.disengageEvasionPenalty || 0)) + (unit?.dispersionActive ? 15 : 0);
 }
@@ -371,7 +378,7 @@ export function applyDamage(state, unit, amount, cause = "damage", startLayer = 
     if (!remaining) break;
   }
   if (unit.kind === "squadron" && unit.unitHealth) unit.stack = unit.integrity ? Math.ceil(unit.integrity / unit.unitHealth) : 0;
-  const event = recordEvent(state, "damage", { actorId: null, subjectIds: [unit.id], cause, before, after: { shield: unit.shield, armor: unit.armor, integrity: unit.integrity }, ...context });
+  const event = recordEvent(state, "damage", { actorId: null, subjectIds: [unit.id], cause, position: { ...unit.position }, unitHealth: unit.unitHealth, before, after: { shield: unit.shield, armor: unit.armor, integrity: unit.integrity }, ...context });
   return { amount: amount - remaining, destroyed: unit.integrity === 0, event };
 }
 
@@ -1344,6 +1351,17 @@ export function disengagePreview(state, unit = activeUnit(state)) {
     chance,
     evasionPenalty: -10
   });
+}
+
+export function actionEvasionPreview(state, action, unit = activeUnit(state), availability = actionAvailability(state, action, unit)) {
+  const current = currentEvasion(unit);
+  if (!availability.available) return { current, preview: current };
+  const effect = action.type === "system-action" ? SYSTEM_ACTIONS[action.systemActionId]?.effect : null;
+  const projected = { ...unit };
+  if (effect === "evasiveManeuver") projected.evasiveManeuver = true;
+  if (effect === "dispersion") projected.dispersionActive = true;
+  if (action.type === "disengage") projected.disengageEvasionPenalty = (unit.disengageEvasionPenalty || 0) + availability.details.evasionPenalty;
+  return { current, preview: currentEvasion(projected) };
 }
 
 export function disengageReasons(state, unit = activeUnit(state)) {

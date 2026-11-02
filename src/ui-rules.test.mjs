@@ -1,9 +1,156 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { confirmSystemAction, createBattleState, unitById } from "./domain.js";
+import { currentEvasion, confirmDisengageAction, actionAvailability, planRoutes, confirmSystemAction, createBattleState, unitById } from "./domain.js";
+import { SYSTEM_ACTIONS } from "./config/index.js";
+import { effectiveWeapon } from "./battle.js";
 import { cancelPendingAction, selectPendingAction } from "./ui-controller.js";
-import { DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { actionPlanningPreview, planningControlsPresentation, maneuverPlanningPreview, DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+
+test("selected system previews match real resolution and expose only applicable budgets", () => {
+  for (const [id, systemActionId, names] of [
+    ["swift", "reactor-to-engines", ["speed"]],
+    ["swift", "evasive-maneuver", ["maneuver"]],
+    ["hornet-azure", "interceptor-boost", ["speed"]],
+    ["wasps", "dispersion", []]
+  ]) {
+    const state = createBattleState();
+    const unit = unitById(state, id);
+    state.activeUnitId = id;
+    state.lifecycle = "ActionPlanning";
+    state.activeAction = { type: "system-action", systemActionId, actorId: id, status: "planning" };
+    unit.activationMovement = { elements: [{ type: "move" }, { type: "move" }] };
+    const before = JSON.stringify(state);
+    const preview = actionPlanningPreview(state, unit);
+    assert.equal(JSON.stringify(state), before);
+    assert.equal(preview.canConfirm, true);
+    assert.deepEqual(preview.gauges.map(gauge => gauge.name), names);
+    assert.ok(confirmSystemAction(state));
+    for (const gauge of preview.gauges) {
+      assert.equal(segmentedResourcePresentation(gauge.resource, gauge.preview).remaining, resourcePresentation(unit)[gauge.name].remaining);
+    }
+    if (preview.evasion) assert.equal(preview.evasion.preview, currentEvasion(unit));
+    if (id === "wasps") assert.match(preview.notes.join(" "), /Без затрат/);
+  }
+});
+
+test("ship boost omits only redundant confirmation energy, retaining authoritative resource preview", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "swift");
+  const action = { type: "system-action", systemActionId: "reactor-to-engines" };
+  const preview = actionPlanningPreview(state, unit, action);
+  const availability = actionAvailability(state, action, unit);
+  assert.deepEqual(preview.gauges.map(gauge => gauge.name), ["speed"]);
+  assert.equal(preview.gauges[0].preview.capacity, availability.forecast.capacityChange.speed);
+  assert.ok(preview.gauges[0].preview.capacity > 0);
+  assert.equal(actionResourcePreview(state, unit, action).energy, availability.forecast.cost.energy);
+  assert.ok(availability.forecast.cost.energy > 0);
+});
+
+test("compact boost previews use configured cooldown and activation limit", () => {
+  const state = createBattleState();
+  for (const [id, systemActionId, cooldown] of [
+    ["swift", "reactor-to-engines", "Без перезарядки"],
+    ["hornet-azure", "interceptor-boost", `Перезарядка ${SYSTEM_ACTIONS["interceptor-boost"].cooldownRounds} раунд`]
+  ]) {
+    const preview = actionPlanningPreview(state, unitById(state, id), { type: "system-action", systemActionId });
+    assert.ok(preview.notes.includes(cooldown));
+    assert.ok(preview.notes.includes("Один раз за активацию"));
+  }
+});
+
+test("compact dispersion shows only red accuracy penalty and next activation duration", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "wasps");
+  const preview = actionPlanningPreview(state, unit, { type: "system-action", systemActionId: "dispersion" });
+  const penalty = SYSTEM_ACTIONS.dispersion.accuracyPenalty;
+  assert.ok(preview.notes.includes(`Точность атак <b style="color:var(--red)">-${penalty}%</b> · до следующей активации`));
+  assert.doesNotMatch(preview.notes.join(" "), /Уклонение/);
+  assert.equal(preview.evasionDelta, 15);
+  assert.equal(effectiveWeapon({ ...unit, dispersionActive: true }, unit.weapons[0]).accuracy, unit.weapons[0].accuracy - penalty);
+});
+
+test("evasive bonus range follows ship speed, spent movement, capacity and lock", () => {
+  for (const [speed, spent, steps, locked, capacity, range] of [
+    [0, 0, 0, false, 0, "0–0"],
+    [1, 0, 0, false, 1, "0–7,5"],
+    [2, 0, 0, false, 2, "0–13,5"],
+    [3, 0, 0, false, 3, "0–18"],
+    [4, 0, 0, false, 4, "0–21"],
+    [8, 0, 0, false, 8, "0–22,5"],
+    [4, 2, 2, false, 4, "13,5–21"],
+    [4, 4, 2, false, 4, "13,5–13,5"],
+    [4, 0, 0, false, 2, "0–13,5"],
+    [4, 1, 0, true, 4, "0–0"]
+  ]) {
+    const state = createBattleState();
+    const unit = unitById(state, "swift");
+    Object.assign(unit, { currentSpeed: speed, speedSpent: spent, activationSpeedCapacity: capacity, activationResourceCounters: true, evasionLocked: locked, activationMovement: { elements: Array.from({ length: steps }, () => ({ type: "move" })) } });
+    const preview = actionPlanningPreview(state, unit, { type: "system-action", systemActionId: "evasive-maneuver" });
+    assert.ok(preview.notes.includes(`Бонус уклонения от движения +${range} п.п. · зависит от пройденного пути`));
+  }
+});
+
+test("evasive preview includes speed from resolved engine boost", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "swift");
+  Object.assign(unit, { currentSpeed: 2, speedRemaining: 2 });
+  state.activeUnitId = unit.id;
+  state.lifecycle = "ActionPlanning";
+  state.activeAction = { type: "system-action", systemActionId: "reactor-to-engines", actorId: unit.id, status: "planning" };
+  assert.ok(confirmSystemAction(state));
+  const preview = actionPlanningPreview(state, unit, { type: "system-action", systemActionId: "evasive-maneuver" });
+  assert.ok(preview.notes.includes("Бонус уклонения от движения +0–18 п.п. · зависит от пройденного пути"));
+});
+
+test("unavailable previews do not promise bonuses and retain full required cost", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "swift");
+  state.activeUnitId = unit.id;
+  state.lifecycle = "ActionPlanning";
+  state.activeAction = { type: "system-action", systemActionId: "reactor-to-engines" };
+  unit.reactor.currentEnergy = 0;
+  const preview = actionPlanningPreview(state, unit);
+  assert.equal(preview.canConfirm, false);
+  assert.deepEqual(preview.gauges.map(gauge => gauge.name), ["speed"]);
+  assert.equal(actionResourcePreview(state, unit).energy, 1);
+  assert.ok(preview.gauges.every(gauge => Object.keys(gauge.preview).length === 0));
+  assert.match(preview.notes.join(" "), /Недостаточно/);
+});
+
+test("disengage preview costs and negative evasion apply even on failure", () => {
+  for (const roll of [1, 100]) {
+    const state = createBattleState();
+    const unit = unitById(state, "wasps");
+    const enemy = unitById(state, "mantis");
+    state.activeUnitId = unit.id;
+    state.lifecycle = "ActionPlanning";
+    state.activeAction = { type: "disengage", actorId: unit.id, status: "planning" };
+    unit.position = { q: 0, r: 0 };
+    enemy.position = { q: 1, r: 0 };
+    unit.engagedWith = [enemy.id];
+    enemy.engagedWith = [unit.id];
+    const preview = actionPlanningPreview(state, unit);
+    assert.equal(preview.evasionDelta, -10);
+    assert.deepEqual(preview.gauges.map(gauge => gauge.name), ["speed"]);
+    assert.match(preview.notes.join(" "), /Шанс отрыва.*даже при неудаче/);
+    assert.equal(confirmDisengageAction(state, () => roll).success, roll === 1);
+    assert.equal(currentEvasion(unit), preview.evasion.preview);
+    assert.equal(resourcePresentation(unit).speed.remaining, segmentedResourcePresentation(preview.gauges[0].resource, preview.gauges[0].preview).remaining);
+  }
+});
+
+test("weapon previews show only actual energy cost without unrelated stats", () => {
+  const state = createBattleState();
+  for (const unit of state.units) {
+    for (const weapon of unit.weapons || []) {
+      const preview = actionPlanningPreview(state, unit, { type: "weapon-attack", slotId: weapon.id });
+      assert.equal(preview.evasion, null);
+      assert.deepEqual(preview.gauges.map(gauge => gauge.name), weapon.energyCost && unit.reactor ? ["energy"] : []);
+      if (preview.gauges.length) assert.equal(preview.gauges[0].cost, weapon.energyCost);
+    }
+  }
+});
 
 test("rules markup links four accessible tabs and panels with only activation initially visible", () => {
   const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -26,8 +173,8 @@ test("rules dialog integration protects battle planning and supplies narrow-scre
   const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
   assert.match(app, /bindRulesDialog\(el.rulesDialog, el.rulesButton, \[el.closeRules, el.dialogOkay\]\)/);
-  assert.match(app, /event.defaultPrevented \|\| el.rulesDialog.open/);
-  assert.match(app, /target.closest\?\.\("#rulesDialog,#rulesButton"\)/);
+  assert.doesNotMatch(app, /shouldCancelDocumentAction\(/);
+  assert.match(app, /event.key !== "Escape" \|\| el.rulesDialog.open/);
   assert.match(css, /\.rules-panel\[hidden\] \{ display:none; \}/);
   assert.match(css, /#rulesDialog \{ max-height:calc\(100dvh - 32px\); overflow-y:auto;/);
   assert.match(css, /@media \(max-width:520px\)/);
@@ -60,6 +207,107 @@ function route(overrides = {}) {
     ...overrides
   };
 }
+
+test("maneuver confirmation requires a tapped heading, not a destination or hover", () => {
+  const state = { lifecycle: "ActionPlanning", activeAction: { type: "maneuver" } };
+  const ui = { selected: null, animation: null };
+  assert.deepEqual(planningControlsPresentation(state, ui, true), { visible: false, cancelOnly: true });
+  ui.selected = { baseOption: {}, options: [{}] };
+  ui.hoveredOption = {};
+  assert.equal(planningControlsPresentation(state, ui, true).visible, false);
+  ui.selected.headingOption = {};
+  assert.deepEqual(planningControlsPresentation(state, ui, true), { visible: true, cancelOnly: false });
+  ui.animation = {};
+  assert.deepEqual(planningControlsPresentation(state, ui, true), { visible: false, cancelOnly: false });
+  ui.animation = null;
+  ui.selected = { baseOption: {} };
+  assert.equal(planningControlsPresentation(state, ui, true).visible, false);
+  state.activeAction = { type: "weapon-attack" };
+  assert.equal(planningControlsPresentation(state, ui, true).visible, true);
+  state.lifecycle = "ActionChoice";
+  assert.deepEqual(planningControlsPresentation(state, ui, true), { visible: false, cancelOnly: false });
+});
+
+test("desktop hides all planning controls including cancel-only without changing selection", () => {
+  for (const action of [
+    { type: "maneuver" }, { type: "weapon-attack" }, { type: "disengage" },
+    ...Object.keys(SYSTEM_ACTIONS).map(systemActionId => ({ type: "system-action", systemActionId }))
+  ]) {
+    for (const selected of [null, { targetId: "enemy" }, { headingOption: {} }]) {
+      const state = { lifecycle: "ActionPlanning", activeAction: action };
+      const ui = { selected, animation: null };
+      const before = JSON.stringify({ state, ui });
+      assert.deepEqual(planningControlsPresentation(state, ui, false), { visible: false, cancelOnly: false });
+      assert.deepEqual(planningControlsPresentation(state, ui), { visible: false, cancelOnly: false });
+      const compact = planningControlsPresentation(state, ui, true);
+      assert.ok(compact.visible || compact.cancelOnly);
+      assert.deepEqual(planningControlsPresentation(state, ui, false), { visible: false, cancelOnly: false });
+      assert.equal(JSON.stringify({ state, ui }), before);
+    }
+  }
+});
+
+test("planning controls share the mobile breakpoint and update on resize and pointer changes", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const breakpoint = "(pointer:coarse), (max-width:950px)";
+  const [desktop, compact] = css.split(`@media ${breakpoint} {`);
+  assert.match(desktop, /#planningControls \{[^}]*display:none;/);
+  assert.match(compact, /#planningControls \{[^}]*display:flex;/);
+  assert.match(css, /\[hidden\] \{ display:none !important; \}/);
+  assert.ok(app.includes(`const mobileMedia = matchMedia("${breakpoint}")`));
+  assert.match(app, /planningControlsPresentation\(state, ui, mobile\(\)\)/);
+  assert.match(app, /function resizeCanvas\(\) \{\s*renderPlanning\(\);/);
+  for (const source of ["window", "mobileMedia"]) {
+    assert.ok(app.includes(`${source}.addEventListener("${source === "window" ? "resize" : "change"}", () => { closeInformationPopover(); resizeCanvas(); });`));
+  }
+  assert.match(app, /if \(pinned && ui.selected\?\.position\) positionTooltip\(\{\}\)/);
+  assert.match(app, /else startMovement\(option\)/);
+  assert.match(app, /if \(selected\) \{[\s\S]*?confirmSystemAction\(state, \{ systemActionId \}\)/);
+  assert.match(app, /if \(action === "confirm-attack"\) confirmAttack\(\)/);
+});
+
+test("mobile arrow selection stays pending and explicit confirmation uses the tapped option", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const mobileSelection = app.match(/if \(mobile\(\)\) \{ ui.selected.headingOption = option;[^}]+\}/)[0];
+  assert.doesNotMatch(mobileSelection, /startMovement/);
+  assert.match(mobileSelection, /renderPlanning\(\)/);
+  assert.match(app, /startMovement\(ui.selected.headingOption\)/);
+  assert.match(app, /return ui.selected\?\.headingOption \|\| ui.hoveredOption/);
+});
+
+test("compact maneuver preview matches domain costs, remaining budgets and evasion", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "swift");
+  state.activeUnitId = unit.id;
+  state.lifecycle = "ActionChoice";
+  state.units = [unit];
+  state.scenario.contents = [];
+  unit.position = { q: 0, r: 0 };
+  unit.currentSpeed = 4;
+  unit.maneuver = 3;
+  unit.speedSpent = 1;
+  unit.maneuverSpent = 1;
+  unit.activationResourceCounters = true;
+  unit.activationMovement = { elements: [{ type: "move" }], steps: 1, turns: 0 };
+  assert.equal(selectPendingAction(state, {}, { type: "maneuver", reason: "player-choice" }), true);
+  const routes = planRoutes(state, unit, "risky");
+  const options = [...routes.values()].flatMap(route => buildManeuverOptions(unit, route));
+  assert.ok(options.some(option => option.route.steps.length > 0));
+  assert.ok(options.some(option => option.route.steps.length === 0));
+  for (const option of options) {
+    const preview = maneuverPlanningPreview(state, unit, option);
+    const cost = actionAvailability(state, { type: "maneuver", option }, unit).forecast.cost;
+    assert.equal(preview.speed.spend, cost.speed);
+    assert.equal(preview.maneuver.spend, cost.maneuver);
+    for (const name of ["speed", "maneuver"]) {
+      const gauge = segmentedResourcePresentation(preview.resources[name], preview[name]);
+      assert.equal(gauge.remaining, Math.max(0, preview.resources[name].remaining - cost[name]));
+    }
+    assert.deepEqual(preview.evasion, evasionPresentation(unit, { route: option.route }, state));
+    assert.equal(preview.evasionDelta, Math.round((preview.evasion.preview - preview.evasion.current) * 10) / 10);
+  }
+});
 
 test("UI resource presentation uses authoritative activation remainders", () => {
   const unit = {

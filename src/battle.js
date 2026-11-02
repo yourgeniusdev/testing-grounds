@@ -1,3 +1,4 @@
+import { SYSTEM_ACTIONS } from "./config/index.js";
 import { availabilityReason, createAvailability, insufficientResourceReasons } from "./availability-contract.js";
 import { activationResources, activeUnit, applyDamage, beginWeaponCooldown, confirmOwnAction, currentEvasion, destroyUnit, hexDistance, inside, key, overwatchAvailability, recordEvent, spendActivationResource, unitById, weaponReadiness } from "./domain.js";
 
@@ -45,7 +46,7 @@ function inArc(attacker, target, weapon) {
 }
 
 export function effectiveWeapon(attacker, weapon) {
-  return { ...weapon, accuracy: weapon.accuracy - (attacker.dispersionActive ? 15 : 0), shots: weapon.shots * (attacker.kind === "squadron" ? attacker.stack : 1) };
+  return { ...weapon, accuracy: weapon.accuracy - (attacker.dispersionActive ? SYSTEM_ACTIONS.dispersion.accuracyPenalty : 0), shots: weapon.shots * (attacker.kind === "squadron" ? attacker.stack : 1) };
 }
 
 function unavailableReason(attacker, target, weapon, reaction = false) {
