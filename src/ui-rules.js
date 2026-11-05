@@ -27,7 +27,7 @@ export function shouldShowManeuverRoutes(state) {
 }
 
 export function planningControlsPresentation(state, ui, mobile = false) {
-  const planning = mobile && state?.lifecycle === "ActionPlanning" && !ui.animation;
+  const planning = mobile && state?.lifecycle === "ActionPlanning" && state.activeAction?.type !== "weapon-attack" && !ui.animation;
   const maneuver = state?.activeAction?.type === "maneuver";
   const option = ui.selected?.headingOption;
   const visible = planning && (!maneuver || Boolean(option));

@@ -223,7 +223,7 @@ test("maneuver confirmation requires a tapped heading, not a destination or hove
   ui.selected = { baseOption: {} };
   assert.equal(planningControlsPresentation(state, ui, true).visible, false);
   state.activeAction = { type: "weapon-attack" };
-  assert.equal(planningControlsPresentation(state, ui, true).visible, true);
+  assert.deepEqual(planningControlsPresentation(state, ui, true), { visible: false, cancelOnly: false });
   state.lifecycle = "ActionChoice";
   assert.deepEqual(planningControlsPresentation(state, ui, true), { visible: false, cancelOnly: false });
 });
@@ -240,7 +240,8 @@ test("desktop hides all planning controls including cancel-only without changing
       assert.deepEqual(planningControlsPresentation(state, ui, false), { visible: false, cancelOnly: false });
       assert.deepEqual(planningControlsPresentation(state, ui), { visible: false, cancelOnly: false });
       const compact = planningControlsPresentation(state, ui, true);
-      assert.ok(compact.visible || compact.cancelOnly);
+      if (action.type === "weapon-attack") assert.deepEqual(compact, { visible: false, cancelOnly: false });
+      else assert.ok(compact.visible || compact.cancelOnly);
       assert.deepEqual(planningControlsPresentation(state, ui, false), { visible: false, cancelOnly: false });
       assert.equal(JSON.stringify({ state, ui }), before);
     }

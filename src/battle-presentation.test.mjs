@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { createBattleState, confirmDeployment, activeUnit, endActivation, waitActiveUnit } from "./domain.js";
 import { createActivationTransitionGuard, adjacentTooltip, createHoldGesture, damageIndicators, impactPlacement, informationTooltipLayout, inspectionObjects, repeatedTargetTap, visualShotSchedule } from "./battle-presentation.js";
 
@@ -119,6 +120,26 @@ test("information tooltip stays compact and clamps every viewport edge with scro
         }
       }
     }
+  }
+});
+
+test("idle mobile tap does not inspect units while desktop click still does", () => {
+  const app = readFileSync(new URL("./app.js", import.meta.url), "utf8");
+  const handler = app.slice(app.indexOf('canvas.addEventListener("click"'), app.indexOf('el.tooltip.addEventListener("pointerenter"'));
+  for (const compact of [true, false]) {
+    let click;
+    let inspections = 0;
+    runInNewContext(handler, {
+      canvas: { addEventListener: (_type, listener) => { click = listener; } },
+      ui: { animation: null },
+      state: { activeAction: null },
+      isDeploying: () => false,
+      mobile: () => compact,
+      pointerHex: () => ({ q: 0, r: 0 }),
+      inspectHex: () => { inspections++; }
+    });
+    click({});
+    assert.equal(inspections, compact ? 0 : 1);
   }
 });
 

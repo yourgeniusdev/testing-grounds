@@ -1092,7 +1092,7 @@ canvas.addEventListener("pointermove", event => {
 canvas.addEventListener("pointerleave", () => { ui.hovered = null; ui.hoveredOption = null; scheduleTooltipClose(); el.coordinates.textContent = "HEX —"; renderUnitSummary(); draw(); });
 canvas.addEventListener("click", event => {
   if (ui.animation) return;
-  if (!state.activeAction && !isDeploying()) { inspectHex(pointerHex(event)); return; }
+  if (!state.activeAction && !isDeploying()) { if (!mobile()) inspectHex(pointerHex(event)); return; }
   const position = pointerHex(event);
   const option = optionAtPoint(pointerPoint(event));
   if (option) {
