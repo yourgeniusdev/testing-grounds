@@ -1,6 +1,6 @@
-import { cooldownLabel, systemActionVisible, DIRECTIONS, actionAvailability, activeUnit, axialToOffset, buildBattleLog, confirmDeployment, confirmDisengageAction, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, overwatchAvailability, planRoutes, resumeManeuverPostEntry, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
+import { cooldownLabel, systemActionVisible, DIRECTIONS, actionAvailability, activeUnit, axialToOffset, buildBattleLog, confirmDeployment, confirmManeuverAction, confirmSystemAction, contentsAt, createBattleState, deployUnit, endActivation, executeManeuverElement, inside, key, overwatchAvailability, planRoutes, resumeManeuverPostEntry, signedTurn, unitAt, unitById, waitActiveUnit, deploymentZone } from "./domain.js";
 import { createSvgImage, iconMarkup } from "./icons.js";
-import { actionPlanningPreview, planningControlsPresentation, maneuverPlanningPreview, DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { actionPlanningPreview, planningControlsPresentation, maneuverPlanningPreview, DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, headingAngle, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, segmentedResourcePresentation, shouldDrawRoute, shouldHighlightOccupiedHex, shouldOutlineUnit, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
 import { bindRulesDialog, cancelPendingAction, pendingWeaponId, recalculateActionUi, selectPendingAction } from "./ui-controller.js";
 import { applyAttackStep, applyReactionStep, availableWeaponAttackTargets, confirmWeaponAttackAction, planPostEntryAA, previewWeaponAttack, weaponAttackArc } from "./battle.js";
 import { VISUALS } from "./config/index.js";
@@ -21,7 +21,7 @@ const activationTransitionGuard = createActivationTransitionGuard();
 const liveImpacts = new Set();
 const canvas = document.getElementById("battlefield");
 const ctx = canvas.getContext("2d");
-const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "disengageButton", "disengageIcon", "disengageTooltip", "engineBoostButton", "engineBoostTooltip", "attackWeaponActions", "combatLog", "clearLogButton"];
+const ids = ["confirmDeploymentButton", "menuScreen", "battleScreen", "startBattleButton", "menuButton", "rulesButton", "rulesDialog", "closeRules", "dialogOkay", "resetButton", "roundNumber", "initiativeList", "waitButton", "endActivationButton", "modeLabel", "coordinates", "tooltip", "unitSummary", "energyResource", "actionPlaceholders", "turnPlaceholders", "routePolicyButton", "routePolicyIcon", "routePolicyTooltip", "evasionButton", "evasionIcon", "evasionTooltip", "squadronEvasionButton", "squadronEvasionIcon", "squadronEvasionTooltip", "engineBoostButton", "engineBoostTooltip", "attackWeaponActions", "combatLog", "clearLogButton"];
 const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
 const tooltipTitle = el.tooltip.querySelector(".hex-tooltip-title");
 const tooltipContent = el.tooltip.querySelector(".hex-tooltip-content");
@@ -284,7 +284,7 @@ function renderHeader() {
   el.actionPlaceholders.innerHTML = unit && !finished ? "" : placeholderSlots(2);
   el.routePolicyButton.hidden = !unit || finished;
   el.evasionButton.hidden = !unit || finished || !systemActionVisible(unit, evasionActionId());
-  el.disengageButton.hidden = !unit || finished || unit.kind !== "squadron" || !unit.engagedWith?.length;
+  el.squadronEvasionButton.hidden = !unit || finished || !systemActionVisible(unit, "evasive-maneuver") || unit.kind !== "squadron";
   el.engineBoostButton.hidden = !unit || finished || !systemActionVisible(unit, boostActionId());
   el.routePolicyButton.setAttribute("aria-label", state.lifecycle === "ActionChoice" ? "Совершить манёвр" : "Настроить маршрут манёвра");
   if (!unit) return;
@@ -293,11 +293,11 @@ function renderHeader() {
   el.endActivationButton.disabled = Boolean(ui.animation) || !endAvailability.available || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle);
   const maneuver = maneuverActionPresentation(state, unit);
   const evasive = systemActionPresentation(state, unit, evasionActionId());
-  const disengage = disengageActionPresentation(state, unit);
+  const squadronEvasion = systemActionPresentation(state, unit, "evasive-maneuver");
   const engineBoost = systemActionPresentation(state, unit, boostActionId());
   const maneuverTile = actionTilePresentation({ selected: maneuver.selected, confirmation: "field", icon: ui.policy === "safe" ? "⬡" : "⚠" });
   const evasiveTile = actionTilePresentation({ selected: evasive.selected, confirmation: "tile", icon: isSquadron ? "✣" : "◇", resolved: unit.evasiveManeuver || unit.dispersionActive, cooldownRemaining: evasive.cooldownRemaining });
-  const disengageTile = actionTilePresentation({ selected: disengage.selected, confirmation: "tile", icon: "↝" });
+  const squadronEvasionTile = actionTilePresentation({ selected: squadronEvasion.selected, confirmation: "tile", icon: "↝" });
   const engineBoostTile = actionTilePresentation({ selected: engineBoost.selected, confirmation: "tile", icon: "»", resolved: unit.engineBoostActive, cooldownRemaining: engineBoost.cooldownRemaining });
   el.routePolicyIcon.textContent = maneuverTile.icon;
   el.routePolicyButton.className = `action-slot ${maneuverTile.className}`.trim();
@@ -305,21 +305,20 @@ function renderHeader() {
   const maneuverReason = maneuver.reasons?.join(" · ");
   el.routePolicyTooltip.innerHTML = maneuverReason ? `<b>Совершить манёвр</b><small>${maneuverReason}</small>` : maneuver.selected ? (ui.policy === "safe" ? "<b>Безопасный маршрут</b><small>Выберите конечный гекс. Другая плитка или клик вне маршрута переключит/отменит выбор.</small>" : "<b>Рискованный маршрут</b><small>Выберите конечный гекс. Другая плитка или клик вне маршрута переключит/отменит выбор.</small>") : "<b>Совершить манёвр</b><small>Выберите действие, затем конечный гекс маршрута. Фиксированная цена появится после выбора маршрута.</small>";
   el.evasionIcon.textContent = evasiveTile.icon;
-  el.evasionTooltip.innerHTML = isSquadron ? `<b>Рассеивание</b><small>${DISPERSION_DESCRIPTION}${evasive.reasons?.length ? `<br>${evasive.reasons.join(" · ")}` : evasive.selected ? "<br>Нажмите ещё раз для подтверждения." : ""}</small>` : evasive.reasons?.length ? `<b>Манёвр уклонения</b><small>${evasive.reasons.join(" · ")}</small>` : evasive.selected ? "<b>Манёвр уклонения</b><small>Нажмите ещё раз, чтобы подтвердить. Другая плитка переключит выбор; клик вне действий или Esc отменит.</small>" : "<b>Манёвр уклонения</b><small>1 очко манёвренности · бонус движения ×1.5</small>";
-  el.disengageIcon.textContent = disengageTile.icon;
-  const linkedNames = disengage.preview?.linkedNames?.join(", ") || "нет";
-  el.disengageTooltip.innerHTML = disengage.reasons?.length ? `<b>Отрыв</b><small>${disengage.reasons.join(" · ")} · текущие связи: ${linkedNames}</small>` : disengage.selected ? `<b>Отрыв</b><small>Подтвердить: ${disengage.preview.chance}% · Скорость ${disengage.preview.speedCost} · связи: ${linkedNames} · Уклонение −10 независимо от результата.</small>` : `<b>Отрыв</b><small>${disengage.preview?.chance}% · Скорость ${disengage.preview?.speedCost} · связи: ${linkedNames}.</small>`;
+  el.evasionTooltip.innerHTML = isSquadron ? `<b>Рассеивание</b><small>${DISPERSION_DESCRIPTION}${evasive.reasons?.length ? `<br>${evasive.reasons.join(" · ")}` : evasive.selected ? "<br>Нажмите ещё раз для подтверждения." : ""}</small>` : evasive.reasons?.length ? `<b>Манёвр уклонения</b><small>${evasive.reasons.join(" · ")}</small>` : evasive.selected ? "<b>Манёвр уклонения</b><small>Нажмите ещё раз, чтобы подтвердить. Другая плитка переключит выбор; клик вне действий или Esc отменит.</small>" : "<b>Манёвр уклонения</b><small>1 очко манёвренности · +1 п.п. за последующие гексы; один раз за активацию</small>";
+  el.squadronEvasionIcon.textContent = squadronEvasionTile.icon;
+  el.squadronEvasionTooltip.innerHTML = `<b>Манёвр уклонения</b><small>${squadronEvasion.reasons?.join(" · ") || "1 Манёвренность · +1 п.п. за последующие гексы · один раз за активацию"}</small>`;
   el.engineBoostButton.querySelector(".action-icon").textContent = engineBoostTile.icon;
   el.engineBoostTooltip.innerHTML = engineBoost.reasons?.length ? `<b>Форсаж двигателя</b><small>${engineBoost.reasons.join(" · ")}</small>` : engineBoost.selected ? "<b>Форсаж двигателя</b><small>Нажмите ещё раз, чтобы подтвердить. Другая плитка переключит выбор; клик вне действий или Esc отменит.</small>" : `<b>Форсаж двигателя</b><small>${isSquadron ? "Без энергии · Перезарядка 1 раунд" : "1 энергия"} · Скорость +1 до конца активации</small>`;
   el.routePolicyButton.disabled = Boolean(ui.animation) || !(maneuver.canSelect || maneuver.selected);
   el.evasionButton.disabled = Boolean(ui.animation) || !(evasive.canSelect || evasive.canConfirm);
-  el.disengageButton.disabled = Boolean(ui.animation) || !(disengage.canSelect || disengage.canConfirm);
+  el.squadronEvasionButton.disabled = Boolean(ui.animation) || !(squadronEvasion.canSelect || squadronEvasion.canConfirm);
   el.engineBoostButton.disabled = Boolean(ui.animation) || !(engineBoost.canSelect || engineBoost.canConfirm);
   el.evasionButton.className = `action-slot ${evasiveTile.className}`.trim();
-  el.disengageButton.className = `action-slot ${disengageTile.className}`.trim();
+  el.squadronEvasionButton.className = `action-slot ${squadronEvasionTile.className}`.trim();
   el.engineBoostButton.className = `action-slot ${engineBoostTile.className}`.trim();
   el.evasionButton.setAttribute("aria-pressed", evasiveTile.ariaPressed);
-  el.disengageButton.setAttribute("aria-pressed", disengageTile.ariaPressed);
+  el.squadronEvasionButton.setAttribute("aria-pressed", squadronEvasionTile.ariaPressed);
   el.engineBoostButton.setAttribute("aria-pressed", engineBoostTile.ariaPressed);
 }
 
@@ -397,7 +396,7 @@ function renderUnitSummary() {
   const speedState = `<div class="resource-state"><span>Скорость <b>${resourceMetricsText(resources.speed, speedPreview)}</b></span>${resourceSegments(resources.speed, speedPreview, "speed")}</div>`;
   const maneuverState = unit.maneuver !== undefined ? `<div class="resource-state"><span>Манёвренность <b>${resourceMetricsText(resources.maneuver, maneuverPreview)}</b></span>${resourceSegments(resources.maneuver, maneuverPreview, "maneuver")}</div>` : "";
   const evasionPreview = evasionBonus > 0 ? `<em>+${evasionBonus}%</em>` : evasionBonus < 0 ? `<i>${evasionBonus}%</i>` : "";
-  el.unitSummary.innerHTML = `<div class="unit-identity"><div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-identity-copy"><span class="active-label">${state.winner ? "Последний активный юнит" : "Активный юнит"}</span><strong>${unit.name}</strong><small>${model}</small>${unit.kind === "capital" ? `<small>Требуется экипажа ${unit.crewRequirement}</small>` : ""}</div><span class="class-badge" style="color:${unit.color}">${unit.kind === "capital" ? "CAPITAL" : "SQUADRON"}</span></div><section class="inspector-section current-state"><div class="section-title"><span>Текущее состояние</span></div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")}${healthBar("Броня", unit.armor, unit.maxArmor, "armor")}${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}</div>${speedState}${maneuverState}<div class="evasion-state"><span>Уклонение</span><b>${evasion}% ${evasionPreview}</b></div></section><section class="inspector-section status-section"><div class="section-title"><span>Критические повреждения</span><small>${unit.criticals.length}</small></div>${statusList(unit.criticals.map(item => ({ ...item, tone: "negative", icon: "!", name: item.type })), "critical", "Критических повреждений нет")}</section><section class="inspector-section status-section"><div class="section-title"><span>Активные эффекты</span><small>${effectRows(unit).length}</small></div>${statusList(effectRows(unit), "effect", "Активных эффектов нет")}</section>${state.winner ? '<div class="battle-finished">Бой завершён</div>' : ""}`;
+  el.unitSummary.innerHTML = `<div class="unit-identity"><div class="unit-portrait" style="color:${unit.color}">${iconMarkup(unit.glyph, unit.color, unit.name, unit.stack)}</div><div class="unit-identity-copy"><span class="active-label">${state.winner ? "Последний активный юнит" : "Активный юнит"}</span><strong>${unit.name}</strong><small>${model}</small>${unit.kind === "capital" ? `<small>Требуется экипажа ${unit.crewRequirement}</small>` : ""}</div><span class="class-badge" style="color:${unit.color}">${unit.kind === "capital" ? "CAPITAL" : "SQUADRON"}</span></div><section class="inspector-section current-state"><div class="section-title"><span>Текущее состояние</span></div><div class="unit-vitals">${healthBar("Щит", unit.shield, unit.maxShield, "shield")}<div class="armor-rating">Рейтинг брони <b>${unit.armor}</b></div>${healthBar("Целостность", unit.integrity, unit.maxIntegrity, "integrity")}</div>${speedState}${maneuverState}<div class="evasion-state"><span>Уклонение</span><b>${evasion}% ${evasionPreview}</b></div></section><section class="inspector-section status-section"><div class="section-title"><span>Критические повреждения</span><small>${unit.criticals.length}</small></div>${statusList(unit.criticals.map(item => ({ ...item, tone: "negative", icon: "!", name: item.type })), "critical", "Критических повреждений нет")}</section><section class="inspector-section status-section"><div class="section-title"><span>Активные эффекты</span><small>${effectRows(unit).length}</small></div>${statusList(effectRows(unit), "effect", "Активных эффектов нет")}</section>${state.winner ? '<div class="battle-finished">Бой завершён</div>' : ""}`;
 }
 
 const deliveryNames = { beam: "луч", projectile: "снаряд", missile: "ракета", torpedo: "торпеда" };
@@ -967,7 +966,7 @@ function eventTooltip(position) {
 
 function unitTooltip(occupant, preview = null) {
   const { current: evasion } = evasionPresentation(occupant);
-  const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview?.potentialDamageByLayer.shield || 0)}${healthBar("Броня", occupant.armor, occupant.maxArmor, "armor", preview?.potentialDamageByLayer.armor || 0)}${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview?.potentialDamageByLayer.integrity || 0)}</div>`;
+  const vitals = `<div class="tooltip-vitals">${healthBar("Щит", occupant.shield, occupant.maxShield, "shield", preview?.potentialDamageByLayer.shield || 0)}<div class="armor-rating">Рейтинг брони <b>${occupant.armor}</b></div>${healthBar("Целостность", occupant.integrity, occupant.maxIntegrity, "integrity", preview?.potentialDamageByLayer.integrity || 0)}</div>`;
   return { title: occupant.name, content: `<span class="tooltip-model">${unitModel(occupant)}</span>${vitals}Уклонение ${evasion}%${tooltipStatuses(occupant)}` };
 }
 
@@ -1159,15 +1158,10 @@ function chooseSystemAction(systemActionId) {
 }
 
 bindActionPreview(el.evasionButton, () => ({ type: "system-action", systemActionId: evasionActionId() }));
-bindActionPreview(el.disengageButton, { type: "disengage" });
+bindActionPreview(el.squadronEvasionButton, { type: "system-action", systemActionId: "evasive-maneuver" });
 bindActionPreview(el.engineBoostButton, () => ({ type: "system-action", systemActionId: boostActionId() }));
 el.evasionButton.addEventListener("click", () => chooseSystemAction(evasionActionId()));
-el.disengageButton.addEventListener("click", () => {
-  if (ui.animation) return;
-  if (state.activeAction?.type === "disengage") confirmDisengageAction(state);
-  else chooseAction({ type: "disengage", reason: "player-choice" });
-  refresh();
-});
+el.squadronEvasionButton.addEventListener("click", () => chooseSystemAction("evasive-maneuver"));
 el.engineBoostButton.addEventListener("click", () => chooseSystemAction(boostActionId()));
 el.waitButton.addEventListener("click", () => {
   const unit = activeUnit(state);
@@ -1275,7 +1269,6 @@ document.getElementById("confirmPlan").addEventListener("click", () => {
   if (action?.type === "weapon-attack") confirmAttack();
   else if (action?.type === "maneuver" && ui.selected?.headingOption) startMovement(ui.selected.headingOption);
   else if (action?.type === "system-action") chooseSystemAction(action.systemActionId);
-  else if (action?.type === "disengage") { confirmDisengageAction(state); refresh(); }
 });
 document.addEventListener("pointerdown", event => {
   holdGesture.begin();

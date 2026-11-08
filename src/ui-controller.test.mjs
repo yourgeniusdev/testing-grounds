@@ -88,8 +88,8 @@ test("controller selects and switches plans while clearing all action transients
   assert.deepEqual(ui, { routes: new Map(), selected: null, hoveredAction: null, hoveredOption: null, optionTargets: [], hoveredWeapon: null, tooltipHex: null });
 
   ui.selected = { targetId: "new" };
-  assert.equal(selectPendingAction(state, ui, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }), true);
-  assert.equal(state.activeAction.systemActionId, "evasive-maneuver");
+  assert.equal(selectPendingAction(state, ui, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" }), true);
+  assert.equal(state.activeAction.systemActionId, "reactor-to-engines");
   assert.equal(pendingWeaponId(state), null);
   assert.equal(ui.selected, null);
 });

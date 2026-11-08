@@ -10,6 +10,7 @@ function unit(overrides = {}) {
     name: "Mover",
     sideId: "azure",
     kind: "squadron",
+    canIntercept: true,
     position: { q: 0, r: 0 },
     currentSpeed: 3,
     heading: 0,
@@ -450,7 +451,7 @@ test("AA preview expected harm uses battle geometry, endpoint cover, evasion, an
   const state = battle(mover, { units: [owner, blocker], contents: [cover] });
   const [aa] = aaPreviewDescriptors(state, mover, { q: 2, r: 0 });
 
-  assert.deepEqual({ probability: aa.probability, max: aa.max, expectedHarm: aa.expectedHarm }, { probability: 0.3, max: 9, expectedHarm: 2.7 });
+  assert.deepEqual({ probability: aa.probability, max: aa.max, expectedHarm: aa.expectedHarm }, { probability: 0.4, max: 8, expectedHarm: 3.2 });
 });
 
 test("known AA preview is descriptive and consumes neither RNG nor readiness", () => {
@@ -466,7 +467,7 @@ test("known AA preview is descriptive and consumes neither RNG nor readiness", (
 
   const route = planRoutes(state, mover, "risky").get("1,0");
 
-  assert.deepEqual(route.previewConsequences, [{ kind: "aa", sourceId: "aa-owner", sourceName: "AA Owner", slotId: "aa", effect: "AA reaction", probability: 0.55, min: 0, max: 6, expectedHarm: 3.3, negative: true, guaranteed: false, position: { q: 1, r: 0 } }]);
+  assert.deepEqual(route.previewConsequences, [{ kind: "aa", sourceId: "aa-owner", sourceName: "AA Owner", slotId: "aa", effect: "AA reaction", probability: 0.56, min: 0, max: 6, expectedHarm: 3.36, negative: true, guaranteed: false, position: { q: 1, r: 0 } }]);
   assert.deepEqual({ units: state.units, events: state.events, sequence: state.sequence, randomState: state.randomState }, before);
   assert.equal(randomCalls, 0);
   assert.equal(owner.weapons[0].overwatch, true);

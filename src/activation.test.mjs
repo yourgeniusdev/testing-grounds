@@ -92,14 +92,16 @@ function activationState() {
 {
   const { state, atlas } = activationState();
   beginActivation(state);
+  state.activeUnitId = "swift";
+  const light = activeUnit(state);
   assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }));
   assert.equal(atlas.canWait, true);
   assert.equal(atlas.maneuverSpent, 0);
   assert.ok(confirmSystemAction(state, { systemActionId: "evasive-maneuver" }));
-  assert.equal(atlas.maneuverSpent, 1);
-  assert.equal(atlas.maneuverRemaining, atlas.maneuver - 1);
-  assert.equal(atlas.evasiveManeuver, true);
-  assert.equal(atlas.canWait, false);
+  assert.equal(light.maneuverSpent, 1);
+  assert.equal(light.maneuverRemaining, light.maneuver - 1);
+  assert.equal(light.evasiveManeuver, true);
+  assert.equal(light.canWait, false);
   assert.equal(waitActiveUnit(state), false);
 }
 

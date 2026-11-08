@@ -84,6 +84,7 @@ for (const squadronId of ["wasps", "mantis", "hornet-azure", "mantis-crimson-2"]
     attacker.position = { q: 0, r: 0 };
     for (const weapon of attacker.weapons) {
       const target = weapon.targetKinds.length === 1 ? capitalTarget : squadronTarget;
+      state.units = [attacker, target];
       for (let heading = 0; heading < DIRECTIONS.length; heading++) {
         const [dq, dr] = DIRECTIONS[heading];
         attacker.heading = heading;
@@ -182,8 +183,8 @@ test("Mantis torpedo retains its target restriction and combat characteristics",
   attacker.position = { q: 0, r: 0 };
   attacker.heading = 0;
   capitalTarget.position = { q: 1, r: 0 };
-  squadronTarget.position = { q: 1, r: 0 };
-  assert.deepEqual({ targetKinds: weapon.targetKinds, effectiveRange: weapon.effectiveRange, maxRange: weapon.maxRange, cooldownRounds: weapon.cooldownRounds, damage: weapon.damage }, { targetKinds: ["capital"], effectiveRange: 2, maxRange: 3, cooldownRounds: 1, damage: 8 });
+  squadronTarget.position = { q: 2, r: 0 };
+  assert.deepEqual({ targetKinds: weapon.targetKinds, effectiveRange: weapon.effectiveRange, maxRange: weapon.maxRange, cooldownRounds: weapon.cooldownRounds, damage: weapon.damage }, { targetKinds: ["capital"], effectiveRange: 2, maxRange: 3, cooldownRounds: 1, damage: 800 });
   assert.equal(previewWeaponAttack(state, attacker.id, weapon.id, capitalTarget.id).canConfirm, true);
   const squadronPreview = previewWeaponAttack(state, attacker.id, weapon.id, squadronTarget.id);
   assert.equal(squadronPreview.canConfirm, false);

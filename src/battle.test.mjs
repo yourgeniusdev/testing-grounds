@@ -27,6 +27,42 @@ import {
   weaponReadiness
 } from "./domain.js";
 
+test("Overwatch cannot attack an unrelated squadron while held by a third party", () => {
+  const state = createBattleState();
+  const owner = state.units.find(unit => unit.id === "hornet-azure");
+  const holder = state.units.find(unit => unit.id === "kiro");
+  const target = state.units.find(unit => unit.id === "mantis");
+  state.units = [owner, holder, target];
+  state.scenario.contents = [];
+  owner.position = { q: 0, r: 0 };
+  holder.position = { q: 0, r: 1 };
+  target.position = { q: 2, r: 0 };
+  const slot = owner.weapons[0];
+  slot.overwatch = true;
+  const before = JSON.stringify(state);
+  assert.ok(previewWeaponAttack(state, owner.id, slot.id, target.id).availability.reasons.some(reason => reason.code === "target.intercepted"));
+  assert.equal(planPostEntryAA(state, target, {}, () => 100), null);
+  assert.equal(JSON.stringify(state), before);
+});
+
+test("reaction previews respect third-party holders at the hypothetical mover position", () => {
+  const state = createBattleState();
+  const owner = state.units.find(unit => unit.id === "hornet-azure");
+  const holder = state.units.find(unit => unit.id === "kiro");
+  const target = state.units.find(unit => unit.id === "mantis");
+  state.units = [owner, holder, target];
+  state.scenario.contents = [];
+  owner.position = { q: 0, r: 0 };
+  holder.position = { q: 0, r: 1 };
+  target.position = { q: 2, r: 0 };
+  owner.weapons[0].overwatch = true;
+  const before = JSON.stringify(state);
+  assert.deepEqual(aaPreviewDescriptors(state, target, target.position), []);
+  assert.equal(aaPreviewDescriptors(state, holder, { q: 1, r: 0 }).length, 1);
+  assert.equal(aaPreviewDescriptors(state, holder, { q: 2, r: 0 }).length, 1);
+  assert.equal(JSON.stringify(state), before);
+});
+
 function weapon(overrides = {}) {
   return {
     id: "slot-a",
@@ -108,13 +144,13 @@ function applyPlan(state, plan) {
   for (let index = 0; index < plan.steps.length; index++) assert.equal(applyAttackStep(state, plan, index).status, "applied");
 }
 
-test("weapon hits carry fractional base damage across layers without free minimum damage", () => {
+test("positive shields absorb whole weapon hits without spillover or minimum damage", () => {
   for (const [weaponClass, damage, shield, armor, expected] of [
-    ["kinetic", 8, 3, 3, [3, 3, 2]],
-    ["energy", 8, 1, 2, [1, 2, 4]],
-    ["explosive", 8, 2, 3, [2, 3, 5]],
+    ["kinetic", 8, 3, 3, [3]],
+    ["energy", 8, 1, 2, [1]],
+    ["explosive", 8, 2, 3, [2]],
     ["kinetic", 2, 2, 0, [2]],
-    ["kinetic", 3, 1, 1, [1, 1, 1]]
+    ["kinetic", 3, 1, 1, [1]]
   ]) {
     const slot = weapon({ weaponClass, damage });
     const { state, attacker, target } = battle([slot], { shield, armor, integrity: 20, kind: "squadron", unitHealth: 4, stack: 5 });
@@ -130,15 +166,16 @@ test("weapon hits carry fractional base damage across layers without free minimu
     assert.equal(events.reduce((sum, event) => sum + event.before[event.layer] - event.after[event.layer], 0), preview.potentialDamage);
     assert.equal(target.stack, Math.ceil(target.integrity / 4));
   }
-  assert.deepEqual(weaponHitDamage({ shield: 0, armor: 2, integrity: 4 }, weapon({ damage: 1 })).map(entry => entry.damage), [1]);
+  assert.deepEqual(weaponHitDamage({ shield: 0, armor: 2, integrity: 4 }, weapon({ damage: 1 })).map(entry => entry.damage), []);
 });
 
 test("one penetrating hit destroys a stack once and stops later shots", () => {
   const slot = weapon({ damage: 20, shots: 3, targetKinds: ["squadron"] });
   const { state, attacker, target } = battle([slot], { kind: "squadron", shield: 3, armor: 3, integrity: 8, unitHealth: 4, stack: 2 });
   const plan = planAttack(state, attacker, slot, target, () => 1);
-  assert.equal(plan.steps.length, 1);
-  assert.equal(plan.steps[0].damage, 14);
+  assert.equal(plan.steps.length, 2);
+  assert.equal(plan.steps[0].damage, 3);
+  assert.equal(plan.steps[1].damage, 8);
   applyPlan(state, plan);
   assert.equal(target.stack, 0);
   assert.equal(state.events.filter(event => event.action === "destroy").length, 1);
@@ -154,10 +191,10 @@ test("blocker and target outcomes never exceed final accuracy", () => {
       state.units.push(unit({ id: "blocker", position: { q: 1, r: 0 }, mass: 200 }));
       const plan = planAttack(state, attacker, slot, target, () => roll);
       const step = plan.steps[0];
-      assert.equal(step.blockerChance, Math.max(0, accuracy - 20));
+      assert.equal(step.blockerChance, Math.max(0, accuracy - 15));
       if (step.outcome !== "miss") hits++;
     }
-    assert.equal(hits, Math.max(0, accuracy - 20));
+    assert.equal(hits, Math.max(0, accuracy - 15));
   }
 });
 
@@ -209,11 +246,11 @@ test("overwatch route preview shares effective accuracy and shots with actual di
       const previews = aaPreviewDescriptors(state, target, target.position);
       assert.equal(JSON.stringify(state), before);
       assert.equal(previews.length, 2);
-      const expected = dispersed ? 63 : 78;
+      const expected = dispersed ? 65 : 80;
       for (const preview of previews) {
         assert.equal(preview.probability, expected / 100);
-        assert.equal(preview.max, stack * 2);
-        assert.equal(preview.expectedHarm, expected / 100 * stack * 2);
+        assert.equal(preview.max, stack * 200);
+        assert.equal(preview.expectedHarm, expected / 100 * stack * 200);
       }
       const plan = planPostEntryAA(state, target, {}, () => expected + 1, () => 0);
       assert.ok(plan);
@@ -242,15 +279,15 @@ test("dispersion applies to manual and overwatch attacks and attack history surv
     assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "dispersion", reason: "player-choice" }));
     assert.ok(confirmSystemAction(state));
     const slot = owner.weapons[0];
-    assert.equal(previewWeaponAttack(state, owner.id, slot.id, target.id).hitChance, 25);
+    assert.equal(previewWeaponAttack(state, owner.id, slot.id, target.id).hitChance, 35);
     if (reaction) {
       slot.overwatch = true;
-      const plan = planPostEntryAA(state, target, {}, () => 26, () => 0);
+      const plan = planPostEntryAA(state, target, {}, () => 36, () => 0);
       assert.ok(plan);
       assert.ok(plan.steps.every(step => step.outcome === "miss"));
       for (let index = 0; index < plan.steps.length; index++) assert.equal(applyReactionStep(state, plan, index).status, "applied");
     } else {
-      const plan = planAttack(state, owner, slot, target, () => 26);
+      const plan = planAttack(state, owner, slot, target, () => 36);
       assert.ok(plan.steps.every(step => step.outcome === "miss"));
       applyPlan(state, plan);
     }
@@ -307,11 +344,11 @@ test("existing squadrons cannot react while both hornet slots independently reac
   target.baseEvasion = 0;
   owner.weapons.forEach(slot => { slot.overwatch = true; });
   const preview = aaPreviewDescriptors(state, target, target.position);
-  assert.deepEqual(preview.map(entry => entry.max), [4, 4]);
+  assert.deepEqual(preview.map(entry => entry.max), [400, 400]);
   const outcomes = resolvePostEntryAA(state, target, {}, () => 1, () => 0);
   assert.equal(outcomes.length, 2);
   assert.equal(owner.weapons.every(slot => slot.firedThisRound && !slot.overwatch), true);
-  assert.equal(target.integrity, 16);
+  assert.equal(target.integrity, 700);
   owner.weapons.forEach(slot => { slot.firedThisRound = false; slot.overwatch = true; });
   state.activeUnitId = owner.id;
   state.lifecycle = "ActionChoice";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { beginActionPlanning, buildBattleLog, buildManeuverLog, cancelActionPlanning, confirmManeuverAction, destroyUnit, executeManeuverElement, movementEvasion, planRoutes, resolvePostEntryInterceptions, resumeManeuverPostEntry } from "./domain.js";
+import { beginActionPlanning, buildBattleLog, buildManeuverLog, cancelActionPlanning, confirmManeuverAction, destroyUnit, executeManeuverElement, planRoutes, resolvePostEntryInterceptions, resumeManeuverPostEntry } from "./domain.js";
 import { applyReactionStep, planPostEntryAA, resolvePostEntryAA } from "./battle.js";
 import { buildManeuverOptions } from "./ui-rules.js";
 
@@ -10,6 +10,8 @@ function unit(overrides = {}) {
     name: "Mover",
     sideId: "azure",
     kind: "squadron",
+    canIntercept: true,
+    hullType: "cruiser",
     position: { q: 0, r: 0 },
     heading: 0,
     currentSpeed: 3,
@@ -257,7 +259,7 @@ test("executor charges each move and turn, including the final turn, before appl
   assert.equal(second.status, "executed");
   assert.equal(second.transition.speedCost, 1);
   assert.deepEqual(mover.position, { q: 1, r: -1 });
-  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, evasion: mover.movementEvasion }, { speedSpent: 1, maneuverSpent: 1, evasion: movementEvasion(1) });
+  assert.deepEqual({ speedSpent: mover.speedSpent, maneuverSpent: mover.maneuverSpent, evasion: mover.movementEvasion }, { speedSpent: 1, maneuverSpent: 1, evasion: 2 });
 
   const third = executeManeuverElement(state, plan, 2);
   assert.equal(third.status, "completed");
@@ -281,7 +283,7 @@ test("illegal next element stops at the last legal state without rolling back co
     speedSpent: 1,
     speedRemaining: 1,
     maneuverSpent: 0,
-    evasion: movementEvasion(1)
+    evasion: 4
   });
   assert.equal(state.lifecycle, "ActionChoice");
 });
@@ -293,15 +295,15 @@ test("unaffordable next element stops and only executed elements affect resource
 
   const first = executeManeuverElement(state, plan, 0);
   assert.equal(first.status, "executed");
-  assert.deepEqual(first.completedElements, [{ type: "move", planId: plan.id, elementIndex: 0, speedCost: 1, maneuverCost: 0 }]);
+  assert.deepEqual(first.completedElements, [{ type: "move", planId: plan.id, elementIndex: 0, speedCost: 1, maneuverCost: 0, evasionGain: 4 }]);
   mover.speedRemaining = 0;
   const result = executeManeuverElement(state, plan, 1);
 
   assert.equal(result.status, "stopped");
-  assert.deepEqual(result.completedElements, [{ type: "move", planId: plan.id, elementIndex: 0, speedCost: 1, maneuverCost: 0 }]);
+  assert.deepEqual(result.completedElements, [{ type: "move", planId: plan.id, elementIndex: 0, speedCost: 1, maneuverCost: 0, evasionGain: 4 }]);
   assert.deepEqual(mover.position, { q: 1, r: 0 });
   assert.equal(mover.speedSpent, 1);
-  assert.equal(mover.movementEvasion, movementEvasion(1));
+  assert.equal(mover.movementEvasion, 4);
   assert.equal(state.lifecycle, "ActionChoice");
 });
 
@@ -321,7 +323,7 @@ test("actual movement facts count entered hexes rather than terrain Speed surcha
     { type: "move", speedCost: 1 }
   ]);
   assert.equal(mover.activationMovement.steps, 2);
-  assert.equal(mover.movementEvasion, movementEvasion(2));
+  assert.equal(mover.movementEvasion, 8);
 });
 
 function hazard(position, overrides = {}) {
@@ -478,7 +480,7 @@ test("lethal hazard stops immediately, retains completed spending, and creates d
   assert.equal(randomCalls, 2);
   assert.equal(mover.speedSpent, 1);
   assert.equal(mover.speedRemaining, 1);
-  assert.equal(mover.movementEvasion, movementEvasion(1));
+  assert.equal(mover.movementEvasion, 4);
   assert.equal(state.units.includes(mover), false);
   assert.deepEqual(result.destruction.debris.position, { q: 1, r: 0 });
   assert.equal(state.scenario.contents.filter(content => content.id.startsWith(`debris-${mover.id}-`)).length, 1);
@@ -506,7 +508,7 @@ test("unexecuted elements cause no costs, Evasion, or consequences after an earl
   assert.equal(result.status, "stopped");
   assert.equal(result.reason, "continuation-forbidden");
   assert.equal(mover.speedSpent, 1);
-  assert.equal(mover.movementEvasion, movementEvasion(1));
+  assert.equal(mover.movementEvasion, 4);
   assert.deepEqual(mover.position, { q: 1, r: 0 });
   assert.equal(randomCalls, 0);
   assert.equal(executeManeuverElement(state, plan, 1).status, "invalid");
@@ -657,9 +659,9 @@ test("post-entry interception resolver links every eligible adjacent enemy in st
 
   assert.deepEqual(resolvePostEntryInterceptions(state, mover), ["enemy-a", "enemy-z"]);
   assert.deepEqual(mover.engagedWith, ["enemy-a", "enemy-z"]);
-  assert.deepEqual(enemyA.engagedWith, ["mover"]);
+  assert.deepEqual(enemyA.engagedWith, ["ally", "mover"]);
   assert.deepEqual(enemyZ.engagedWith, ["mover"]);
-  assert.deepEqual(ally.engagedWith, []);
+  assert.deepEqual(ally.engagedWith, ["enemy-a"]);
   assert.deepEqual(capital.engagedWith, []);
 });
 

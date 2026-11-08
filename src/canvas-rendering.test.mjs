@@ -94,7 +94,7 @@ function stateWithKnownThreats() {
     mover,
     state: {
       scenario: { bounds: { minCol: -2, maxCol: 2, minRow: -2, maxRow: 2 }, contents: [] },
-      units: [mover, aaOwner(), squadron({ id: "interceptor", name: "Interceptor", sideId: "crimson", position: { q: 2, r: 0 } })],
+      units: [mover, aaOwner(), squadron({ id: "interceptor", canIntercept: true, name: "Interceptor", sideId: "crimson", position: { q: 2, r: 0 } })],
       initiativeOrder: ["mover", "aa-owner", "interceptor"],
       events: [],
       sequence: 0,

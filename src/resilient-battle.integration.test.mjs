@@ -8,7 +8,7 @@ import {
   beginActionPlanning,
   cancelActionPlanning,
   confirmDeployment,
-  confirmDisengageAction,
+
   confirmManeuverAction,
   createBattleState,
   deployUnit,
@@ -142,9 +142,10 @@ function runBattle() {
 
   const interceptionPlan = confirmManeuver(state, "1,0:0", "risky");
   const interceptionResult = resolveManeuver(state, interceptionPlan, reactionEffects(alwaysMiss));
-  assert.equal(interceptionResult.status, "stopped");
-  assert.equal(interceptionResult.reason, "interception");
-  assert.deepEqual(wasps.engagedWith, [mantis.id, mantisB.id]);
+  assert.equal(interceptionResult.status, "completed");
+  assert.deepEqual(wasps.engagedWith, []);
+  assert.deepEqual(mantis.engagedWith, [wasps.id]);
+  assert.deepEqual(mantisB.engagedWith, [wasps.id]);
   assert.equal(wasps.integrity, wasps.maxIntegrity - 1);
   assert.equal(wasps.speedSpent, 3);
   assert.equal(sentinel.weapons[0].firedThisRound, true);
@@ -160,27 +161,26 @@ function runBattle() {
 
   wasps.currentSpeed = 5;
   assert.deepEqual(activationResources(wasps).speed, { spent: 3, remaining: 2, capacity: 5 });
-  assert.ok(beginActionPlanning(state, { type: "disengage", reason: "player-choice" }));
-  const disengage = confirmDisengageAction(state, alwaysHit);
-  assert.equal(disengage.success, true);
+  assert.equal(beginActionPlanning(state, { type: "disengage", reason: "player-choice" }), null);
   assert.deepEqual(wasps.engagedWith, []);
-  assert.deepEqual(activationResources(wasps).speed, { spent: 5, remaining: 0, capacity: 5 });
+  assert.deepEqual(activationResources(wasps).speed, { spent: 3, remaining: 2, capacity: 5 });
   assert.equal(actionAvailability(state, { type: "maneuver" }).available, true);
   assert.equal(planRoutes(state, wasps, "safe").size > 0, true);
 
   wasps.currentSpeed = 6;
-  assert.deepEqual(activationResources(wasps).speed, { spent: 5, remaining: 1, capacity: 6 });
+  assert.deepEqual(activationResources(wasps).speed, { spent: 3, remaining: 3, capacity: 6 });
   const remainingBudgetPlan = confirmManeuver(state, "0,0:3");
   assert.deepEqual(remainingBudgetPlan.costs, { speed: 1, maneuver: 3 });
   assert.equal(resolveManeuver(state, remainingBudgetPlan).status, "completed");
   assert.deepEqual({ position: wasps.position, speedSpent: wasps.speedSpent, maneuverSpent: wasps.maneuverSpent }, {
-    position: { q: 0, r: 0 }, speedSpent: 6, maneuverSpent: 3
+    position: { q: 0, r: 0 }, speedSpent: 4, maneuverSpent: 3
   });
   assert.deepEqual(endActivation(state), { newRound: false });
   assert.equal(activeUnit(state), swift);
 
   const autocannon = swift.weapons.find(weapon => weapon.id === "swift-autocannon");
   const laser = swift.weapons.find(weapon => weapon.id === "swift-laser");
+  laser.targetKinds = ["capital", "squadron"];
   assert.equal(previewWeaponAttack(state, swift.id, autocannon.id, mantis.id).canConfirm, true);
   assert.equal(previewWeaponAttack(state, swift.id, laser.id, sentinel.id).canConfirm, false);
   attack(state, autocannon.id, mantis.id);

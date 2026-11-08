@@ -1,11 +1,11 @@
 import { SYSTEM_ACTIONS } from "./config/index.js";
 import { availabilityReason, createAvailability, insufficientResourceReasons } from "./availability-contract.js";
-import { activationResources, activeUnit, applyDamage, beginWeaponCooldown, confirmOwnAction, currentEvasion, destroyUnit, hexDistance, inside, key, overwatchAvailability, recordEvent, spendActivationResource, unitById, weaponReadiness } from "./domain.js";
+import { incomingInterceptionIds, activationResources, activeUnit, applyDamage, beginWeaponCooldown, confirmOwnAction, currentEvasion, destroyUnit, hexDistance, inside, key, overwatchAvailability, recordEvent, spendActivationResource, unitById, weaponReadiness } from "./domain.js";
 
 const MULTIPLIERS = {
-  kinetic: { shield: 1.5, armor: 0.75, integrity: 1 },
-  energy: { shield: 0.5, armor: 1, integrity: 1 },
-  explosive: { shield: 1, armor: 1.5, integrity: 1.25 }
+  kinetic: { shield: 1.5, integrity: 1 },
+  energy: { shield: 0.5, integrity: 1 },
+  explosive: { shield: 1, integrity: 1.25 }
 };
 
 const CRITICALS = {
@@ -47,10 +47,6 @@ function inArc(attacker, target, weapon) {
 
 export function effectiveWeapon(attacker, weapon) {
   return { ...weapon, accuracy: weapon.accuracy - (attacker.dispersionActive ? SYSTEM_ACTIONS.dispersion.accuracyPenalty : 0), shots: weapon.shots * (attacker.kind === "squadron" ? attacker.stack : 1) };
-}
-
-function unavailableReason(attacker, target, weapon, reaction = false) {
-  return weaponAttackAvailability({ units: [attacker, ...(target ? [target] : [])], activeUnitId: attacker?.id, lifecycle: "ActionChoice", winner: null, attackApplication: null, maneuverApplication: null, scenario: { contents: [] } }, attacker?.id, weapon?.id, target?.id, { reaction, explicitAttacker: attacker, explicitWeapon: weapon, explicitTarget: target }).reasons[0]?.message || null;
 }
 
 function cube(position) { return { x: position.q, z: position.r, y: -position.q - position.r }; }
@@ -104,12 +100,7 @@ export function attackGeometry(state, targetId, excludedBlockerIds = new Set(), 
 
 export function activeLayer(target) {
   if ((target.shield || 0) > 0) return "shield";
-  if ((target.armor || 0) > 0) return "armor";
   return "integrity";
-}
-
-export function weaponDamage(weapon, layer) {
-  return Math.max(1, Math.floor(weapon.damage * MULTIPLIERS[weapon.weaponClass][layer]));
 }
 
 function effectiveness(weapon, layer) {
@@ -143,6 +134,8 @@ export function weaponAttackAvailability(state, attackerId, slotId, targetId, op
   if (attacker && weapon && targetRequested) {
     if (!target) reasons.push(availabilityReason("target.missing", "Цель отсутствует", { targetId: targetId || null }));
     else {
+      const holders = incomingInterceptionIds(state, attacker);
+      if (holders.length && !holders.includes(target.id)) reasons.push(availabilityReason("target.intercepted", "Перехват: можно атаковать только удерживающих противников", { linkedIds: holders }));
       kindValid = weapon.targetKinds.includes(target.kind);
       distance = hexDistance(attacker.position, target.position);
       rangeValid = distance <= weapon.maxRange;
@@ -239,18 +232,11 @@ function snapshot(unit) {
 }
 
 export function weaponHitDamage(unit, weapon) {
-  let remaining = weapon.damage;
-  const layers = [];
-  for (const layer of ["shield", "armor", "integrity"]) {
-    if (remaining <= 0 || !(unit[layer] > 0)) continue;
-    const multiplier = effectiveness(weapon, layer);
-    const scaled = remaining * multiplier;
-    const damage = Math.min(unit[layer], Math.max(remaining >= 1 ? 1 : 0, Math.floor(scaled + 1e-10)));
-    if (damage > 0) layers.push({ layer, damage, multiplier });
-    if (scaled < unit[layer]) break;
-    remaining = Math.max(0, remaining - unit[layer] / multiplier);
-  }
-  return layers;
+  const layer = activeLayer(unit);
+  const multiplier = effectiveness(weapon, layer);
+  const armor = layer === "integrity" ? Math.max(0, (unit.armor || 0) - (weapon.armorPenetration || 0)) : 0;
+  const damage = Math.min(unit[layer], Math.max(0, weapon.damage - armor) * multiplier);
+  return damage > 0 ? [{ layer, damage, multiplier }] : [];
 }
 
 function simulatedDamage(unit, layers) {
@@ -462,7 +448,7 @@ export function planPostEntryAA(state, target, context = {}, rollD100 = () => Ma
   if (state.attackApplication || state.reactionApplication || !state.units.includes(target)) return null;
   for (const { owner, slot } of reactionCandidates(state, target)) {
     if (!state.units.includes(target)) return null;
-    if (!state.units.includes(owner) || !overwatchAvailability(owner, slot).available || unavailableReason(owner, target, slot, true)) continue;
+    if (!state.units.includes(owner) || !overwatchAvailability(owner, slot).available || !weaponAttackAvailability(state, owner.id, slot.id, target.id, { reaction: true }).available) continue;
     const declaration = recordEvent(state, "aa-reaction-declare", {
       activationId: context.activationId,
       actorId: owner.id,

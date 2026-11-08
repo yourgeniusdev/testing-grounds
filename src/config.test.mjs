@@ -14,6 +14,22 @@ import {
   weaponVariant
 } from "./config/index.js";
 
+test("first balance protection and weapon balance uses exact hundred-scale values", () => {
+  for (const [id, shield, armor, integrity] of [["atlas", 800, 200, 2800], ["dart", 300, 100, 1200], ["swift", 400, 100, 1800], ["bastion", 800, 200, 3200], ["raptor", 600, 100, 2400]]) {
+    const profile = buildCapitalProfile(id);
+    assert.deepEqual([profile.shield, profile.armor, profile.integrity], [shield, armor, integrity]);
+    assert.equal(profile.reactor.rechargeRate, 2);
+  }
+  for (const [id, shield, health, stack] of [["wasps", 0, 300, 3], ["mantis", 0, 500, 3], ["hornet", 0, 300, 2], ["kiro", 300, 1000, 1]]) {
+    const profile = buildSquadronProfile(id);
+    assert.deepEqual([profile.shield, profile.armor, profile.unitHealth, profile.stack, profile.integrity], [shield, 0, health, stack, health * stack]);
+  }
+  assert.equal(WEAPONS.stormKineticBattery.damage, 400);
+  assert.equal(WEAPONS.stormKineticBattery.energyCost, 1);
+  for (const [id, penetration] of [["rayAALaser", 100], ["focusEmitter", 200], ["impulseTurret", 200], ["lanceBeam", 200], ["torchPlasmaCannon", 300]]) assert.equal(WEAPONS[id].armorPenetration, penetration);
+  for (const id of ["sentinelAutocannon", "rayAALaser", "wardAutocannon"]) assert.deepEqual(WEAPONS[id].targetKinds, ["squadron"]);
+});
+
 const cloneConfig = () => structuredClone(CONFIG);
 
 const assertDeepFrozen = value => {
@@ -138,7 +154,7 @@ test("real capital loadouts use reusable weapons in stable hardpoint order and A
   assert.deepEqual(buildCapitalProfile("swift").weapons.map(entry => entry.catalogWeaponId), ["focusEmitter", "rayAALaser"]);
   const corvette = buildCapitalProfile("dart");
   assert.deepEqual(corvette.weapons.map(entry => entry.catalogWeaponId), ["sentinelAutocannon"]);
-  assert.deepEqual({ hullType: corvette.hullType, speed: corvette.baseSpeed, maneuver: corvette.maneuver, integrity: corvette.integrity }, { hullType: "corvette", speed: 6, maneuver: 4, integrity: 30 });
+  assert.deepEqual({ hullType: corvette.hullType, speed: corvette.baseSpeed, maneuver: corvette.maneuver, integrity: corvette.integrity }, { hullType: "corvette", speed: 6, maneuver: 4, integrity: 1200 });
   assert.ok(corvette.integrity < buildCapitalProfile("swift").integrity);
   assert.deepEqual(buildCapitalProfile("bastion").weapons.map(entry => entry.catalogWeaponId), ["titanRailgun", "hailMissileBattery", "hailMissileBattery", "sentinelAutocannon"]);
   assert.deepEqual(buildCapitalProfile("raptor").weapons.map(entry => entry.catalogWeaponId), ["focusEmitter", "wardAutocannon", "impulseTurret"]);
@@ -153,25 +169,25 @@ test("real capital loadouts use reusable weapons in stable hardpoint order and A
 
 test("squadron models and loadouts have agreed stats and stack-scalable base weapons", () => {
   const wasps = buildSquadronProfile("wasps");
-  assert.deepEqual({ speed: wasps.baseSpeed, maneuver: wasps.maneuver, initiative: wasps.initiative, evasion: wasps.baseEvasion, stack: wasps.stack, unitHealth: wasps.unitHealth }, { speed: 6, maneuver: 5, initiative: 5, evasion: 10, stack: 3, unitHealth: 5 });
+  assert.deepEqual({ speed: wasps.baseSpeed, maneuver: wasps.maneuver, initiative: wasps.initiative, evasion: wasps.baseEvasion, stack: wasps.stack, unitHealth: wasps.unitHealth }, { speed: 6, maneuver: 5, initiative: 5, evasion: 10, stack: 3, unitHealth: 300 });
   assert.ok(wasps.maneuver > buildCapitalProfile("swift").maneuver);
   assert.deepEqual(wasps.weapons.map(entry => [entry.catalogWeaponId, entry.shots * wasps.stack]), [["twinNeedleAutocannon", 6]]);
   const mantis = buildSquadronProfile("mantis");
-  assert.deepEqual({ speed: mantis.baseSpeed, maneuver: mantis.maneuver, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 3, maneuver: 4, initiative: 3, evasion: 2, stack: 3, unitHealth: 8 });
+  assert.deepEqual({ speed: mantis.baseSpeed, maneuver: mantis.maneuver, initiative: mantis.initiative, evasion: mantis.baseEvasion, stack: mantis.stack, unitHealth: mantis.unitHealth }, { speed: 3, maneuver: 4, initiative: 3, evasion: 2, stack: 3, unitHealth: 500 });
   assert.ok(mantis.maneuver > buildCapitalProfile("raptor").maneuver);
   assert.deepEqual(mantis.weapons.map(entry => [entry.catalogWeaponId, entry.shots * mantis.stack]), [["needleAutocannon", 3], ["hammerTorpedo", 3]]);
   assert.deepEqual(mantis.weapons.map(entry => entry.targetKinds), [["capital", "squadron"], ["capital"]]);
   const kiro = buildSquadronProfile("kiro");
   assert.deepEqual(
     { craftType: kiro.craftType, speed: kiro.baseSpeed, maneuver: kiro.maneuver, initiative: kiro.initiative, stack: kiro.stack, unitHealth: kiro.unitHealth, shield: kiro.shield, armor: kiro.armor, integrity: kiro.integrity },
-    { craftType: "assaultCraft", speed: 5, maneuver: 4, initiative: 5, stack: 1, unitHealth: 18, shield: 10, armor: 0, integrity: 18 }
+    { craftType: "assaultCraft", speed: 5, maneuver: 4, initiative: 5, stack: 1, unitHealth: 1000, shield: 300, armor: 0, integrity: 1000 }
   );
   assert.ok(kiro.unitHealth > wasps.unitHealth);
   assert.deepEqual(
     [wasps.baseSpeed - kiro.baseSpeed, wasps.maneuver - kiro.maneuver, wasps.initiative - kiro.initiative],
     [1, 1, 0]
   );
-  assert.deepEqual(kiro.weapons.map(entry => [entry.catalogWeaponId, entry.mount, entry.targetKinds, entry.damage]), [["lanceBeam", "turret", ["capital", "squadron"], 10]]);
+  assert.deepEqual(kiro.weapons.map(entry => [entry.catalogWeaponId, entry.mount, entry.targetKinds, entry.damage]), [["lanceBeam", "turret", ["capital", "squadron"], 1000]]);
 });
 
 test("all current squadron slots use forward firing geometry without changing compatibility", () => {
@@ -274,7 +290,7 @@ test("equipped mass remains near combat mass", () => {
 });
 
 test("approved profiles, crew metadata and overwatch references are exact", () => {
-  for (const [id, shield, armor, integrity, crew, initiative] of [["dart", 11, 8, 30, 50, 5], ["swift", 18, 14, 45, 70, 5], ["raptor", 23, 23, 60, 100, 4], ["atlas", 32, 32, 65, 140, 2], ["bastion", 46, 55, 100, 200, 1]]) {
+  for (const [id, shield, armor, integrity, crew, initiative] of [["dart", 300, 100, 1200, 50, 5], ["swift", 400, 100, 1800, 70, 5], ["raptor", 600, 100, 2400, 100, 4], ["atlas", 800, 200, 2800, 140, 2], ["bastion", 800, 200, 3200, 200, 1]]) {
     const profile = buildCapitalProfile(id);
     assert.deepEqual([profile.shield, profile.armor, profile.integrity, profile.crewRequirement, profile.initiative], [shield, armor, integrity, crew, initiative]);
     assert.equal(profile.mass, profile.equippedMassUnits);
@@ -282,11 +298,11 @@ test("approved profiles, crew metadata and overwatch references are exact", () =
   assert.deepEqual(Object.fromEntries(Object.entries(WEAPONS).map(([id, entry]) => [id, entry.accuracy])), {
     wardAutocannon: 90, needleAutocannon: 80, twinNeedleAutocannon: 80, sentinelAutocannon: 92, rayAALaser: 95, lanceBeam: 90, torchPlasmaCannon: 88, stormKineticBattery: 82, hailMissileBattery: 85, titanRailgun: 80, focusEmitter: 91, spearMissile: 76, impulseTurret: 91, hammerTorpedo: 70
   });
-  assert.deepEqual([WEAPONS.titanRailgun.damage, WEAPONS.titanRailgun.energyCost, WEAPONS.titanRailgun.cooldownRounds], [30, 4, 2]);
+  assert.deepEqual([WEAPONS.titanRailgun.damage, WEAPONS.titanRailgun.energyCost, WEAPONS.titanRailgun.cooldownRounds], [3000, 4, 2]);
   assert.equal(WEAPONS.hailMissileBattery.cooldownRounds, 1);
   assert.deepEqual([WEAPONS.lanceBeam.energyCost, WEAPONS.lanceBeam.cooldownRounds], [0, 0]);
   const hornet = buildSquadronProfile("hornet");
-  assert.deepEqual([hornet.stack, hornet.unitHealth, hornet.shield, hornet.armor, hornet.baseSpeed, hornet.maneuver, hornet.initiative, hornet.baseEvasion, hornet.crewRequirement], [2, 4, 0, 0, 6, 6, 6, 16, 30]);
+  assert.deepEqual([hornet.stack, hornet.unitHealth, hornet.shield, hornet.armor, hornet.baseSpeed, hornet.maneuver, hornet.initiative, hornet.baseEvasion, hornet.crewRequirement], [2, 300, 0, 0, 6, 6, 6, 16, 30]);
   assert.deepEqual(hornet.weapons.map(slot => slot.catalogWeaponId), ["twinNeedleAutocannon", "twinNeedleAutocannon"]);
   for (const [id, crew] of [["wasps", 20], ["mantis", 25], ["kiro", 30]]) {
     const profile = buildSquadronProfile(id);

@@ -281,6 +281,8 @@ const wardAutocannon = weapon({
   visual: visual("tracer", "#ffd37a", 0.06, 13, 80, "short", "spark", 0.07)
 });
 
+const armorPenetration = { rayAALaser: 100, focusEmitter: 200, impulseTurret: 200, lanceBeam: 200, torchPlasmaCannon: 300 };
+
 export const WEAPONS = deepFreeze(Object.fromEntries([
   wardAutocannon,
   needleAutocannon,
@@ -296,4 +298,4 @@ export const WEAPONS = deepFreeze(Object.fromEntries([
   spearMissile,
   impulseTurret,
   hammerTorpedo
-].map(entry => [entry.id, entry])));
+].map(entry => [entry.id, { ...entry, damage: entry.damage * 100, armorPenetration: armorPenetration[entry.id] || 0, energyCost: entry.id === "stormKineticBattery" ? 1 : entry.energyCost, targetKinds: ["sentinelAutocannon", "rayAALaser", "wardAutocannon"].includes(entry.id) ? ["squadron"] : entry.targetKinds }])));

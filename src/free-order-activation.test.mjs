@@ -3,6 +3,7 @@ import test from "node:test";
 import { applyAttackStep, availableWeaponAttackTargets, confirmWeaponAttackAction } from "./battle.js";
 import {
   currentEvasion,
+  resolvePostEntryInterceptions,
   systemActionVisible,
   activationResources,
   actionAvailability,
@@ -17,7 +18,6 @@ import {
   destroyUnit,
   endActivation,
   executeManeuverElement,
-  movementEvasion,
   planManeuver,
   planRoutes,
   switchActionPlanning,
@@ -26,9 +26,9 @@ import {
 } from "./domain.js";
 import { buildManeuverOptions } from "./ui-rules.js";
 
-function activationBattle() {
+function activationBattle(light = false) {
   const state = createBattleState();
-  const atlas = unitById(state, "atlas");
+  const atlas = unitById(state, light ? "dart" : "atlas");
   const swift = unitById(state, "swift");
   const bastion = unitById(state, "bastion");
   state.scenario.contents = [];
@@ -58,6 +58,52 @@ function useSystem(state, systemActionId) {
   assert.ok(beginActionPlanning(state, { type: "system-action", reason: "player-choice", systemActionId }));
   assert.ok(confirmSystemAction(state));
 }
+
+test("incoming interception permits turns but only outgoing interception permits movement", () => {
+  const { state, unit } = squadronActivation("wasps");
+  const mantis = unitById(state, "mantis");
+  state.units = [unit, mantis];
+  unit.position = { q: 0, r: 0 };
+  unit.heading = 0;
+  mantis.position = { q: -1, r: 0 };
+  resolvePostEntryInterceptions(state, unit);
+  assert.ok(planRoutes(state, unit, "safe").get("1,0:0"));
+  state.activeUnitId = mantis.id;
+  state.lifecycle = "WaitDecision";
+  beginActivation(state);
+  const routes = planRoutes(state, mantis, "safe");
+  assert.ok(routes.size > 0);
+  assert.ok([...routes.values()].every(route => route.steps.length === 0));
+  assert.equal(actionAvailability(state, { type: "disengage" }).available, false);
+});
+
+test("movement earns model evasion and evasive maneuver only improves subsequent steps", () => {
+  const { state, unit } = squadronActivation("wasps");
+  state.units = [unit];
+  unit.position = { q: 0, r: 0 };
+  unit.heading = 0;
+  const move = destination => {
+    const route = planRoutes(state, unit, "safe").get(destination);
+    assert.ok(beginActionPlanning(state, { type: "maneuver", reason: "player-choice" }));
+    const plan = confirmManeuverAction(state, buildManeuverOptions(unit, route)[0]);
+    assert.ok(plan);
+    for (let index = 0; index < plan.elements.length; index++) executeManeuverElement(state, plan, index);
+  };
+  assert.equal(currentEvasion(unit), 0);
+  move("1,0:0");
+  assert.equal(currentEvasion(unit), 4);
+  useSystem(state, "evasive-maneuver");
+  assert.equal(currentEvasion(unit), 4);
+  assert.equal(activationResources(unit).maneuver.spent, 1);
+  move("2,0:0");
+  assert.equal(currentEvasion(unit), 9);
+  move("2,0:1");
+  assert.equal(currentEvasion(unit), 9);
+  useSystem(state, "dispersion");
+  assert.equal(currentEvasion(unit), 24);
+  move("3,-1:1");
+  assert.equal(currentEvasion(unit), 25);
+});
 
 test("squadron actions enforce visibility and domain eligibility", () => {
   for (const id of ["hornet-azure", "wasps", "mantis", "kiro", "atlas"]) {
@@ -235,7 +281,7 @@ test("switching an unconfirmed plan is atomic and mutation-free across action ty
   const left = atlas.weapons[0].id;
   const right = atlas.weapons[1].id;
 
-  assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" }));
+  assert.ok(beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" }));
   assert.equal(switchActionPlanning(state, { type: "maneuver", reason: "player-choice" })?.type, "maneuver");
   assert.deepEqual(switchActionPlanning(state, { type: "weapon-attack", slotId: left, reason: "player-choice" }), {
     status: "planning", type: "weapon-attack", actorId: atlas.id, reason: "player-choice", slotId: left
@@ -312,7 +358,7 @@ test("maneuver and weapon actions return to choice with stable action context", 
 });
 
 test("system action planning is pure and confirmation revalidates actor, cost, and condition", () => {
-  const { state, atlas, swift } = activationBattle();
+  const { state, atlas, swift } = activationBattle(true);
   beginActivation(state);
   const before = structuredClone({ ...state, rng: null });
 
@@ -344,7 +390,7 @@ test("system action planning is pure and confirmation revalidates actor, cost, a
 });
 
 test("confirmed system actions pay once, remove wait, and return to common choice", () => {
-  const { state, atlas } = activationBattle();
+  const { state, atlas } = activationBattle(true);
   beginActivation(state);
 
   beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" });
@@ -364,7 +410,7 @@ test("confirmed system actions pay once, remove wait, and return to common choic
 });
 
 test("a second config-backed system action is available after maneuver and attack", () => {
-  const { state, atlas, bastion } = activationBattle();
+  const { state, atlas, bastion } = activationBattle(true);
   beginActivation(state);
 
   beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" });
@@ -374,10 +420,11 @@ test("a second config-backed system action is available after maneuver and attac
   const route = planRoutes(state, atlas, "safe").get("1,0:0");
   const maneuver = confirmManeuverAction(state, buildManeuverOptions(atlas, route)[0]);
   assert.equal(executeManeuverElement(state, maneuver, 0).status, "completed");
-  assert.equal(atlas.movementEvasion, 7.5);
+  assert.equal(atlas.movementEvasion, 4);
 
   bastion.position = { q: 1, r: -2 };
-  const slot = atlas.weapons.find(weapon => weapon.id === "atlas-battery-left");
+  bastion.kind = "squadron";
+  const slot = atlas.weapons[0];
   beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: slot.id });
   const attack = confirmWeaponAttackAction(state, atlas.id, slot.id, bastion.id, () => 100, () => 0);
   for (let index = 0; index < attack.steps.length; index++) applyAttackStep(state, attack, index);
@@ -458,18 +505,18 @@ test("Evasion accumulates actual steps across maneuvers and survives intervening
   const firstRoute = planRoutes(state, atlas, "safe").get("1,0:0");
   const firstManeuver = confirmManeuverAction(state, buildManeuverOptions(atlas, firstRoute)[0]);
   assert.equal(executeManeuverElement(state, firstManeuver, 0).status, "completed");
-  assert.equal(atlas.movementEvasion, movementEvasion(1));
+  assert.equal(atlas.movementEvasion, 2);
 
   bastion.position = { q: 1, r: -2 };
   const slot = atlas.weapons.find(weapon => weapon.id === "atlas-battery-left");
   beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: slot.id });
   const attack = confirmWeaponAttackAction(state, atlas.id, slot.id, bastion.id, () => 100, () => 0);
   for (let index = 0; index < attack.steps.length; index++) applyAttackStep(state, attack, index);
-  assert.equal(atlas.movementEvasion, movementEvasion(1));
+  assert.equal(atlas.movementEvasion, 2);
 
   beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" });
   assert.ok(confirmSystemAction(state));
-  assert.equal(atlas.movementEvasion, movementEvasion(1));
+  assert.equal(atlas.movementEvasion, 2);
 
   beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
   const secondRoute = planRoutes(state, atlas, "safe").get("3,0:0");
@@ -477,7 +524,7 @@ test("Evasion accumulates actual steps across maneuvers and survives intervening
   for (let index = 0; index < secondManeuver.elements.length; index++) executeManeuverElement(state, secondManeuver, index);
 
   assert.equal(atlas.activationMovement.steps, 3);
-  assert.equal(atlas.movementEvasion, movementEvasion(3));
+  assert.equal(atlas.movementEvasion, 6);
 });
 
 test("a later turn-only maneuver conservatively locks accumulated Evasion until the next Activation Start", () => {
@@ -488,13 +535,13 @@ test("a later turn-only maneuver conservatively locks accumulated Evasion until 
   beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
   const movement = confirmManeuverAction(state, buildManeuverOptions(atlas, planRoutes(state, atlas, "safe").get("1,0:0"))[0]);
   executeManeuverElement(state, movement, 0);
-  assert.equal(atlas.movementEvasion, movementEvasion(1));
+  assert.equal(atlas.movementEvasion, 2);
 
   beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
   const turn = confirmManeuverAction(state, buildManeuverOptions(atlas, planRoutes(state, atlas, "safe").get("1,0:1"))[0]);
   executeManeuverElement(state, turn, 0);
-  assert.equal(atlas.evasionLocked, true);
-  assert.equal(atlas.movementEvasion, 0);
+  assert.equal(atlas.evasionLocked, false);
+  assert.equal(atlas.movementEvasion, 2);
 
   endActivation(state);
   endActivation(state);
@@ -783,7 +830,7 @@ test("configured stay state changes execute with the same event and cause contra
 });
 
 test("explicit end without a resolved maneuver applies stay effects once after other actions and identifies the end cause", () => {
-  const { state, atlas } = activationBattle();
+  const { state, atlas } = activationBattle(true);
   state.scenario.contents.push(damagingStayEffect("end-stay", { q: 0, r: 0 }));
   beginActivation(state);
   beginActionPlanning(state, { type: "system-action", systemActionId: "evasive-maneuver", reason: "player-choice" });
@@ -936,7 +983,7 @@ test("full free-order activation interleaves maneuvers, different weapon slots, 
   assert.deepEqual(resources(), {
     speed: { spent: 1, remaining: 2, capacity: 3 },
     maneuver: { spent: 0, remaining: 2, capacity: 2 },
-    energy: { spent: 0, remaining: 3, capacity: 3 }
+    energy: { spent: 1, remaining: 2, capacity: 3 }
   });
 
   beginActionPlanning(state, { type: "system-action", systemActionId: "reactor-to-engines", reason: "player-choice" });
@@ -944,7 +991,7 @@ test("full free-order activation interleaves maneuvers, different weapon slots, 
   assert.deepEqual(resources(), {
     speed: { spent: 1, remaining: 3, capacity: 4 },
     maneuver: { spent: 0, remaining: 2, capacity: 2 },
-    energy: { spent: 1, remaining: 2, capacity: 3 }
+    energy: { spent: 2, remaining: 1, capacity: 3 }
   });
 
   beginActionPlanning(state, { type: "maneuver", reason: "player-choice" });
@@ -953,7 +1000,7 @@ test("full free-order activation interleaves maneuvers, different weapon slots, 
   assert.deepEqual(resources(), {
     speed: { spent: 3, remaining: 1, capacity: 4 },
     maneuver: { spent: 0, remaining: 2, capacity: 2 },
-    energy: { spent: 1, remaining: 2, capacity: 3 }
+    energy: { spent: 2, remaining: 1, capacity: 3 }
   });
 
   const right = atlas.weapons.find(weapon => weapon.id === "atlas-battery-right");
@@ -963,7 +1010,7 @@ test("full free-order activation interleaves maneuvers, different weapon slots, 
   assert.deepEqual(resources(), {
     speed: { spent: 3, remaining: 1, capacity: 4 },
     maneuver: { spent: 0, remaining: 2, capacity: 2 },
-    energy: { spent: 1, remaining: 2, capacity: 3 }
+    energy: { spent: 3, remaining: 0, capacity: 3 }
   });
 
   assert.deepEqual(endActivation(state), { newRound: false });

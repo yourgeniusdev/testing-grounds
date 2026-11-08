@@ -90,7 +90,7 @@ test("contract distinguishes interception, readiness, target kind, arc, range, l
   state.units.push(squadron);
   squadron.engagedWith = ["enemy"];
   state.activeUnitId = squadron.id;
-  assert.deepEqual(codes(actionAvailability(state, { type: "maneuver" })), ["maneuver.intercepted"]);
+  assert.deepEqual(codes(actionAvailability(state, { type: "maneuver" })), []);
 
   state.activeUnitId = atlas.id;
   const slot = atlas.weapons[0];

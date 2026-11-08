@@ -22,7 +22,8 @@ export const SYSTEM_ACTIONS = deepFreeze({
     id: "evasive-maneuver",
     name: "Манёвр уклонения",
     cost: { maneuver: 1 },
-    effect: "evasiveManeuver"
+    effect: "evasiveManeuver",
+    oncePerActivation: true
   },
   "reactor-to-engines": {
     id: "reactor-to-engines",

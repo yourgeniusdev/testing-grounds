@@ -1,5 +1,5 @@
 import { SYSTEM_ACTIONS } from "./config/index.js";
-import { cooldownLabel, evasiveMovementBonusRange, actionEvasionPreview, activationMovementFacts, activationResources, actionAvailability, currentEvasion, movementEvasion, movementEvasionFromFacts } from "./domain.js";
+import { cooldownLabel, evasiveMovementBonusRange, actionEvasionPreview, incomingInterceptionIds, activationResources, actionAvailability, currentEvasion, movementEvasionAfterSteps, movementEvasionFromFacts } from "./domain.js";
 
 export const DISPERSION_DESCRIPTION = "Уклонение +15 п.п.; точность всех собственных атак, включая Наблюдение, −15 п.п. До начала следующей собственной активации. Бесплатно, без перезарядки. Только до первой собственной атаки текущего раунда, включая Наблюдение; после атаки включить нельзя. Движение до включения разрешено. Не отключается; совместимо с форсажем.";
 
@@ -55,7 +55,7 @@ export function actionPlanningPreview(state, unit, action = state.activeAction) 
   const evasion = actionEvasionPreview(state, action, unit, availability);
   const bonusRange = definition?.effect === "evasiveManeuver" ? evasiveMovementBonusRange(unit) : null;
   const formatBonus = value => value.toLocaleString("ru-RU");
-  const showsEvasion = action.type === "disengage" || ["evasiveManeuver", "dispersion"].includes(definition?.effect);
+  const showsEvasion = ["evasiveManeuver", "dispersion"].includes(definition?.effect);
   const gauges = ["speed", "maneuver", "energy"].filter(name =>
     (name !== "maneuver" || Number.isFinite(unit.maneuver)) &&
     (name !== "energy" || (unit.reactor && definition?.effect !== "engineBoost")) &&
@@ -67,14 +67,13 @@ export function actionPlanningPreview(state, unit, action = state.activeAction) 
     cost: availability.forecast.cost[name]
   }));
   return {
-    title: definition?.name || (action.type === "disengage" ? "Отрыв" : "Выберите цель"),
+    title: definition?.name || "Выберите цель",
     canConfirm: availability.available,
     gauges,
     evasion: showsEvasion ? evasion : null,
     evasionDelta: Math.round((evasion.preview - evasion.current) * 10) / 10,
     notes: [
       ...availability.reasons.map(reason => reason.message),
-      ...(action.type === "disengage" && availability.available ? [`Шанс отрыва ${availability.details.chance}%; расход и штраф уклонения — даже при неудаче`] : []),
       ...(definition?.effect === "engineBoost" ? [definition.cooldownRounds ? cooldownLabel(definition.cooldownRounds) : "Без перезарядки", ...(definition.oncePerActivation ? ["Один раз за активацию"] : [])] : []),
       ...(definition?.effect === "dispersion" ? [`Точность атак <b style="color:var(--red)">-${definition.accuracyPenalty}%</b> · до следующей активации`] : []),
       ...(bonusRange ? [`Бонус уклонения от движения +${formatBonus(bonusRange.min)}–${formatBonus(bonusRange.max)} п.п. · зависит от пройденного пути`] : []),
@@ -139,13 +138,11 @@ export function evasionPresentation(unit, selected = null, state = null, hovered
   const movement = movementEvasionFromFacts(unit);
   const current = currentEvasion(unit);
   const plannedSteps = selected?.route?.steps?.length || 0;
-  const plannedTurns = selected?.route?.actions?.filter(element => element.type === "turn").length ?? selected?.route?.turnsSpent ?? 0;
-  const accumulatedSteps = unit?.activationMovement ? activationMovementFacts(unit).filter(element => element.type === "move").length : 0;
-  const locksEvasion = Boolean(selected && plannedSteps === 0 && plannedTurns > 0);
-  const previewMovement = unit?.evasionLocked || locksEvasion ? 0 : selected ? movementEvasion(accumulatedSteps + plannedSteps, unit?.evasiveManeuver) : movement;
+  const previewMovement = movementEvasionAfterSteps(unit, plannedSteps);
   const action = hoveredAction || (state?.lifecycle === "ActionPlanning" ? state.activeAction : null);
-  const previewsDispersion = action?.type === "system-action" && action.systemActionId === "dispersion" && actionAvailability(state, action, unit).available;
-  return { current, movement, preview: (unit?.evasionLocked || locksEvasion ? 0 : (unit?.baseEvasion || 0) + previewMovement + (unit?.disengageEvasionPenalty || 0)) + (unit?.dispersionActive || previewsDispersion ? 15 : 0), previewMovement };
+  const projected = { ...unit, activationMovement: null, movementEvasion: previewMovement };
+  const preview = action ? actionEvasionPreview(state, action, projected, actionAvailability(state, action, unit)).preview : currentEvasion(projected);
+  return { current, movement, preview, previewMovement };
 }
 
 function actionPresentation(state, unit, action) {
@@ -174,19 +171,13 @@ export function systemActionPresentation(state, unit, systemActionId) {
   return actionPresentation(state, unit, { type: "system-action", systemActionId });
 }
 
-export function disengageActionPresentation(state, unit) {
-  if (unit?.kind !== "squadron" || !unit.engagedWith?.length) return { visible: false, selected: false, canSelect: false, canConfirm: false, canCancel: false };
-  const availability = actionAvailability(state, { type: "disengage" }, unit);
-  return { visible: true, ...actionPresentation(state, unit, { type: "disengage" }), preview: availability.details };
-}
-
 export function interceptionEffectRows(state, unit) {
-  if (!unit?.engagedWith?.length) return [];
-  return [...new Set(unit.engagedWith)]
+  if (!unit) return [];
+  return incomingInterceptionIds(state, unit)
     .map(id => state?.units?.find(candidate => candidate.id === id))
-    .filter(linked => linked?.kind === "squadron" && linked.sideId !== unit.sideId && linked.engagedWith?.includes(unit.id))
+    .filter(Boolean)
     .sort((left, right) => left.id.localeCompare(right.id))
-    .map(linked => ({ tone: "negative", icon: "↝", name: `Перехват · ${linked.name || linked.id}`, text: "Обычный манёвр запрещён до успешного Отрыва", duration: "Пока связь актуальна" }));
+    .map(linked => ({ tone: "negative", icon: "↝", name: `Перехват · ${linked.name || linked.id}`, text: "Удерживает: перемещение запрещено; повороты разрешены; атаковать можно только удерживающих", duration: "Пока связь актуальна" }));
 }
 
 export function canSelectWeaponAttackTarget(attacker, target, selectedWeaponId) {

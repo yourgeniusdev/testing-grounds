@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { currentEvasion, confirmDisengageAction, actionAvailability, planRoutes, confirmSystemAction, createBattleState, unitById } from "./domain.js";
+import { currentEvasion, actionAvailability, planRoutes, confirmSystemAction, createBattleState, unitById } from "./domain.js";
 import { SYSTEM_ACTIONS } from "./config/index.js";
 import { effectiveWeapon } from "./battle.js";
 import { cancelPendingAction, selectPendingAction } from "./ui-controller.js";
-import { actionPlanningPreview, planningControlsPresentation, maneuverPlanningPreview, DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, disengageActionPresentation, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+import { actionPlanningPreview, planningControlsPresentation, maneuverPlanningPreview, DISPERSION_DESCRIPTION, terrainTooltipRows, actionResourcePreview, actionTilePresentation, buildManeuverOptions, canSelectWeaponAttackTarget, evasionPresentation, interceptionEffectRows, maneuverActionPresentation, maneuverPreviewHeading, maneuverResourcePreview, resourceMetricsText, resourcePresentation, routeConsequenceRows, routePreviewKindsAt, segmentedResourcePresentation, shouldShowManeuverRoutes, systemActionPresentation, weaponSelectionPresentation } from "./ui-rules.js";
+
+test("balance presentation preserves turn evasion", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "wasps");
+  unit.activationMovement.elements.push({ type: "move", evasionGain: 4 });
+  assert.equal(evasionPresentation(unit, { route: { steps: [], actions: [{ type: "turn" }] } }).preview, 4);
+  assert.equal(evasionPresentation(unit, { route: { steps: [{}, {}] } }).preview, 12);
+});
 
 test("selected system previews match real resolution and expose only applicable budgets", () => {
   for (const [id, systemActionId, names] of [
@@ -73,15 +81,15 @@ test("compact dispersion shows only red accuracy penalty and next activation dur
 test("evasive bonus range follows ship speed, spent movement, capacity and lock", () => {
   for (const [speed, spent, steps, locked, capacity, range] of [
     [0, 0, 0, false, 0, "0–0"],
-    [1, 0, 0, false, 1, "0–7,5"],
-    [2, 0, 0, false, 2, "0–13,5"],
-    [3, 0, 0, false, 3, "0–18"],
-    [4, 0, 0, false, 4, "0–21"],
-    [8, 0, 0, false, 8, "0–22,5"],
-    [4, 2, 2, false, 4, "13,5–21"],
-    [4, 4, 2, false, 4, "13,5–13,5"],
-    [4, 0, 0, false, 2, "0–13,5"],
-    [4, 1, 0, true, 4, "0–0"]
+    [1, 0, 0, false, 1, "0–4"],
+    [2, 0, 0, false, 2, "0–8"],
+    [3, 0, 0, false, 3, "0–12"],
+    [4, 0, 0, false, 4, "0–16"],
+    [8, 0, 0, false, 8, "0–25"],
+    [4, 2, 2, false, 4, "6–14"],
+    [4, 4, 2, false, 4, "6–6"],
+    [4, 0, 0, false, 2, "0–8"],
+    [4, 1, 0, true, 4, "0–12"]
   ]) {
     const state = createBattleState();
     const unit = unitById(state, "swift");
@@ -100,7 +108,7 @@ test("evasive preview includes speed from resolved engine boost", () => {
   state.activeAction = { type: "system-action", systemActionId: "reactor-to-engines", actorId: unit.id, status: "planning" };
   assert.ok(confirmSystemAction(state));
   const preview = actionPlanningPreview(state, unit, { type: "system-action", systemActionId: "evasive-maneuver" });
-  assert.ok(preview.notes.includes("Бонус уклонения от движения +0–18 п.п. · зависит от пройденного пути"));
+  assert.ok(preview.notes.includes("Бонус уклонения от движения +0–12 п.п. · зависит от пройденного пути"));
 });
 
 test("unavailable previews do not promise bonuses and retain full required cost", () => {
@@ -116,28 +124,6 @@ test("unavailable previews do not promise bonuses and retain full required cost"
   assert.equal(actionResourcePreview(state, unit).energy, 1);
   assert.ok(preview.gauges.every(gauge => Object.keys(gauge.preview).length === 0));
   assert.match(preview.notes.join(" "), /Недостаточно/);
-});
-
-test("disengage preview costs and negative evasion apply even on failure", () => {
-  for (const roll of [1, 100]) {
-    const state = createBattleState();
-    const unit = unitById(state, "wasps");
-    const enemy = unitById(state, "mantis");
-    state.activeUnitId = unit.id;
-    state.lifecycle = "ActionPlanning";
-    state.activeAction = { type: "disengage", actorId: unit.id, status: "planning" };
-    unit.position = { q: 0, r: 0 };
-    enemy.position = { q: 1, r: 0 };
-    unit.engagedWith = [enemy.id];
-    enemy.engagedWith = [unit.id];
-    const preview = actionPlanningPreview(state, unit);
-    assert.equal(preview.evasionDelta, -10);
-    assert.deepEqual(preview.gauges.map(gauge => gauge.name), ["speed"]);
-    assert.match(preview.notes.join(" "), /Шанс отрыва.*даже при неудаче/);
-    assert.equal(confirmDisengageAction(state, () => roll).success, roll === 1);
-    assert.equal(currentEvasion(unit), preview.evasion.preview);
-    assert.equal(resourcePresentation(unit).speed.remaining, segmentedResourcePresentation(preview.gauges[0].resource, preview.gauges[0].preview).remaining);
-  }
 });
 
 test("weapon previews show only actual energy cost without unrelated stats", () => {
@@ -166,7 +152,7 @@ test("rules markup links four accessible tabs and panels with only activation in
     assert.ok(dialog.includes(`id="${tab[2]}" role="tabpanel" aria-labelledby="${tab[1]}" tabindex="0"${index ? " hidden" : ""}>`));
   });
   assert.doesNotMatch(dialog, /MOVEMENT PLAYTEST 1|0–3|до 25 п\.п\.|капиталь/i);
-  for (const fact of [/60° — 1 Манёвренность/, /Последовательные повороты разрешены/, /5\/9\/12\/14\/15/, /22,5 п\.п\./, /\+15 п\.п\. от Рассеивания сохраняются/, /не гарантирует защиту от скрытых угроз/, /не проходит через другую эскадрилью/, /У Шершня Форсаж бесплатный/, /у Киро башня/]) assert.match(dialog, fact);
+  for (const fact of [/60° — 1 Манёвренность/, /Последовательные повороты разрешены/, /эскадрильям 4 п\.п\./, /25 п\.п\./, /Повороты не добавляют и не стирают/, /не гарантирует защиту от скрытых угроз/, /не проходит через другую эскадрилью/, /У Шершня Форсаж бесплатный/, /у Киро башня/]) assert.match(dialog, fact);
 });
 
 test("rules dialog integration protects battle planning and supplies narrow-screen styling", () => {
@@ -330,6 +316,7 @@ test("UI resource presentation uses authoritative activation remainders", () => 
 
 test("UI Evasion presentation derives current and preview values from accumulated domain facts", () => {
   const unit = {
+    hullType: "cruiser",
     baseEvasion: 6,
     evasiveManeuver: false,
     evasionLocked: false,
@@ -346,10 +333,10 @@ test("UI Evasion presentation derives current and preview values from accumulate
   const selected = { route: route({ steps: [{}, {}], movementCost: 3 }) };
   const turnOnly = { route: route({ position: { q: 0, r: 0 }, steps: [], movementCost: 0, turnsSpent: 1, actions: [{ type: "turn" }] }) };
 
-  assert.deepEqual(evasionPresentation(unit, selected), { current: 15, movement: 9, preview: 20, previewMovement: 14 });
-  assert.deepEqual(evasionPresentation(unit, turnOnly), { current: 15, movement: 9, preview: 0, previewMovement: 0 });
-  assert.deepEqual(evasionPresentation(unit, null), { current: 15, movement: 9, preview: 15, previewMovement: 9 });
-  assert.deepEqual(evasionPresentation({ ...unit, evasionLocked: true }, selected), { current: 0, movement: 0, preview: 0, previewMovement: 0 });
+  assert.deepEqual(evasionPresentation(unit, selected), { current: 4, movement: 4, preview: 8, previewMovement: 8 });
+  assert.deepEqual(evasionPresentation(unit, turnOnly), { current: 4, movement: 4, preview: 4, previewMovement: 4 });
+  assert.deepEqual(evasionPresentation(unit, null), { current: 4, movement: 4, preview: 4, previewMovement: 4 });
+  assert.deepEqual(evasionPresentation({ ...unit, evasionLocked: true }, selected), { current: 4, movement: 4, preview: 8, previewMovement: 8 });
 });
 
 test("dispersion evasion preview follows hover and selection without mutation or double counting", () => {
@@ -491,7 +478,7 @@ test("system action tiles show authoritative cooldown rounds without confusing a
 });
 
 test("system action presentation exposes domain affordability reasons", () => {
-  const unit = { kind: "capital", maneuver: 2, maneuverSpent: 2, reactor: { capacity: 1, currentEnergy: 0 }, engineId: "engine", energySpent: 1 };
+  const unit = { kind: "capital", hullId: "swiftFrigate", maneuver: 2, maneuverSpent: 2, reactor: { capacity: 1, currentEnergy: 0 }, engineId: "engine", energySpent: 1 };
   assert.deepEqual(systemActionPresentation({ lifecycle: "ActionChoice", activeAction: null }, unit, "evasive-maneuver"), {
     selected: false, canSelect: false, canConfirm: false, canCancel: false, reasons: ["Недостаточно Манёвренности: требуется 1, доступно 0"]
   });
@@ -501,7 +488,7 @@ test("system action presentation exposes domain affordability reasons", () => {
 });
 
 test("system action presentation exposes selection, preview, confirm, and cancel states", () => {
-  const unit = { kind: "capital", maneuver: 2, maneuverSpent: 0, reactor: { currentEnergy: 2 } };
+  const unit = { kind: "capital", hullId: "swiftFrigate", maneuver: 2, maneuverSpent: 0, reactor: { currentEnergy: 2 } };
   assert.deepEqual(systemActionPresentation({ lifecycle: "ActionChoice", activeAction: null }, unit, "evasive-maneuver"), {
     selected: false, canSelect: true, canConfirm: false, canCancel: false
   });
@@ -577,10 +564,9 @@ test("maneuver action availability requires an actual nonempty legal route witho
   swift.engagedWith = ["enemy"];
   assert.deepEqual(maneuverActionPresentation(state, swift), {
     selected: false,
-    canSelect: false,
+    canSelect: true,
     canConfirm: false,
-    canCancel: false,
-    reasons: ["Обычный манёвр запрещён: эскадрилья связана Перехватом, требуется Отрыв"]
+    canCancel: false
   });
 
   swift.engagedWith = [];
@@ -592,39 +578,13 @@ test("maneuver action availability requires an actual nonempty legal route witho
   assert.equal(maneuverActionPresentation(state, swift).canSelect, false);
 });
 
-test("disengage action is visible only for a linked squadron and exposes cost, chance, and confirmation", () => {
-  const state = createBattleState();
-  const squadron = unitById(state, "wasps");
-  const enemy = unitById(state, "mantis");
-  state.units = [squadron, enemy];
-  state.activeUnitId = squadron.id;
-  state.initiativeOrder = [squadron.id, enemy.id];
-  state.lifecycle = "ActionChoice";
-  squadron.position = { q: 0, r: 0 };
-  enemy.position = { q: 1, r: 0 };
-  squadron.engagedWith = [enemy.id];
-  enemy.engagedWith = [squadron.id];
-
-  const available = disengageActionPresentation(state, squadron);
-  assert.equal(available.visible, true);
-  assert.equal(available.canSelect, true);
-  assert.deepEqual({ speedCost: available.preview.speedCost, chance: available.preview.chance }, { speedCost: 1, chance: 40 });
-
-  state.lifecycle = "ActionPlanning";
-  state.activeAction = { type: "disengage", actorId: squadron.id };
-  assert.equal(disengageActionPresentation(state, squadron).canConfirm, true);
-  squadron.engagedWith = [];
-  enemy.engagedWith = [];
-  assert.equal(disengageActionPresentation(state, squadron).visible, false);
-});
-
 test("interception effects enumerate every current reciprocal link", () => {
-  const unit = { id: "actor", sideId: "azure", engagedWith: ["enemy-z", "stale", "enemy-a"] };
+  const unit = { id: "actor", kind: "squadron", position: { q: 0, r: 0 }, sideId: "azure", engagedWith: ["enemy-z", "stale", "enemy-a"] };
   const state = { units: [
     unit,
-    { id: "enemy-z", name: "Enemy Z", kind: "squadron", sideId: "crimson", engagedWith: [unit.id] },
-    { id: "enemy-a", name: "Enemy A", kind: "squadron", sideId: "crimson", engagedWith: [unit.id] },
-    { id: "stale", name: "Stale", kind: "squadron", sideId: "crimson", engagedWith: [] }
+    { id: "enemy-z", name: "Enemy Z", kind: "squadron", canIntercept: true, position: { q: 1, r: 0 }, sideId: "crimson", engagedWith: [unit.id] },
+    { id: "enemy-a", name: "Enemy A", kind: "squadron", canIntercept: true, position: { q: 1, r: 0 }, sideId: "crimson", engagedWith: [unit.id] },
+    { id: "stale", name: "Stale", kind: "squadron", position: { q: 4, r: 0 }, sideId: "crimson", engagedWith: [] }
   ] };
 
   assert.deepEqual(interceptionEffectRows(state, unit).map(effect => effect.name), ["Перехват · Enemy A", "Перехват · Enemy Z"]);

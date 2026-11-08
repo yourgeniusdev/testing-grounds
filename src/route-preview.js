@@ -1,4 +1,4 @@
-import { attackGeometry, effectiveWeapon, hitChance, isPositionInFiringArc, weaponHitDamage } from "./battle.js";
+import { attackGeometry, effectiveWeapon, hitChance, weaponAttackAvailability, weaponHitDamage } from "./battle.js";
 import { hexDistance, overwatchAvailability } from "./domain.js";
 
 export function isKnownTo(entity, sideId) {
@@ -46,6 +46,7 @@ export function guaranteedEffectPreviewDescriptor(content, unit) {
 export function aaPreviewDescriptors(state, target, position) {
   if (target.kind !== "squadron") return [];
   const previewTarget = { ...target, position };
+  const previewState = { ...state, units: state.units.map(unit => unit.id === target.id ? previewTarget : unit) };
   const initiative = new Map((state.initiativeOrder || []).map((id, index) => [id, index]));
   const candidates = state.units
     .filter(owner => owner.id !== target.id && owner.sideId !== target.sideId && (owner.integrity ?? 1) > 0 && isKnownTo(owner, target.sideId))
@@ -55,8 +56,8 @@ export function aaPreviewDescriptors(state, target, position) {
     const weapons = [...(owner.weapons || [])].sort((left, right) => (left.slotOrder || 0) - (right.slotOrder || 0) || String(left.id).localeCompare(String(right.id)));
     for (const weapon of weapons) {
       if (!isKnownTo(weapon, target.sideId) || !overwatchAvailability(owner, weapon).available) continue;
-      if (hexDistance(owner.position, position) > weapon.maxRange || !isPositionInFiringArc(owner.position, owner.heading || 0, position, weapon.firingArc ?? weapon.mount, weapon.orientation)) continue;
-      const geometry = attackGeometry({ ...state, units: state.units.map(unit => unit.id === target.id ? previewTarget : unit) }, target.id, new Set(), owner);
+      if (!weaponAttackAvailability(previewState, owner.id, weapon.id, target.id, { reaction: true }).available) continue;
+      const geometry = attackGeometry(previewState, target.id, new Set(), owner);
       const effective = effectiveWeapon(owner, weapon);
       const probability = Math.max(0, hitChance(effective, previewTarget, geometry.endpointCover) - geometry.cover) / 100;
       const shots = effective.shots;
@@ -89,7 +90,7 @@ export function aaPreviewDescriptors(state, target, position) {
 export function interceptionPreviewDescriptors(state, unit, position) {
   if (unit.kind !== "squadron") return [];
   return [...new Set(state.units
-    .filter(other => other.id !== unit.id && other.kind === "squadron" && other.sideId !== unit.sideId && isKnownTo(other, unit.sideId) && hexDistance(position, other.position) === 1)
+    .filter(other => other.id !== unit.id && other.kind === "squadron" && other.canIntercept && other.sideId !== unit.sideId && isKnownTo(other, unit.sideId) && hexDistance(position, other.position) === 1)
     .map(other => other.id))]
     .sort((left, right) => left.localeCompare(right))
     .map(sourceId => ({ kind: "interception", sourceId, sourceName: state.units.find(unit => unit.id === sourceId)?.name || sourceId, effect: "Interception", probability: 1, min: 0, max: 0, expectedHarm: 0, negative: true, guaranteed: true }));

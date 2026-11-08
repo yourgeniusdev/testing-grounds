@@ -1,17 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createBattleState, resolveHazardConsequences, unitById } from "./domain.js";
+import { applyDamage, createBattleState, resolveHazardConsequences, unitById } from "./domain.js";
+
+test("nonweapon armor damage is explicitly unsupported and hazards bypass rating", () => {
+  const state = createBattleState();
+  const unit = unitById(state, "atlas");
+  assert.throws(() => applyDamage(state, unit, 100, "stay:test", "armor"), /armor/i);
+  assert.equal(unit.armor, 200);
+  const hazard = state.scenario.contents.find(content => content.type === "minefield").hazard;
+  assert.deepEqual([hazard.min, hazard.max], [800, 1600]);
+  resolveHazardConsequences(state, unit, [{ ...hazard, probability: 1, sourceId: "test" }], () => 0);
+  assert.deepEqual([unit.shield, unit.armor, unit.integrity], [800, 200, 2000]);
+});
 
 const mine = { sourceId: "mines-a", sourceName: "Минное поле", probability: 1, min: 8, max: 8, effect: "урон целостности" };
 
 test("nonlethal hazard damage recalculates squadron stack", () => {
   const state = createBattleState();
   const squadron = unitById(state, "wasps");
-  const outcomes = resolveHazardConsequences(state, squadron, [mine], () => 0);
-  assert.equal(squadron.integrity, 7);
+  const consequence = { ...mine, min: 400, max: 400 };
+  const outcomes = resolveHazardConsequences(state, squadron, [consequence], () => 0);
+  assert.equal(squadron.integrity, 500);
   assert.equal(squadron.stack, 2);
   assert.equal(state.units.includes(squadron), true);
-  assert.deepEqual(outcomes, [{ consequence: mine, hit: true, damage: 8, destroyed: false, winner: null }]);
+  assert.deepEqual(outcomes, [{ consequence, hit: true, damage: 400, destroyed: false, winner: null }]);
   assert.deepEqual(state.events.map(event => event.action), ["damage"]);
   assert.equal(state.events[0].cause, "hazard:mines-a");
 });

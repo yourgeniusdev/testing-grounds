@@ -37,6 +37,7 @@ function unit(overrides = {}) {
     name: "Mover",
     sideId: "azure",
     kind: "squadron",
+    canIntercept: true,
     position: { q: 0, r: 0 },
     heading: 0,
     currentSpeed: 5,
@@ -147,7 +148,7 @@ test("maneuver pipeline executes movement stepwise through hazards, AA, intercep
   assert.deepEqual(state.scenario.contents.map(content => content.id), ["asteroid", "mine"]);
 
   domain.beginActionPlanning(state, { type: "weapon-attack", reason: "player-choice", slotId: mover.weapons[0].id });
-  const attackPlan = confirmWeaponAttackAction(state, mover.id, mover.weapons[0].id, passThroughCapital.id, () => 100, () => 0);
+  const attackPlan = confirmWeaponAttackAction(state, mover.id, mover.weapons[0].id, interceptor.id, () => 100, () => 0);
   assert.ok(attackPlan);
   assert.equal(applyAttackStep(state, attackPlan, 0).status, "applied");
 

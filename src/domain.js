@@ -4,7 +4,6 @@ import { aaPreviewDescriptors, guaranteedEffectPreviewDescriptor, hazardPreviewD
 
 export const DIRECTIONS = [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]];
 export const ARROWS = ["→", "↗", "↖", "←", "↙", "↘"];
-export const EVASION_BY_STEPS = [0, 5, 9, 12, 14, 15];
 
 function deploymentHeading(sideId) {
   return sideId === "azure" ? 0 : sideId === "crimson" ? 3 : null;
@@ -36,31 +35,32 @@ export function signedTurn(from, to) {
   return delta;
 }
 
-export function movementEvasion(stepCount, evasiveManeuver = false) {
-  const base = EVASION_BY_STEPS[Math.min(stepCount, EVASION_BY_STEPS.length - 1)];
-  return Math.min(25, Math.round(base * (evasiveManeuver ? 1.5 : 1) * 10) / 10);
-}
-
 export function activationMovementFacts(unit) {
   return unit?.activationMovement?.elements || [];
 }
 
 export function movementEvasionFromFacts(unit) {
-  if (!unit || unit.evasionLocked) return 0;
+  if (!unit) return 0;
   if (!unit.activationMovement) return unit.movementEvasion || 0;
-  const steps = activationMovementFacts(unit).filter(element => element.type === "move").length;
-  return movementEvasion(steps, unit.evasiveManeuver);
+  return Math.min(25, activationMovementFacts(unit).filter(element => element.type === "move").reduce((total, element) => total + (element.evasionGain ?? movementEvasionPerHex(unit)), 0));
+}
+
+export function movementEvasionPerHex(unit) {
+  return unit?.kind === "squadron" ? 4 : ({ battleship: 1, cruiser: 2, destroyer: 2, frigate: 3, corvette: 3 }[unit?.hullType] || 0);
+}
+
+export function movementEvasionAfterSteps(unit, steps) {
+  return Math.min(25, movementEvasionFromFacts(unit) + steps * (movementEvasionPerHex(unit) + (unit?.evasiveManeuver ? 1 : 0)));
 }
 
 export function evasiveMovementBonusRange(unit) {
-  if (unit?.evasionLocked) return { min: 0, max: 0 };
-  const steps = activationMovementFacts(unit).filter(element => element.type === "move").length;
+  const current = movementEvasionFromFacts(unit);
   const remainingSteps = Math.floor(activationResources(unit).speed.remaining);
-  return { min: movementEvasion(steps, true), max: movementEvasion(steps + remainingSteps, true) };
+  return { min: current, max: movementEvasionAfterSteps({ ...unit, evasiveManeuver: true }, remainingSteps) };
 }
 
 export function currentEvasion(unit) {
-  return (unit?.evasionLocked ? 0 : (unit?.baseEvasion || 0) + movementEvasionFromFacts(unit) + (unit?.disengageEvasionPenalty || 0)) + (unit?.dispersionActive ? 15 : 0);
+  return Math.min(25, movementEvasionFromFacts(unit) + (unit?.dispersionActive ? 15 : 0));
 }
 
 function updateMovementEvasion(unit) {
@@ -123,11 +123,11 @@ export function createScenario() {
     return placed(col, row, { ...profile, ...data, heading: deploymentHeading(instance.sideId), ...(reactor ? { reactor } : {}) });
   });
   const contents = [
-    placed(-2, -1, { id: "asteroids-a", kind: "terrain", type: "asteroidField", label: "Астероидное поле", hazard: { probability: 0.35, min: 4, max: 10, effect: "урон целостности" } }),
-    placed(-1, 0, { id: "debris-a", kind: "terrain", type: "debrisField", label: "Поле обломков", hazard: { probability: 0.25, min: 2, max: 7, effect: "урон целостности" } }),
-    placed(1, -1, { id: "asteroids-b", kind: "terrain", type: "asteroidField", label: "Астероидное поле", hazard: { probability: 0.35, min: 4, max: 10, effect: "урон целостности" } }),
+    placed(-2, -1, { id: "asteroids-a", kind: "terrain", type: "asteroidField", label: "Астероидное поле", hazard: { probability: 0.35, min: 400, max: 1000, effect: "урон целостности" } }),
+    placed(-1, 0, { id: "debris-a", kind: "terrain", type: "debrisField", label: "Поле обломков", hazard: { probability: 0.25, min: 200, max: 700, effect: "урон целостности" } }),
+    placed(1, -1, { id: "asteroids-b", kind: "terrain", type: "asteroidField", label: "Астероидное поле", hazard: { probability: 0.35, min: 400, max: 1000, effect: "урон целостности" } }),
     placed(-2, 3, { id: "nebula-a", kind: "terrain", type: "nebula", label: "Туманность" }),
-    placed(1, 3, { id: "mines-a", kind: "hazard", type: "minefield", label: "Минное поле", hazard: { probability: 0.55, min: 8, max: 16, effect: "урон целостности" } }),
+    placed(1, 3, { id: "mines-a", kind: "hazard", type: "minefield", label: "Минное поле", hazard: { probability: 0.55, min: 800, max: 1600, effect: "урон целостности" } }),
     placed(2, -3, { id: "rock-a", kind: "object", type: "largeAsteroid", label: "Крупный астероид" }),
     placed(0, 1, { id: "station-a", kind: "object", type: "station", label: "Станция" })
   ];
@@ -153,6 +153,7 @@ export function cooldownLabel(rounds) {
 }
 
 export function systemActionVisible(unit, id) {
+  if (id === "evasive-maneuver") return unit?.kind === "squadron" ? ["fighter", "interceptor"].includes(unit.craftType) : ["swiftFrigate", "dartCorvette"].includes(unit?.hullId);
   if (id === "dispersion") return unit?.kind === "squadron" && ["fighter", "interceptor"].includes(unit.craftType);
   if (id === "interceptor-boost") return unit?.kind === "squadron" && unit.craftType === "interceptor";
   return Boolean(SYSTEM_ACTIONS[id]) && (!unit?.kind || unit.kind === "capital");
@@ -324,8 +325,6 @@ function eventUnitName(state, event, id = event.actorId) {
 
 function maneuverEventMessage(state, event) {
   const name = eventUnitName(state, event);
-  if (event.action === "activation-action-confirm" && event.actionType === "disengage") return `${name}: Отрыв подтверждён (Скорость ${event.costs?.speed || 0}; шанс ${event.chance}%).`;
-  if (event.action === "disengage-resolve") return event.success ? `${name}: Отрыв успешен (${event.roll}/${event.chance}); все связи сняты.` : `${name}: Отрыв не удался (${event.roll}/${event.chance}); связи сохранены.`;
   if (event.action === "activation-action-confirm") return `${name}: манёвр подтверждён (${event.plannedElements} элем.; Скорость ${event.plannedCosts?.speed || 0}; Манёвренность ${event.plannedCosts?.maneuver || 0}).`;
   if (event.action === "maneuver-turn") return `${name}: поворот, курс ${event.before?.heading} → ${event.after?.heading}.`;
   if (event.action === "maneuver-move") return `${name}: шаг ${key(event.before.position.q, event.before.position.r)} → ${key(event.after.position.q, event.after.position.r)}.`;
@@ -344,7 +343,7 @@ function maneuverEventMessage(state, event) {
 }
 
 export function buildManeuverLog(state, eventCursor = 0) {
-  const maneuverActionIds = new Set((state.events || []).filter(event => event.action === "activation-action-confirm" && ["maneuver", "disengage"].includes(event.actionType)).map(event => event.actionId));
+  const maneuverActionIds = new Set((state.events || []).filter(event => event.action === "activation-action-confirm" && event.actionType === "maneuver").map(event => event.actionId));
   const includedEventIds = new Set();
   const events = (state.events || []).filter(event => {
     const included = maneuverActionIds.has(event.actionId) || maneuverActionIds.has(event.maneuverActionId) || includedEventIds.has(event.causeEventId);
@@ -367,6 +366,7 @@ export function buildBattleLog(state, eventCursor = 0) {
 }
 
 export function applyDamage(state, unit, amount, cause = "damage", startLayer = "shield", context = {}) {
+  if (startLayer === "armor") throw new Error("Direct armor damage is unsupported");
   if (!unit || !state.units.includes(unit) || amount <= 0) return { amount: 0, destroyed: false };
   const before = { shield: unit.shield, armor: unit.armor, integrity: unit.integrity };
   let remaining = amount;
@@ -470,7 +470,7 @@ export function destroyUnit(state, unit, context = {}) {
   const wasActive = state.activeUnitId === unit.id;
   const eventContext = { ...context };
   delete eventContext.destructionReason;
-  const debris = { id: `debris-${unit.id}-${state.roundNumber}`, kind: "terrain", type: "debrisField", label: `Обломки ${unit.name}`, position: { ...unit.position }, hazard: { probability: 0.25, min: 2, max: 7, effect: "урон целостности" } };
+  const debris = { id: `debris-${unit.id}-${state.roundNumber}`, kind: "terrain", type: "debrisField", label: `Обломки ${unit.name}`, position: { ...unit.position }, hazard: { probability: 0.25, min: 200, max: 700, effect: "урон целостности" } };
   state.units = state.units.filter(candidate => candidate.id !== unit.id);
   state.initiativeOrder = state.initiativeOrder.filter(id => id !== unit.id);
   for (const candidate of state.units) candidate.engagedWith = candidate.engagedWith?.filter(id => id !== unit.id) || candidate.engagedWith;
@@ -670,15 +670,16 @@ function adjacentEnemySquadronIds(state, unit, position = unit.position) {
     .sort((left, right) => left.localeCompare(right));
 }
 
+export function incomingInterceptionIds(state, unit) {
+  return adjacentEnemySquadronIds(state, unit).filter(id => unitById(state, id)?.canIntercept);
+}
+
 export function resolvePostEntryInterceptions(state, unit, context = {}) {
-  const linkedIds = adjacentEnemySquadronIds(state, unit);
-  if (!linkedIds.length) return [];
-  unit.engagedWith = [...new Set([...(unit.engagedWith || []), ...linkedIds])].sort((left, right) => left.localeCompare(right));
-  for (const linkedId of linkedIds) {
-    const linked = unitById(state, linkedId);
-    linked.engagedWith = [...new Set([...(linked.engagedWith || []), unit.id])].sort((left, right) => left.localeCompare(right));
+  for (const candidate of state.units) {
+    if (candidate.kind === "squadron") candidate.engagedWith = incomingInterceptionIds(state, candidate);
   }
-  if (context.planId) recordEvent(state, "interception-create", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...linkedIds], linkedIds, linkedNames: linkedIds.map(id => unitById(state, id)?.name || id), ...context });
+  const linkedIds = incomingInterceptionIds(state, unit);
+  if (context.planId && linkedIds.length) recordEvent(state, "interception-create", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...linkedIds], linkedIds, linkedNames: linkedIds.map(id => unitById(state, id)?.name || id), ...context });
   return linkedIds;
 }
 
@@ -729,7 +730,7 @@ function expectedResourceSpent(option, name) {
 function plannedManeuver(state, option) {
   const unit = activeUnit(state);
   const route = option?.route;
-  if (!unit || unit.kind === "squadron" && unit.engagedWith?.length || !route || !option.finalState?.hex) return null;
+  if (!unit || !route || !option.finalState?.hex || incomingInterceptionIds(state, unit).length && route.actions?.some(action => action.type === "move")) return null;
   if (!samePosition(route.path?.[0], unit.position) || !samePosition(option.finalState.hex, route.position) || option.finalState.heading !== route.heading) return null;
   const start = { position: { ...unit.position }, heading: unit.heading };
   const elements = [];
@@ -792,7 +793,7 @@ function executionResult(progress, result) {
 }
 
 function recordCompletedElement(unit, progress, plan, elementIndex, transition) {
-  const fact = deepFreeze({ type: transition.type, planId: plan.id, elementIndex, speedCost: transition.speedCost, maneuverCost: transition.maneuverCost });
+  const fact = deepFreeze({ type: transition.type, planId: plan.id, elementIndex, speedCost: transition.speedCost, maneuverCost: transition.maneuverCost, evasionGain: transition.type === "move" ? movementEvasionPerHex(unit) + (unit.evasiveManeuver ? 1 : 0) : 0 });
   progress.completedElements.push(fact);
   unit.activationMovement ??= { elements: [], steps: 0, turns: 0 };
   unit.activationMovement.elements.push(fact);
@@ -828,10 +829,7 @@ function recordManeuverOutcome(state, unit, progress, plan, outcome, reason, cau
 
 function finishManeuver(state, unit, progress, plan) {
   unit.canWait = false;
-  if (!progress.executedMoves && progress.executedTurns) {
-    unit.movementEvasion = 0;
-    unit.evasionLocked = true;
-  } else updateMovementEvasion(unit);
+  updateMovementEvasion(unit);
   progress.finished = true;
   const started = progress.executedMoves + progress.executedTurns > 0;
   if (started) unit.hasResolvedManeuverThisActivation = true;
@@ -1067,9 +1065,10 @@ class ManeuverRouteMap extends Map {
 }
 
 export function hasLegalManeuverRoute(state, unit) {
-  if (!unit || unit.kind === "squadron" && unit.engagedWith?.length) return false;
+  if (!unit) return false;
   const resources = activationResources(unit);
   if (resources.maneuver.remaining > 0 && traversal(state, unit, unit.position).canStop) return true;
+  if (incomingInterceptionIds(state, unit).length) return false;
   let position = { ...unit.position };
   let speed = 0;
   while (speed < resources.speed.remaining) {
@@ -1085,10 +1084,10 @@ export function hasLegalManeuverRoute(state, unit) {
 }
 
 export function planRoutes(state, unit, policy) {
-  if (!unit || unit.kind === "squadron" && unit.engagedWith?.length) return new ManeuverRouteMap();
+  if (!unit) return new ManeuverRouteMap();
   const resources = activationResources(unit);
   const maneuverBudget = resources.maneuver.remaining;
-  const speedBudget = resources.speed.remaining;
+  const speedBudget = incomingInterceptionIds(state, unit).length ? 0 : resources.speed.remaining;
   const startPosition = { ...unit.position };
   const startHeading = Number.isInteger(unit.heading) ? unit.heading : 0;
   const start = { position: startPosition, heading: startHeading, movementCost: 0, turnsSpent: 0, steps: [], actions: [], consequences: [], previewConsequences: [], path: [{ ...startPosition }], visited: new Set([key(startPosition.q, startPosition.r)]), interceptions: [], stoppable: true };
@@ -1155,7 +1154,7 @@ function actionContext(state, action, eventId) {
 
 export function beginActionPlanning(state, action) {
   const unit = activeUnit(state);
-  if (!unit || state.lifecycle !== "ActionChoice" || state.activeAction || !action || !["maneuver", "weapon-attack", "system-action", "disengage"].includes(action.type) || !action.reason) return null;
+  if (!unit || state.lifecycle !== "ActionChoice" || state.activeAction || !action || !["maneuver", "weapon-attack", "system-action"].includes(action.type) || !action.reason) return null;
   if (action.type === "system-action" && !systemActionVisible(unit, action.systemActionId)) return null;
   if (action.type === "weapon-attack" && !unit.weapons.some(weapon => weapon.id === action.slotId)) return null;
   if (!actionAvailability(state, action, unit).available) return null;
@@ -1190,9 +1189,7 @@ export function confirmManeuverAction(state, option) {
   const availability = actionAvailability(state, { type: "maneuver", option });
   if (!availability.available) return null;
   const planned = availability.details.plan;
-  const continuationEventId = unit.disengageContinuationEventId || null;
-  const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id], actionType: action.type, actionReason: action.reason, planId: planned.id, plannedElements: planned.elements.length, plannedCosts: { ...planned.costs }, start: { position: { ...planned.start.position }, heading: planned.start.heading }, finalState: { position: { ...planned.finalState.position }, heading: planned.finalState.heading }, ...(continuationEventId ? { causeEventId: continuationEventId, continuationOfEventId: continuationEventId } : {}) });
-  if (continuationEventId) delete unit.disengageContinuationEventId;
+  const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id], actionType: action.type, actionReason: action.reason, planId: planned.id, plannedElements: planned.elements.length, plannedCosts: { ...planned.costs }, start: { position: { ...planned.start.position }, heading: planned.start.heading }, finalState: { position: { ...planned.finalState.position }, heading: planned.finalState.heading } });
   const context = actionContext(state, action, declaration.eventId);
   const plan = deepFreeze({ ...planned, actionId: declaration.eventId, actionContext: context });
   state.activeAction = Object.freeze({ ...action, status: "resolving", actionId: declaration.eventId, planId: plan.id });
@@ -1208,13 +1205,11 @@ export function beginActivation(state) {
   state.lifecycle = "ActivationStart";
   unit.activationStartedThisRound = true;
   unit.canWait = true;
-  delete unit.disengageContinuationEventId;
   unit.evasionLocked = false;
   unit.activationMovement = { elements: [], steps: 0, turns: 0 };
   unit.movementEvasion = 0;
   unit.evasiveManeuver = false;
   unit.dispersionActive = false;
-  unit.disengageEvasionPenalty = 0;
   if (unit.engineBoostActive) unit.currentSpeed = Math.max(0, unit.currentSpeed - 1);
   unit.engineBoostActive = false;
   unit.usedSystemActions = [];
@@ -1263,8 +1258,7 @@ export function actionAvailability(state, request, explicitUnit = null) {
   let details = null;
   if (!unit) return createAvailability({ action, reasons, cost, resources });
   if (action.type === "maneuver") {
-    if (unit.kind === "squadron" && unit.engagedWith?.length) reasons.push(availabilityReason("maneuver.intercepted", "Обычный манёвр запрещён: эскадрилья связана Перехватом, требуется Отрыв", { linkedIds: [...unit.engagedWith].sort() }));
-    else if (action.option) {
+    if (action.option) {
       const plan = plannedManeuver(state, action.option);
       if (!plan) reasons.push(availabilityReason("action.invalid", "Маршрут устарел или подменён"));
       else {
@@ -1275,14 +1269,7 @@ export function actionAvailability(state, request, explicitUnit = null) {
       if (resources.speed.remaining <= 0 && resources.maneuver.remaining <= 0) reasons.push(...insufficientResourceReasons(resources, { speed: 1, maneuver: 1 }));
       reasons.push(availabilityReason("maneuver.no-route", "Нет допустимого маршрута"));
     }
-  } else if (action.type === "disengage") {
-    const preview = disengagePreview(state, unit);
-    cost = { speed: preview.speedCost };
-    details = preview;
-    const declaredIds = [...new Set(unit.engagedWith || [])];
-    if (unit.kind !== "squadron" || !declaredIds.length) reasons.push(availabilityReason("disengage.not-intercepted", unit.kind === "squadron" ? "Эскадрилья не связана Перехватом" : "Отрыв доступен только эскадрилье"));
-    else if (preview.linkedIds.length !== declaredIds.length) reasons.push(availabilityReason("disengage.invalid-links", "Связи Перехвата несимметричны или недействительны", { declaredIds: declaredIds.sort(), validIds: preview.linkedIds }));
-    reasons.push(...insufficientResourceReasons(resources, cost));
+
   } else if (action.type === "weapon-attack") {
     const weapon = unit.weapons?.find(candidate => candidate.id === action.slotId);
     if (!weapon) reasons.push(availabilityReason("action.invalid", "Оружейный слот отсутствует", { slotId: action.slotId || null }));
@@ -1318,41 +1305,6 @@ export function actionAvailability(state, request, explicitUnit = null) {
   return createAvailability({ action, reasons, cost, resources, capacityChange, readiness, details });
 }
 
-function validDisengageLinks(state, unit) {
-  if (unit?.kind !== "squadron") return [];
-  return [...new Set(unit.engagedWith || [])]
-    .map(id => unitById(state, id))
-    .filter(linked => linked?.kind === "squadron" && linked.sideId !== unit.sideId && hexDistance(unit.position, linked.position) === 1 && linked.engagedWith?.includes(unit.id))
-    .sort((left, right) => left.id.localeCompare(right.id));
-}
-
-function disengageAllies(state, unit, enemies) {
-  const enemyIds = new Set(enemies.map(enemy => enemy.id));
-  return state.units
-    .filter(candidate => candidate.id !== unit.id && candidate.kind === "squadron" && candidate.sideId === unit.sideId && hexDistance(unit.position, candidate.position) === 1)
-    .filter(candidate => validDisengageLinks(state, candidate).some(enemy => enemyIds.has(enemy.id)))
-    .sort((left, right) => left.id.localeCompare(right.id));
-}
-
-export function disengagePreview(state, unit = activeUnit(state)) {
-  const linkedEnemies = validDisengageLinks(state, unit);
-  const allies = disengageAllies(state, unit, linkedEnemies);
-  const initiative = new Map(state.initiativeOrder.map((id, index) => [id, index]));
-  const nearest = [...linkedEnemies].sort((left, right) => (right.stack || 0) - (left.stack || 0) || (initiative.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (initiative.get(right.id) ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id))[0] || null;
-  const speedCost = linkedEnemies.length;
-  const chance = Math.max(10, Math.min(90, 60 - Math.max(0, (nearest?.stack || 1) - 1) * 10 - Math.max(0, linkedEnemies.length - 1) * 10 + allies.length * 10));
-  return deepFreeze({
-    actorId: unit?.id || null,
-    linkedIds: linkedEnemies.map(linked => linked.id),
-    linkedNames: linkedEnemies.map(linked => linked.name || linked.id),
-    allyIds: allies.map(ally => ally.id),
-    nearestId: nearest?.id || null,
-    speedCost,
-    chance,
-    evasionPenalty: -10
-  });
-}
-
 export function actionEvasionPreview(state, action, unit = activeUnit(state), availability = actionAvailability(state, action, unit)) {
   const current = currentEvasion(unit);
   if (!availability.available) return { current, preview: current };
@@ -1360,50 +1312,7 @@ export function actionEvasionPreview(state, action, unit = activeUnit(state), av
   const projected = { ...unit };
   if (effect === "evasiveManeuver") projected.evasiveManeuver = true;
   if (effect === "dispersion") projected.dispersionActive = true;
-  if (action.type === "disengage") projected.disengageEvasionPenalty = (unit.disengageEvasionPenalty || 0) + availability.details.evasionPenalty;
   return { current, preview: currentEvasion(projected) };
-}
-
-export function disengageReasons(state, unit = activeUnit(state)) {
-  if (unit && unit !== activeUnit(state)) {
-    if (unit.kind !== "squadron") return ["Отрыв доступен только эскадрилье"];
-    const declaredIds = [...new Set(unit.engagedWith || [])];
-    const preview = disengagePreview(state, unit);
-    if (!declaredIds.length) return ["Эскадрилья не связана Перехватом"];
-    if (preview.linkedIds.length !== declaredIds.length) return ["Связи Перехвата несимметричны или недействительны"];
-    return actionCostReasons(unit, { speed: preview.speedCost });
-  }
-  return actionAvailability(state, { type: "disengage" }).reasons.map(reason => reason.message);
-}
-
-export function confirmDisengageAction(state, rollD100 = () => Math.floor(Math.random() * 100) + 1) {
-  const action = state.activeAction;
-  const unit = activeUnit(state);
-  if (!unit || state.lifecycle !== "ActionPlanning" || action?.status !== "planning" || action.type !== "disengage" || action.actorId !== unit.id) return null;
-  const availability = actionAvailability(state, { type: "disengage" });
-  if (!availability.available) return null;
-  const preview = availability.details;
-  const before = deepFreeze({ position: { ...unit.position }, heading: unit.heading, speedSpent: unit.speedSpent || 0, maneuverSpent: unit.maneuverSpent || 0, linkedIds: [...preview.linkedIds] });
-  const declaration = recordEvent(state, "activation-action-confirm", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...preview.linkedIds], actionType: action.type, actionReason: action.reason, costs: { speed: preview.speedCost }, chance: preview.chance, start: { position: { ...unit.position }, heading: unit.heading } });
-  if (!spendActivationResource(unit, "speed", preview.speedCost)) return null;
-  const roll = rollD100();
-  const success = Number.isFinite(roll) && roll >= 1 && roll <= preview.chance;
-  unit.disengageEvasionPenalty = (unit.disengageEvasionPenalty || 0) - 10;
-  if (success) {
-    for (const linkedId of preview.linkedIds) {
-      const linked = unitById(state, linkedId);
-      if (linked) linked.engagedWith = (linked.engagedWith || []).filter(id => id !== unit.id);
-    }
-    unit.engagedWith = [];
-  }
-  confirmOwnAction(unit);
-  const after = deepFreeze({ position: { ...unit.position }, heading: unit.heading, speedSpent: unit.speedSpent || 0, maneuverSpent: unit.maneuverSpent || 0, linkedIds: [...(unit.engagedWith || [])] });
-  const resolution = recordEvent(state, "disengage-resolve", { actorId: unit.id, actorName: unit.name, subjectIds: [unit.id, ...preview.linkedIds], actionId: declaration.eventId, actionType: action.type, actionReason: action.reason, causeEventId: declaration.eventId, random: { roll }, success, chance: preview.chance, costs: { speed: preview.speedCost }, evasionPenalty: -10, removedLinkIds: success ? [...preview.linkedIds] : [], before, after });
-  unit.disengageContinuationEventId = success ? resolution.eventId : null;
-  const result = deepFreeze({ actionId: declaration.eventId, eventId: resolution.eventId, activationId: unit.activationId, actorId: unit.id, success, roll, chance: preview.chance, costs: { speed: preview.speedCost }, before, after });
-  state.activeAction = null;
-  state.lifecycle = "ActionChoice";
-  return result;
 }
 
 function canPaySystemAction(unit, definition) {
@@ -1456,7 +1365,6 @@ export function waitActiveUnit(state) {
   const unit = activeUnit(state);
   if (!unit || !["ActionChoice", "ActionPlanning"].includes(state.lifecycle) || state.activeAction?.status === "resolving" || unit.hasWaited || unit.canWait === false) return false;
   if (state.lifecycle === "ActionPlanning") cancelActionPlanning(state);
-  delete unit.disengageContinuationEventId;
   unit.hasWaited = true;
   unit.canWait = false;
   state.initiativeOrder = [...state.initiativeOrder.filter(id => id !== unit.id), unit.id];
@@ -1478,7 +1386,6 @@ export function endActivation(state) {
     if (stayResolution.destruction) return { destroyed: true, destruction: stayResolution.destruction, stayOutcomes: stayResolution.outcomes };
   }
   unit.canWait = false;
-  delete unit.disengageContinuationEventId;
   if (unit.engineBoostActive) {
     unit.currentSpeed = Math.max(0, unit.currentSpeed - 1);
     unit.speedRemaining = Math.max(0, unit.currentSpeed - unit.speedSpent);
